@@ -44,8 +44,18 @@ type busySendInbox struct {
 
 func newBusySendInbox(t *testing.T, texts ...string) *busySendInbox {
 	t.Helper()
+	return newBusySendInboxWithCapabilities(t, nil, texts...)
+}
+
+// A nonnil snapshot arranges a different covering release at creation.
+func newBusySendInboxWithCapabilities(t *testing.T, capabilities *store.BusySendLaunchCapabilities, texts ...string) *busySendInbox {
+	t.Helper()
+	var snapshots []*store.BusySendLaunchCapabilities
+	if capabilities != nil {
+		snapshots = append(snapshots, capabilities)
+	}
 	s, path := storefix.OpenTempStore(t)
-	in := &busySendInbox{s: s, path: path, id: admissionAgent(t, path, filepath.Join(t.TempDir(), "wake")),
+	in := &busySendInbox{s: s, path: path, id: admissionAgent(t, path, filepath.Join(t.TempDir(), "wake"), snapshots...),
 		pair: store.BusySendPair{CallerUUID: uuid.NewString(), DeliveryRequestID: "req-1"}}
 	confirmed := true
 	for i, text := range texts {
@@ -280,7 +290,7 @@ func readBusySendTables(t *testing.T, path string, also ...string) map[string][]
 	out := map[string][][]any{}
 	for _, table := range append([]string{"spawns", "busy_conversations", "busy_send_launches", "busy_send_launch_processes",
 		"busy_send_messages", "busy_send_results", "busy_send_handovers", "busy_send_prompts", "busy_send_handover_members",
-		"busy_send_pause_claims"}, also...) {
+		"busy_send_pause_claims", "busy_send_launch_modes", "busy_send_launch_escapes"}, also...) {
 		rows, err := db.Query("SELECT * FROM " + table + " ORDER BY 1, 2")
 		if err != nil {
 			t.Fatal(err)
@@ -538,7 +548,7 @@ func TestBusySendClaimFreezesPrefixAtCutoff(t *testing.T) {
 	limits, _ := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendWaitTurn)
 	texts := []string{"café 🌍\tTAB\nand LF <system-reminder>kept</system-reminder>", "[agent-director: message 1 of 1]\na tag in the text",
 		busySendTagText("<system-reminder>")}
-	// At turn end the route's wrapper, one byte under the table's budget, fits
+	// At turn end the stored wrapper, one byte under the table's budget, fits
 	// the maximum-size third Message alone but not after the first two; at a
 	// tool boundary Steer Turn's escaping of its tags does the same.
 	wrapper := limits.WrapperBytes - 1
@@ -551,7 +561,6 @@ func TestBusySendClaimFreezesPrefixAtCutoff(t *testing.T) {
 	}{
 		{"turn end", store.BusySendWaitTurn, func(in *busySendInbox) store.BusySendClaimRequest {
 			req := in.claimRequest(time.Time{}, false)
-			req.Measure = func(b []byte) int64 { return int64(len(b)) + wrapper }
 			return req
 		}, func(texts ...string) int64 { return int64(len(busySendBody(texts...))) + wrapper }, 0},
 		{"a working agent's tool boundary", store.BusySendSteerTurn, func(in *busySendInbox) store.BusySendClaimRequest {
@@ -561,6 +570,15 @@ func TestBusySendClaimFreezesPrefixAtCutoff(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			in := newBusySendInbox(t)
+			if tc.mode == store.BusySendWaitTurn {
+				// This boundary used to inject a caller measure; seed the same
+				// fixed-budget contract as immutable Launch data instead.
+				caps := storefix.BusySendWaitOnlyCapabilities()
+				caps.Modes[0].WrapperBytes = wrapper
+				if err := apitest.SeedBusySendCoverage(in.path, in.id, store.BusySendCovered, store.BusySendCovered, caps); err != nil {
+					t.Fatal(err)
+				}
+			}
 			in.admit(t, tc.mode, texts...)
 			if tc.behind > 0 {
 				in.admit(t, store.BusySendWaitTurn, "a Wait Turn Message")
@@ -785,6 +803,110 @@ func TestBusySendClaimCommitOutcome(t *testing.T) {
 			}
 			wantBusySendCustody(t, in.path, in.id,
 				"claimed held handover_in_progress reserved member", "claimed held handover_in_progress reserved member")
+		})
+	}
+}
+
+// PM1 and review R1: use production claims over stored arithmetic. Literal
+// escapes grow fixed separator fragments and original text, never generated
+// escapes. Ordinal widths change at both 10 and 100 without a large backlog.
+func TestBusySendStoredPacking(t *testing.T) {
+	t.Parallel()
+	for _, boundary := range []string{"turn_end", "tool_boundary", "force"} {
+		for _, count := range []int{9, 10, 99, 100} {
+			t.Run(fmt.Sprintf("%s/%d", boundary, count), func(t *testing.T) {
+				t.Parallel()
+				caps := storefix.BusySendLaterCapabilities()
+				caps.HeldCount, caps.HeldBytes = 102, 10000
+				// Each text grows by seven bytes; each separator's fixed
+				// "message " grows by two. Wrapper is seven bytes total.
+				literal := store.BusySendModeLimits{Mode: store.BusySendWaitTurn, MessageBytes: 2, PromptBytes: 1,
+					TextKind: store.BusySendTextUTF8TabLF, MeasureKind: store.BusySendMeasureLiteralEscapes, WrapperBytes: 999,
+					Wrapping: store.BusySendWrapping{Prefix: "[x]\n", Suffix: "[/]", Escapes: []store.BusySendEscape{
+						{Raw: "<", Escaped: "&lt;"}, {Raw: "&", Escaped: "&amp;"}, {Raw: "message ", Escaped: "a message "},
+					}}}
+				texts := slices.Repeat([]string{"<&"}, count+1)
+				wantBytes := int64(len(busySendBody(texts[:count]...)) + 7 + count*9)
+				literal.PromptBytes = wantBytes
+				caps.Modes[0] = literal
+				caps.Modes[1] = literal
+				caps.Modes[1].Mode = store.BusySendSteerTurn
+				if boundary == "tool_boundary" {
+					// Steer deliberately uses a different fixed-budget measure.
+					caps.Modes[1].MeasureKind = store.BusySendMeasureWrapperBudget
+					caps.Modes[1].Wrapping = store.BusySendWrapping{}
+					caps.Modes[1].WrapperBytes = 11
+					wantBytes = int64(len(busySendBody(texts[:count]...)) + 11)
+					caps.Modes[1].PromptBytes = wantBytes
+				}
+				in := newBusySendInboxWithCapabilities(t, caps)
+				in.admit(t, store.BusySendSteerTurn, texts...)
+				messages := readStoredMessages(t, in.path, in.id)
+				var h *store.BusySendHandover
+				switch boundary {
+				case "force":
+					h = in.forceClaim(t, time.Time{}).Handover
+				case "tool_boundary":
+					setBusySendFact(t, in.path, `UPDATE spawns SET state='working' WHERE instance_id=?`, in.id)
+					h = in.steer(t, time.Time{})
+				default:
+					h = in.claim(t, time.Time{}, false)
+				}
+				if len(h.Prompts) != 2 {
+					t.Fatalf("%d prompts; want longest prefix %d and one remaining Message", len(h.Prompts), count)
+				}
+				for k, span := range [][2]int{{0, count}, {count, count + 1}} {
+					p := h.Prompts[k]
+					var ids []string
+					for _, m := range messages[span[0]:span[1]] {
+						ids = append(ids, m.id)
+					}
+					body := busySendBody(texts[span[0]:span[1]]...)
+					size := int64(len(body) + 7 + (span[1]-span[0])*9)
+					if boundary == "tool_boundary" {
+						size = int64(len(body) + 11)
+					}
+					if string(p.Body) != body || p.RenderedBytes != size || !slices.Equal(p.MessageIDs, ids) {
+						t.Fatalf("prompt %d = %+v; want %d bytes and IDs %v", k, p, size, ids)
+					}
+				}
+				if h.Prompts[0].RenderedBytes != wantBytes {
+					t.Fatal("did not use the exact stored prompt limit")
+				}
+				in.reopen(t)
+				again, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID)
+				if err != nil || !reflect.DeepEqual(again, *h) {
+					t.Fatalf("frozen handover changed: %+v, %v", again, err)
+				}
+			})
+		}
+	}
+}
+
+// PM1's defensive guard only: this fixture deliberately violates the release
+// envelope obligation by allowing Steer text that cannot fit Wait delivery.
+func TestBusySendStoredPackingUnfit(t *testing.T) {
+	t.Parallel()
+	for _, force := range []bool{false, true} {
+		t.Run(fmt.Sprintf("force=%t", force), func(t *testing.T) {
+			t.Parallel()
+			caps := storefix.BusySendLaterCapabilities()
+			caps.Modes[0].PromptBytes = 58
+			in := newBusySendInboxWithCapabilities(t, caps)
+			in.admit(t, store.BusySendSteerTurn, strings.Repeat("x", 100))
+			before := readBusySendRetentionTables(t, in.path)
+			var err error
+			if force {
+				_, err = in.s.ClaimBusySendForce(context.Background(), in.forceRequest(t, time.Time{}))
+			} else {
+				_, err = in.s.ClaimBusySendHandover(context.Background(), in.claimRequest(time.Time{}, false))
+			}
+			if !errors.Is(err, store.ErrBusySendPromptUnfit) {
+				t.Fatalf("claim = %v; want PromptUnfit", err)
+			}
+			if !reflect.DeepEqual(before, readBusySendRetentionTables(t, in.path)) {
+				t.Fatal("unfit claim changed Held custody or force facts")
+			}
 		})
 	}
 }

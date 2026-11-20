@@ -270,6 +270,17 @@ func schemaShape(t *testing.T, db *sql.DB) map[string]any {
 	return shape
 }
 
+// schemaDeclarations preserves CHECK text too, for no-conversion assertions
+// that cannot rely on table_info's shape alone.
+func schemaDeclarations(t *testing.T, path string) []string {
+	t.Helper()
+	var declarations []string
+	withRaw(t, path, func(db *sql.DB) {
+		declarations = queryStrings(t, db, `SELECT type || ' ' || name || ': ' || COALESCE(sql, '') FROM sqlite_master ORDER BY type, name`)
+	})
+	return declarations
+}
+
 // dbDump is the schema shape of the DB at path plus every table's rows (each
 // value as %#v, in rowid order), keyed "rows <table>". omit names columns
 // ("table.column") left out of both the shape and the rows.
@@ -2226,6 +2237,14 @@ func assertV21Backfill(t *testing.T, path string, ids ...string) map[string]v21B
 			}
 		}
 		withRaw(t, path, func(db *sql.DB) {
+			got, err := readBusySendLaunchCapabilities(context.Background(), db, storeID, unquote(l["launch_id"]))
+			var want *BusySendLaunchCapabilities
+			if busySendWantCoverage(provider) == BusySendCovered {
+				want = v21ClaudeCapabilities()
+			}
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Errorf("%s: migrated capabilities = %+v, %v; want %+v", id, got, err, want)
+			}
 			var processes int
 			if err := db.QueryRow(`SELECT count(*) FROM busy_send_launch_processes WHERE launch_id = ?`, unquote(l["launch_id"])).Scan(&processes); err != nil || processes != 0 {
 				t.Errorf("%s: migrated Launch binds %d processes, %v; want none", id, processes, err)
@@ -2289,7 +2308,7 @@ func preAddV21Core(t *testing.T, path string, names ...string) {
 // agent, life and launch token, coverage on all three, and the row bound.
 // change, when set, edits the conversation and Launch first, to make an
 // inconsistent binding. It returns the conversation id.
-func bindV21Row(t *testing.T, path, id string, generation int, coverage BusySendCoverage, change func(conv, launch map[string]any)) string {
+func bindV21Row(t *testing.T, path, id string, generation int, coverage BusySendCoverage, change func(conv, launch map[string]any), snapshots ...*BusySendLaunchCapabilities) string {
 	t.Helper()
 	conversationID := fmt.Sprintf("conv-%s-%d", id, generation)
 	withRaw(t, path, func(db *sql.DB) {
@@ -2312,14 +2331,105 @@ func bindV21Row(t *testing.T, path, id string, generation int, coverage BusySend
 		launch := map[string]any{"launch_id": "launch-" + conversationID, "store_id": storeID, "instance_id": id,
 			"conversation_id": conversationID, "life_number": life, "launch_token": token, "provider": provider,
 			"busy_send": string(coverage), "kind": "migrated", "phase": "current", "recorded_at_ms": int64(1792411200000)}
+		var c *BusySendLaunchCapabilities
+		if coverage == BusySendCovered {
+			c = v21ClaudeCapabilities()
+			if len(snapshots) != 0 {
+				c = snapshots[0]
+			}
+			launch["held_count_limit"], launch["held_bytes_limit"] = c.HeldCount, c.HeldBytes
+		}
 		if change != nil {
 			change(conv, launch)
 		}
-		insertRow(t, db, "busy_conversations", conv)
-		insertRow(t, db, "busy_send_launches", launch)
-		mustExec(t, db, `UPDATE spawns SET busy_send = ?, busy_conversation_id = ? WHERE instance_id = ?`, string(coverage), conversationID, id)
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		insertV21FixtureRow(t, tx, "busy_conversations", conv)
+		insertV21FixtureRow(t, tx, "busy_send_launches", launch)
+		seedV21Capabilities(t, tx, launch["launch_id"].(string), c)
+		if _, err := tx.Exec(`UPDATE spawns SET busy_send = ?, busy_conversation_id = ? WHERE instance_id = ?`, string(coverage), conversationID, id); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
 	})
 	return conversationID
+}
+
+// v21ClaudeCapabilities supplies the current authoring data to ordinary raw
+// fixtures. Divergence tests pass their own snapshot; no unknown lookup is used.
+func v21ClaudeCapabilities() *BusySendLaunchCapabilities {
+	c := BusySendCapabilitiesFor(AgentClaude)
+	return &BusySendLaunchCapabilities{HeldCount: c.HeldCount, HeldBytes: c.HeldBytes, Modes: c.Modes}
+}
+
+// invalidV21RawLiterals covers the ordinal/LF restriction, including every
+// ASCII digit past NUL where SQLite text-length checks would stop early.
+func invalidV21RawLiterals() []struct{ name, raw string } {
+	cases := []struct{ name, raw string }{
+		{"ordinal counterexample", "of 2"},
+		{"bare digit", "7"},
+		{"LF", "a\nb"},
+		{"LF after NUL", "a\x00\nb"},
+	}
+	for digit := '0'; digit <= '9'; digit++ {
+		cases = append(cases, struct{ name, raw string }{fmt.Sprintf("digit %c after NUL", digit), "a\x00" + string(digit)})
+	}
+	return cases
+}
+
+// insertV21FixtureRow and seedV21Capabilities keep white-box fixture writes in
+// one transaction. Package store cannot import storefix (an import cycle).
+func insertV21FixtureRow(t *testing.T, tx *sql.Tx, table string, row map[string]any) {
+	t.Helper()
+	cols := slices.Sorted(maps.Keys(row))
+	vals := make([]any, len(cols))
+	for i, c := range cols {
+		vals[i] = row[c]
+	}
+	if _, err := tx.Exec("INSERT INTO "+table+" ("+strings.Join(cols, ", ")+") VALUES (?"+strings.Repeat(", ?", len(cols)-1)+")", vals...); err != nil {
+		t.Fatalf("seed %s: %v", table, err)
+	}
+}
+
+// seedV21Capabilities replaces only fixture creation facts, never a live
+// snapshot between operations. nil arranges an uncovered Launch.
+func seedV21Capabilities(t *testing.T, tx *sql.Tx, launchID string, c *BusySendLaunchCapabilities) {
+	t.Helper()
+	var storeID string
+	if err := tx.QueryRow(`SELECT store_id FROM busy_send_launches WHERE launch_id=?`, launchID).Scan(&storeID); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"busy_send_launch_escapes", "busy_send_launch_modes"} {
+		if _, err := tx.Exec("DELETE FROM "+table+" WHERE launch_id=?", launchID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count, size any
+	coverage := BusySendNotCovered
+	if c != nil {
+		coverage, count, size = BusySendCovered, c.HeldCount, c.HeldBytes
+	}
+	if _, err := tx.Exec(`UPDATE busy_send_launches SET busy_send=?,held_count_limit=?,held_bytes_limit=? WHERE launch_id=?`, string(coverage), count, size, launchID); err != nil {
+		t.Fatal(err)
+	}
+	if c == nil {
+		return
+	}
+	for _, m := range c.Modes {
+		insertV21FixtureRow(t, tx, "busy_send_launch_modes", map[string]any{
+			"launch_id": launchID, "store_id": storeID, "send_mode": string(m.Mode), "message_bytes": m.MessageBytes,
+			"prompt_bytes": m.PromptBytes, "text_kind": string(m.TextKind), "wrapper_bytes": m.WrapperBytes,
+			"measure_kind": string(m.MeasureKind), "prefix": m.Wrapping.Prefix, "suffix": m.Wrapping.Suffix, "escape_count": len(m.Wrapping.Escapes)})
+		for i, e := range m.Wrapping.Escapes {
+			insertV21FixtureRow(t, tx, "busy_send_launch_escapes", map[string]any{
+				"launch_id": launchID, "store_id": storeID, "send_mode": string(m.Mode), "escape_index": i, "raw": e.Raw, "escaped": e.Escaped})
+		}
+	}
 }
 
 // The life and launch token of the Launch seedBusySendRecords makes current,
@@ -2467,15 +2577,30 @@ func seedBusySendRecords(t *testing.T, db *sql.DB, storeID, instance string) bus
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
+	// Replace a fresh insertion's empty core, if any, atomically. The child
+	// references are deferred and non-cascading; no invalid state is committed.
+	for _, table := range []string{"busy_send_launch_escapes", "busy_send_launch_modes", "busy_send_launch_processes"} {
+		if _, err := tx.Exec("DELETE FROM "+table+" WHERE launch_id IN (SELECT launch_id FROM busy_send_launches WHERE instance_id=?)", instance); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, table := range []string{"busy_send_launches", "busy_conversations"} {
+		if _, err := tx.Exec("DELETE FROM "+table+" WHERE instance_id=?", instance); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capabilities := v21ClaudeCapabilities()
 	for _, in := range inserts {
-		cols := slices.Sorted(maps.Keys(in.row))
-		vals := make([]any, len(cols))
-		for i, c := range cols {
-			vals[i] = in.row[c]
+		if in.table == "busy_send_launches" {
+			in.row["held_count_limit"], in.row["held_bytes_limit"] = capabilities.HeldCount, capabilities.HeldBytes
 		}
-		if _, err := tx.Exec("INSERT INTO "+in.table+" ("+strings.Join(cols, ", ")+") VALUES (?"+strings.Repeat(", ?", len(cols)-1)+")", vals...); err != nil {
-			t.Fatalf("seed %s: %v", in.table, err)
+		insertV21FixtureRow(t, tx, in.table, in.row)
+		if in.table == "busy_send_launches" {
+			seedV21Capabilities(t, tx, in.row["launch_id"].(string), capabilities)
 		}
+	}
+	if _, err := tx.Exec(`UPDATE spawns SET busy_conversation_id=?,busy_send='covered',life_number=?,launch_token=? WHERE instance_id=?`, r.conversation, recLife, recToken, instance); err != nil {
+		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("seed busy-send records: %v", err)
@@ -2519,3 +2644,49 @@ func breakV21Commit(t *testing.T, path string) {
 			VALUES (NEW.launch_id || '-missing', 'agent', NEW.store_id, 1, 'x', 0); END`)
 	})
 }
+
+// preMonotoneV21EscapesDDL freezes PM1's intermediate v21 declaration before
+// repair 1 (compiled digest 1d3840eb…061c). Ordinary open never converts it.
+const preMonotoneV21EscapesDDL = `CREATE TABLE IF NOT EXISTS busy_send_launch_escapes (
+    launch_id      TEXT NOT NULL,
+    send_mode      TEXT NOT NULL CHECK(send_mode IN ('wait_turn', 'steer_turn')),
+    escape_index   INTEGER NOT NULL CHECK(typeof(escape_index) = 'integer' AND escape_index >= 0),
+    store_id       TEXT NOT NULL,
+    raw            TEXT NOT NULL CHECK(typeof(raw) = 'text' AND length(CAST(raw AS BLOB)) > 0),
+    escaped        TEXT NOT NULL CHECK(typeof(escaped) = 'text' AND length(CAST(escaped AS BLOB)) >= length(CAST(raw AS BLOB))),
+    PRIMARY KEY(launch_id, send_mode, escape_index),
+    FOREIGN KEY(launch_id, send_mode) REFERENCES busy_send_launch_modes(launch_id, send_mode) DEFERRABLE INITIALLY DEFERRED
+);`
+
+// preCapabilitiesV21LaunchDDL freezes the unreleased pre-PM1 declaration at
+// fa350ce1. Runtime opening it must never convert it to the final core.
+const preCapabilitiesV21LaunchDDL = `CREATE TABLE IF NOT EXISTS busy_send_launches (
+    launch_id             TEXT PRIMARY KEY NOT NULL,
+    store_id              TEXT NOT NULL,
+    instance_id           TEXT NOT NULL,
+    conversation_id       TEXT NOT NULL,
+    life_number           INTEGER NOT NULL CHECK(typeof(life_number) = 'integer' AND life_number >= 0),
+    launch_token          TEXT,
+    provider              TEXT NOT NULL CHECK(provider <> ''),
+    busy_send             TEXT NOT NULL CHECK(busy_send IN ('not_covered', 'covered')),
+    kind                  TEXT NOT NULL CHECK(kind IN ('spawn', 'reuse', 'resume', 'migrated')),
+    phase                 TEXT NOT NULL CHECK(phase IN ('candidate', 'uncertain', 'failed', 'current', 'superseded')),
+    route_kind            TEXT CHECK(route_kind IN ('claude_hooks', 'codex_app_server')),
+    route_id              TEXT,
+    connection_generation INTEGER NOT NULL DEFAULT 0 CHECK(typeof(connection_generation) = 'integer' AND connection_generation >= 0),
+    wake_path             TEXT,
+    override_send_mode    TEXT CHECK(override_send_mode IN ('wait_turn', 'steer_turn')),
+    override_confirmed    INTEGER CHECK(override_confirmed IN (0, 1)),
+    override_confirm_from_transcripts INTEGER CHECK(override_confirm_from_transcripts IN (0, 1)),
+    revision              INTEGER NOT NULL DEFAULT 1 CHECK(typeof(revision) = 'integer' AND revision > 0),
+    recorded_at_ms        INTEGER NOT NULL,
+    ended_at_ms           INTEGER,
+    end_cause             TEXT CHECK(end_cause IN ('process_exited', 'launch_published', 'creation_failed', 'record_deleted', 'candidate_replaced', 'agent_missing')),
+    CHECK(kind IS 'resume' OR (override_send_mode IS NULL AND override_confirmed IS NULL AND override_confirm_from_transcripts IS NULL)),
+    CHECK((ended_at_ms IS NULL) = (end_cause IS NULL)),
+    CHECK((phase = 'failed') = (end_cause IS 'creation_failed')),
+    CHECK(phase <> 'superseded' OR ended_at_ms IS NOT NULL),
+    CHECK(end_cause IS NOT 'record_deleted' OR phase IS 'superseded'),
+    CHECK(end_cause IS NOT 'candidate_replaced' OR phase IS 'superseded'),
+    FOREIGN KEY(conversation_id) REFERENCES busy_conversations(conversation_id) DEFERRABLE INITIALLY DEFERRED
+);`

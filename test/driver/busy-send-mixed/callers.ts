@@ -12,6 +12,8 @@ try {
     try {
       let result;
       switch (op) {
+        case 'get': result = await client.get(params); break;
+        case 'get-many': result = await client.getMany(params); break;
         case 'send': result = await client.sendKeys(params); break;
         case 'lookup': result = await client.getDelivery(params); break;
         case 'force-lookup': result = await client.getForce(params); break;
@@ -19,7 +21,7 @@ try {
       }
       console.log(JSON.stringify({result}));
     } catch (error: any) {
-      console.log(JSON.stringify({result: null, error: String(error), err_name: error.err_name, err_details: error.err_details}));
+      console.log(JSON.stringify({result: null, error: String(error), err_name: error.errName, err_details: error.errDetails}));
     }
   }
 } finally {

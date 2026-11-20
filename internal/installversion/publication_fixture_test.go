@@ -73,11 +73,19 @@ func makeCandidate(t testing.TB, facts Facts) candidate {
 	return c
 }
 
-func newPublicationFixture(t testing.TB) publicationFixture {
+func newPublicationFixture(t testing.TB, contracts ...Contract) publicationFixture {
 	t.Helper()
 	home := t.TempDir()
+	makeVersion := func(stamp string) candidate {
+		facts := factsFor(stamp)
+		if len(contracts) != 0 {
+			facts.CoreVersion = contracts[0].CoreVersion
+			facts.CoreDeclarationsSHA256 = contracts[0].CoreDeclarationsSHA256
+		}
+		return makeCandidate(t, facts)
+	}
 	return publicationFixture{home, filepath.Join(home, ".config", "agent-director"),
-		makeCandidate(t, factsFor("old")), makeCandidate(t, factsFor("new"))}
+		makeVersion("old"), makeVersion("new")}
 }
 
 func publishCandidate(root string, c candidate, hooks Hooks) (Result, error) {

@@ -14,12 +14,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/installfacts"
 	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/resumedelegate"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 	"github.com/gabemahoney/agent-director/internal/version"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
 type request struct {
@@ -34,6 +38,8 @@ type request struct {
 type response struct {
 	Result        any                       `json:"result"`
 	Error         string                    `json:"error,omitempty"`
+	ErrName       string                    `json:"err_name,omitempty"`
+	ErrDetails    any                       `json:"err_details,omitempty"`
 	UnknownCommit bool                      `json:"unknown_commit,omitempty"`
 	StoreBusy     bool                      `json:"store_busy,omitempty"`
 	Guard         *store.BusySendGuardError `json:"guard,omitempty"`
@@ -47,8 +53,18 @@ func mustDecode(raw json.RawMessage, out any) {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--install-version-facts" {
+		if err := json.NewEncoder(os.Stdout).Encode(installfacts.Compiled()); err != nil {
+			panic(err)
+		}
+		return
+	}
 	if os.Getenv("AGENT_DIRECTOR_TEST_SANDBOX") != "1" {
 		panic("mixed-version driver requires the sandbox")
+	}
+	if len(os.Args) == 2 && os.Args[1] == resumedelegate.Argument {
+		runCoveringCandidate()
+		return
 	}
 	if len(os.Args) != 3 {
 		panic("usage: mixed-driver <store|go> <db-path>")
@@ -85,6 +101,8 @@ func main() {
 		}
 		reply := response{Result: value}
 		if err != nil {
+			reply.ErrName, _ = errnames.Classify(err)
+			reply.ErrDetails = api.ErrDetails(err)
 			reply.Error, reply.UnknownCommit, reply.StoreBusy = err.Error(), store.CommitUnconfirmed(err), errors.Is(err, store.ErrStoreBusy)
 			errors.As(err, &reply.Guard)
 			errors.As(err, &reply.Refusal)
@@ -99,6 +117,22 @@ func callClient(c *api.Client, req request) (any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	switch req.Op {
+	case "get":
+		var p struct {
+			ID string `json:"instance_id"`
+		}
+		mustDecode(req.Params, &p)
+		return c.Get(p.ID)
+	case "get-many":
+		var p struct {
+			IDs []string `json:"instance_ids"`
+		}
+		mustDecode(req.Params, &p)
+		return c.GetMany(p.IDs)
+	case "resume":
+		var p api.ResumeParams
+		mustDecode(req.Params, &p)
+		return c.Resume(p)
 	case "send":
 		var p api.SendKeysParams
 		mustDecode(req.Params, &p)
@@ -136,10 +170,16 @@ func callStore(path string, req request, in *json.Decoder, out *json.Encoder) (a
 	if req.Op == "seed" {
 		var p struct {
 			ID, Session, Token, Wake, State string
+			Agent, Route                    string
+			Capabilities                    *store.BusySendLaunchCapabilities
+			Defaults                        *store.BusySendAgentDefaults
 			Reserved                        int64
 			Owned                           bool
 		}
 		mustDecode(req.Params, &p)
+		if p.Agent == "" {
+			p.Agent = "claude"
+		}
 		identity := store.LaunchIdentity{Token: p.Token}
 		if p.Owned {
 			start, alive, known := probe.NewProcChecker().StartTime(os.Getpid())
@@ -148,14 +188,26 @@ func callStore(path string, req request, in *json.Decoder, out *json.Encoder) (a
 			}
 			identity.PanePID, identity.PaneStarttime = os.Getpid(), start
 		}
-		id, err := apitest.SeedSpawn(path, p.ID, p.State, filepath.Dir(path), "off", p.Session, true, apitest.WithLaunchIdentity(identity))
+		id, err := apitest.SeedSpawn(path, p.ID, p.State, filepath.Dir(path), "off", p.Session, true, apitest.WithLaunchIdentity(identity), apitest.WithAgent(p.Agent))
 		if err != nil {
 			return nil, err
 		}
-		if err = apitest.SeedBusySendCoverage(path, id, store.BusySendCovered, store.BusySendCovered); err != nil {
+		var caps []*store.BusySendLaunchCapabilities
+		if p.Capabilities != nil {
+			caps = append(caps, p.Capabilities)
+		}
+		if err = apitest.SeedBusySendCoverage(path, id, store.BusySendCovered, store.BusySendCovered, caps...); err != nil {
 			return nil, err
 		}
-		if err = apitest.SeedBusySendRoute(path, id, "claude_hooks", p.Wake); err != nil {
+		if p.Route == "" {
+			p.Route = "claude_hooks"
+		}
+		if p.Defaults != nil {
+			if err := apitest.SeedBusySendDefaults(path, id, *p.Defaults); err != nil {
+				return nil, err
+			}
+		}
+		if err = apitest.SeedBusySendRoute(path, id, p.Route, p.Wake); err != nil {
 			return nil, err
 		}
 		if p.Reserved != 0 {
@@ -237,6 +289,10 @@ func callStore(path string, req request, in *json.Decoder, out *json.Encoder) (a
 		}()
 	}
 	switch req.Op {
+	case "local-capabilities":
+		var agent string
+		mustDecode(req.Params, &agent)
+		return store.BusySendCapabilitiesFor(agent), nil
 	case "identity":
 		v, digest := store.BusySendCoreContractIdentity()
 		return map[string]string{"core_version": v, "core_declarations_sha256": digest}, nil
@@ -358,5 +414,70 @@ func callStore(path string, req request, in *json.Decoder, out *json.Encoder) (a
 		return nil, s.ExpireBusySendRetention(p.Cutoff, p.At)
 	default:
 		return nil, fmt.Errorf("unknown store operation %q", req.Op)
+	}
+}
+
+// The delegate fixture executes the real candidate writer under a separate
+// covering build. It substitutes only provider startup, not capability seeding
+// or a canned successful reply. The old caller still uses production discovery
+// and the private resume transport.
+func runCoveringCandidate() {
+	req, err := resumedelegate.DecodeRequest(os.Stdin)
+	if err != nil {
+		panic(err)
+	}
+	var p api.ResumeParams
+	if err := resumedelegate.DecodeParams(req.Params, &p); err != nil {
+		panic(err)
+	}
+	s, err := store.Open(req.StorePath)
+	if err != nil {
+		panic(err)
+	}
+	defer s.Close()
+	if s.StoreID() != req.StoreID || !time.Now().Before(req.Deadline) {
+		panic("wrong store or expired delegate")
+	}
+	row, err := s.GetSpawn(p.InstanceID)
+	if err != nil {
+		panic(err)
+	}
+	local := store.BusySendCapabilitiesFor(row.Agent)
+	if len(local.Modes) == 0 {
+		panic("delegate has no authoring table")
+	}
+	scope, err := s.ReadBusySendExitScope(p.InstanceID)
+	if err != nil {
+		panic(err)
+	}
+	for _, launch := range scope.Launches {
+		if len(launch.Processes) != 0 {
+			panic("fixture cannot invent process exit")
+		}
+	}
+	choice := store.BusySendDefaultsChoice{Confirmed: p.ConfirmedDelivery, ConfirmFromTranscripts: p.ConfirmFromTranscripts}
+	if p.SendMode != nil {
+		mode := store.BusySendMode(*p.SendMode)
+		choice.SendMode = &mode
+	}
+	token, err := spawn.NewLaunchToken()
+	if err != nil {
+		panic(err)
+	}
+	applied, _, err := s.MoveToPendingWithExit(p.InstanceID, row.Snapshot, time.Now().UnixMilli(), token, "", "",
+		store.LaunchOwner{}, choice, &store.BusySendExitEvidence{Scope: scope})
+	if err != nil || applied != store.CondApplied {
+		panic(fmt.Sprintf("covering candidate: %v / %v", applied, err))
+	}
+	if path := os.Getenv("AD_MIXED_DELEGATE_AUDIT"); path != "" {
+		event := map[string]any{"pid": os.Getpid(), "caller_pid": req.Caller.PID, "token": token, "facts": installfacts.Compiled()}
+		data, _ := json.Marshal(event)
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			panic(err)
+		}
+	}
+	result, _ := json.Marshal(api.ResumeResult{InstanceID: p.InstanceID, PreTrust: "skipped"})
+	if err := resumedelegate.Encode(os.Stdout, resumedelegate.Response{ResponseFormat: 1, Result: result}); err != nil {
+		panic(err)
 	}
 }

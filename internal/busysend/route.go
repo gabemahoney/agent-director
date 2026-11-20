@@ -99,11 +99,6 @@ type Disposition struct {
 type Route interface {
 	// Eligibility reads the route's authoritative facts for ev's boundary.
 	Eligibility(ctx context.Context, ev Event) (Eligibility, error)
-	// Measure returns the complete rendered size of a prompt with body, the
-	// route's wrapper included (store.BusySendPromptMeasure's contract). It
-	// is pure: the claim runs it inside its store transaction. The limits are
-	// the capability table's; a route keeps none of its own.
-	Measure(body []byte) int64
 	// Authorize is the route's final authority check for p, before the
 	// store's issue commit.
 	Authorize(ctx context.Context, p Prepared) (Authority, error)

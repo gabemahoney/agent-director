@@ -114,12 +114,12 @@ branches on the agent anywhere else. Each seam's own section states its rule
   relay on Codex rows](#the-relay-on-codex-rows-bssz), checked by the models in
   [`spec/tla/codex/`](../spec/tla/codex/README.md) (see [Model check (`make
   tla`)](#model-check-make-tla)).
-- **Busy-send coverage and records.** Use the target's
-  [persisted Launch coverage](#launch-coverage), the permanent core's
-  records under [`internal/store`](#internalstore), and admission, Results and
-  the capability table: [Busy-send admission and
-  Results](#busy-send-admission-and-results). A new agent's limits are a row
-  of that table.
+- **Busy-send coverage and records. Must use:** the target's
+  [persisted Launch coverage](#launch-coverage) and immutable Launch
+  capabilities in the [permanent core](#internalstore) for admission,
+  admission-limit projection and authoritative prompt packing/wrapping.
+  The [capability table](#busy-send-admission-and-results) authors new
+  Launches and supplies local route metadata.
 - **Busy-send delivery. Must use:** `internal/busysend`: [The inbox
   coordinator](#the-inbox-coordinator), with a route like [Claude's](#the-claude-route).
   Its lifecycle writers use the shared [exit
@@ -2777,9 +2777,8 @@ verbatim so future code review can grep for it:
 
 > No SQL outside `internal/store`; callers use typed query primitives only.
 
-**Schema v21** lives in `internal/store/schema.go`. Twenty-three tables: the
-twelve below and the eleven of the busy-send core (see "v21: the permanent
-busy-send core" below). The v9 hop
+**Schema v21** lives in `internal/store/schema.go`, with the tables below and
+the busy-send core (see "v21: the permanent busy-send core" below). The v9 hop
 renamed agent-generic fields; v13's `claude_capacity` is deliberately
 Claude-specific capacity provenance (see
 [Store upgrade to agent-generic names](#store-upgrade-to-agent-generic-names)):
@@ -4340,16 +4339,17 @@ status readers. Display evidence, like process evidence, is reporting
 metadata ignored by `sameInputPreparation`; it grants no command authority.
 The observer and lifecycle rules are in [Displayed State reporting](#displayed-state-reporting).
 
-**v21: the permanent busy-send core.** `internal/store/busy_send_schema.go`
-declares eleven tables, fourteen indexes, three `spawns` columns and the
+**v21: the permanent busy-send core.**
+[`internal/store/busy_send_schema.go`](../internal/store/busy_send_schema.go)
+declares the core tables and indexes, three `spawns` columns and the
 `store_meta` identity `busy_send_core` = `busy-send-core-v1:<store_id>`. Its
 Go comments give every column's meaning, owner and revision rule beside the
-DDL, and `busy_send_records.go` holds every stored code set and the shared
+DDL, and `busy_send_records.go` holds the custody code sets and shared
 record and lookup types (`BusySendForce`, `BusySendForceLookup`,
 `BusySendResult`, `BusySendResultLookup`, `BusySendPair`, `BusySendWait`).
 Launch lifecycle and deletion transactions maintain the core's identity,
-coverage and Agent Defaults records; the v20→v21 hop backfills them. Beyond
-that, admission stores Held Messages and their pairs, the durable lookups and
+coverage, admission capabilities and Agent Defaults records; the v20→v21 hop
+backfills them. Beyond that, admission stores Held Messages and their pairs, the durable lookups and
 delivery reads read the core (see [Launch coverage](#launch-coverage) and
 [Busy-send admission and Results](#busy-send-admission-and-results)),
 [the inbox coordinator](#the-inbox-coordinator)'s job steps claim, issue and
@@ -4367,6 +4367,17 @@ for `pause`. The tables hold:
   `spawns.busy_conversation_id` binds the row to its published conversation.
   The conversation also holds its Agent Defaults, last accepted sequence and
   held reservations; a resume Launch holds its staged default overrides.
+- **Admission capabilities.** A covered Launch holds its held limits, with
+  per-mode children in `busy_send_launch_modes` and ordered literal escapes
+  in `busy_send_launch_escapes`. The covering version writes the complete
+  snapshot with the Launch and coverage in one transaction on spawn, reuse,
+  resume (delegation included) and the exempt hop's migrated Launches.
+  Uncovered Launches have no capability facts. Publication, restoration and
+  later lifecycle writes never change a snapshot. The DDL comments own the
+  column definitions; the [typed reader](../internal/store/busy_send_launch_capabilities.go)
+  validates types, store identity, codes and completeness, including each
+  mode's `escape_count` and contiguous escape order. Malformed covered data
+  is a store error, never fallback capabilities or an unsupported-mode refusal.
 - **Messages.** `busy_send_messages` keeps each Message's immutable target,
   text, order and options. Its current custody (`place`, nullable
   `handover_id`) is separate from its earlier attempts, the immutable
@@ -4406,6 +4417,44 @@ for `pause`. The tables hold:
 No core table refers to `spawns`: deleting or expiring an agent row removes
 no custody, pair, force or claim. Core foreign keys run only between core
 tables, deferred and never cascading, and every core row names the store id.
+
+**Must use: the bound Launch's capabilities.** Admission and
+`delivery_capabilities`' admission fields read the published current Launch
+in their existing transaction, including while a candidate awaits publication.
+Ordinary and force claims use the guarded destination Launch's snapshot for
+packing; routes use it for wrapping, complete-output size checks and sighting
+interpretation. A retained sender applies these facts even without a route
+for the provider; it notifies only through the recorded wake file.
+
+**Permanent capability meanings.** Every covered Launch offers `wait_turn`;
+the other mode is `steer_turn`, and the text kind is `utf8_tab_lf`. The two
+byte measures have fixed meanings: `wrapper_budget` adds the fixed wrapper
+budget to the rendered body; `literal_escapes` adds prefix/suffix bytes and
+each escape's expansion to that body, even with empty literal fields. Each
+escape counts its non-overlapping occurrences in the original body
+independently, never sequential replacement output.
+Raw literals must be nonempty, contain no ASCII digit or LF, and have an
+escaped form at least as long in bytes. Prefix/suffix and escaped output may
+contain digits or LF and are not re-escaped. These restrictions preserve
+append-monotone measurement: adding a Message changes only ordinal digits
+in existing separators, while raw literals cannot cross digit/LF boundaries;
+existing matches remain and new fragments add no negative expansion.
+
+Later versions may store different numeric limits and prefix/suffix/escape
+literals within those meanings, and offer Steer Turn on a compatible route,
+including for a provider unknown to a retained sender. New modes, text kinds
+or measure algorithms, changed separators or code meanings, and altered core
+declarations require a redesign that preserves the seamless shared-record
+contract; they cannot be introduced by a table change under v21/core-1.
+
+**Permanent delivery envelope.** A later covering table and route must keep
+every whole Message any earlier Launch of the same retained conversation
+could admit deliverable at every applicable boundary, including Steer Turn
+custody at turn end, force and after resume. New Launch admission limits may
+differ; carried Messages keep their original bytes and options, without
+re-admission, refusal, splitting, truncation, rewriting or mode switching.
+The destination snapshot governs packing. `ErrBusySendPromptUnfit` is only a
+defensive guard that leaves custody Held, never a way to narrow this promise.
 
 - **Must use: the permanent core.** Later code reads and writes these records
   directly, reusing their typed records and codes, `busySendCoreObjects` /
@@ -4455,7 +4504,7 @@ from the row it read, or from `RawLife`. Full-row readers return it through
 recorded counter. A hand-over keeps its own captured copy.
 
 **Schema versioning convention.** `schemaVersion` is 21. Fresh creation
-commits the twenty-three-table schema, store id, store-bound
+commits the [schema](../internal/store/schema.go), store id, store-bound
 `native_input_authority=sqlite-v1:<store_id>`, busy-send core identity and
 version in one FULL transaction. A nonempty store stamped zero is refused.
 Current-version opens validate the store id and authority and recognize the
@@ -9521,35 +9570,26 @@ creating one). The file is a content-free hint with no authority;
 a failed touch is a lost wake and changes no Result. The transaction does no
 provider, process or file work.
 
-**Must use: the capability table.** `internal/store/busy_send_capabilities.go`
-is the one per-provider, per-Send-Mode limit definition
-(`BusySendCapabilitiesFor`): each mode's `MessageBytes`, `PromptBytes`,
-`WrapperBytes`, `Wrapping` and `TextKind` (`Accepts`), the per-agent
-`HeldCount` and `HeldBytes`, `BusySendSeparator` and `SinglePromptBytes`.
-Admission, the coordinator's prompt partition, the routes and
-`delivery_capabilities` read it; none keeps a limit or wrapper of its own.
-`Wrapping` is the provider's exact transformation of a prompt body (prefix,
-suffix and escapes), recorded where a route has one. Claude's row offers Wait
-Turn, whose wake adds a measured prefix and suffix and escapes two closing
-tags, and Steer Turn, whose body Claude receives as a parent `PostToolBatch`
-hook's `additionalContext`: no wake wrapper, only the measured escaping of
-both `<system-reminder>` and `</system-reminder>`, kept below the 10,000
-characters past which Claude previews that context instead.
-`Measure` is the one complete-size measure: the body with each escape counted
-at its escaped length, plus prefix and suffix, or the body plus `WrapperBytes`
-for a mode with no `Wrapping`. The partition's default measure and
-`SinglePromptBytes(text)` use it. `WrapperBytes` covers a route's fixed
-wrapper and worst-case escaping, so a Message at `MessageBytes` always fits a
-prompt alone; admission's `prompt_size` refusal stays only as a guard. The
-row also holds the provider's force capability (`ForceAdmission`,
-`ForceLimits`, `ForceStates`) and Confirm From Transcripts capability
-(`ConfirmFromTranscripts`, `ConfirmFromTranscriptsReason`), which
-`deliveryCapabilitiesOf` (`pkg/api/busy_send_types.go`) projects; they
-describe measured behaviour and grant no issue or admission authority. A
-covered provider without a row gets the fallback row: Wait Turn only (Steer
-Turn is `steer_unsupported`), no `Wrapping`, no force (`force: null`) and
-`cannot_confirm`. A new agent or a changed limit is a
-table change only. Callers' limits:
+**Must use: the capability table for Launch creation and local route metadata.**
+[`internal/store/busy_send_capabilities.go`](../internal/store/busy_send_capabilities.go)
+authors new Launch snapshots; launch/template Agent Default validation uses
+that creating version's table (`BusySendCapabilitiesFor`). Existing Launches
+use the [permanent stored capabilities and compatibility rules](#internalstore).
+`BusySendModeLimits.Measure` is the shared complete-size measure used by
+`SinglePromptBytes(text)` and prompt partitioning; no production caller may
+override it. Claude's authored literal measures cover the Wait Turn wake's
+prefix, suffix and two closing-tag escapes, and Steer Turn's
+`PostToolBatch` `additionalContext` escaping of `<system-reminder>` and
+`</system-reminder>`, below Claude's 10,000-character preview threshold.
+
+Force capability (`ForceAdmission`, `ForceLimits`, `ForceStates`) and Confirm
+From Transcripts capability (`ConfirmFromTranscripts`,
+`ConfirmFromTranscriptsReason`) remain local route metadata from the table.
+`deliveryCapabilitiesOf` combines them with the observed Launch's admission
+facts. They describe measured behaviour and grant no issue or admission
+authority. Without a local provider row, force is null and confirmation is
+`cannot_confirm`; the Launch's stored admission modes and limits still apply.
+Callers' limits:
 [Busy-send refusals](caller-contract.md#busy-send-refusals).
 
 **Agent Defaults.** The published conversation holds them
@@ -9649,7 +9689,7 @@ into prompts and hands each to a provider route. Every route and Send Mode,
 Claude's and every later one, implements its `Route` and runs through
 `Coordinator.Deliver` (a force's prompts through `DeliverForcePrompt`; see
 [The force protocol](#the-force-protocol)), the store's job steps below and
-the [capability table](#busy-send-admission-and-results); none builds a
+the [stored Launch capabilities](#internalstore); none builds a
 second inbox, queue or delivery engine. [Claude's](#the-claude-route) is the one
 route wired so far. Imports go one way: a provider adapter imports `busysend` and
 `internal/store`, `busysend` imports only `internal/store`, and the store's
@@ -9671,10 +9711,9 @@ cause (`RecordBusySendWait`) and each later one `earlier_message`. Launch End
 makes Held Messages wait `launch_ended`. Waiting never sets
 `needs_intelligence` or changes the row's state.
 
-**The route** answers four things: `Eligibility`, its authoritative wait or
+**The route** answers three things: `Eligibility`, its authoritative wait or
 the destination the event authenticated (Launch, session, route,
-connection generation, turn); `Measure`, a prompt's complete rendered size,
-wrapper included, with no I/O; `Authorize`, a final check naming the
+connection generation, turn); `Authorize`, a final check naming the
 issuing process; and `Issue`, the one irreversible call of an immutable
 prepared prompt to its captured destination, reporting what it observed
 (`Disposition`). A route never redirects a prompt, issues before the issue
@@ -9694,8 +9733,8 @@ advances its revision, so an obsolete job can neither issue nor release.
    evidence is not idleness while AD's own input may still be pending.
    `PartitionBusySendPrompts` packs it, in accepted order, into the
    fewest whole-Message prompts whose complete rendering
-   (`RenderBusySendPromptBody`'s separators plus the route's measure) fits
-   the boundary's Send Mode row (Steer Turn at `tool_boundary`, else Wait Turn);
+   (`RenderBusySendPromptBody` measured by the destination Launch's stored mode)
+   fits its prompt limit (Steer Turn at `tool_boundary`, else Wait Turn);
    the hand-over records the partition, destination, Turn Start counter,
    permission epoch and deadlines, and owns the conversation until it
    closes.
@@ -9785,8 +9824,8 @@ force's owner call and revision (`BusySendForceRef`):
    hand-over owner that remains, including a finished force's, before the
    Held checks. Otherwise it freezes
    every Held Message, in accepted order, into a hand-over with boundary
-   `force`, the capability table's partition and the captured destination,
-   and the conversation's `handover_force_id` names it.
+   `force`, partitioned with the captured destination Launch's stored Wait
+   Turn measure and limits; the conversation's `handover_force_id` names it.
 2. **Issue.** A route's forced wake calls `Coordinator.DeliverForcePrompt`,
    which reads the frozen next prompt (`ReadBusySendForcePrompt`) and runs
    the coordinator's authorize, issue-commit, issue and completion steps for
@@ -9863,8 +9902,8 @@ force fails `admission_unknown`.
 
 Claude's busy-send route (`internal/hook/busy_send_claude.go`) is
 `claudeRoute`, a `busysend.Route` under [the coordinator's reuse
-rule](#the-inbox-coordinator); its measure and wrapping are the [capability
-table](#busy-send-admission-and-results)'s. **Must use:** a later route reuses
+rule](#the-inbox-coordinator); its measure and wrapping come from the
+[guarded destination Launch](#internalstore). **Must use:** a later route reuses
 its store pieces for the same steps: `store.ReadBusySendRouteFacts`, one
 advisory snapshot of the current Launch's authority and readiness that every
 store step judges again; `store.BusySendWakePath` and
@@ -9957,8 +9996,8 @@ read):
   that force. **Must use:** every Claude force prompt goes through
   `Coordinator.DeliverForcePrompt` at boundary `force` with
   `claudeRoute.force` set, reusing `ReadBusySendForcePrompt`, the bounded
-  `Authorize`/`Issue` path below and the capability table; never a second
-  issuer. `claudeForceBudgets` takes its issue and job budgets from what
+  `Authorize`/`Issue` path below and the stored Launch capabilities; never a
+  second issuer. `claudeForceBudgets` takes its issue and job budgets from what
   remains of the force's recorded issue and call deadlines, and bounds the
   whole invocation, first prompt read included, by the call's remainder; past
   the issue phase the hook reads and writes nothing. No wake starts or renews
@@ -9973,9 +10012,10 @@ read):
 
 **Steer.** The owned `PostToolBatch` hook likewise writes no state and no
 `ad.hook.ignored`. On a parent callback that passes `claudeRouteFacts`,
-`handleClaudeSteer` runs one `Deliver` at `tool_boundary` with the same fixed
-budgets, through the same `claudeRoute` with `steer` set and the Steer Turn
-row (`claudeSteerTurn`; none offered, nothing steered). That `Deliver` first
+`handleClaudeSteer` uses the captured Launch's [stored Steer Turn mode](#internalstore).
+If that mode is absent, it does nothing. Otherwise it runs one `Deliver` at
+`tool_boundary` with the same fixed budgets, through the same `claudeRoute`
+with `steer` set and those stored limits. That `Deliver` first
 finishes an abandoned force but takes no force authority: a live force's
 hand-over bars its claim. **Must use:** every tool-boundary Steer Turn prompt
 goes through this invocation; never a second steer issuer, queue or output
@@ -10005,7 +10045,9 @@ The route's steps:
   store's guards still judge order, transport, turn, helper and pause fence.
 - `Authorize` re-reads the facts and refuses (`readiness_unknown`) when the
   current or prepared destination is not the pinned one, the hook's own
-  identity is unreadable or its output stream takes no write deadline. For a
+  identity is unreadable or its output stream takes no write deadline. It
+  checks the complete size against the captured stored measure and prompt
+  limit and the frozen prompt's `RenderedBytes`; it never resizes a prompt. For a
   steer it then serializes the prompt's whole output (`claudeSteerEnvelope`)
   before the issue commit; a body that is not valid UTF-8 refuses. Otherwise
   it names the hook process as the Launch's helper, which the issue commit
@@ -10044,7 +10086,8 @@ the parent `Stop`'s [turn-end evidence](#busy-send-admission-and-results). For a
 prompt the only evidence that Claude took it is the main agent's own
 `UserPromptSubmit`, after its gated write applied (held
 included), whose sessions agree (`claudeCallbackSession`) and whose prompt
-`unwrapClaudeWake` unwraps exactly from the table's `Wrapping`; a body showing
+`unwrapClaudeWake` unwraps exactly from the destination Launch's stored Wait
+Turn `Wrapping`; a body showing
 an escaped or raw reserved closing tag gives none.
 `RecordBusySendSighting` (`busy_send_turns.go`) binds it in one durable
 transaction, under the gate and current Launch's full captured destination,
@@ -22943,7 +22986,12 @@ source tree, builds distinct version/commit stamps with the same final core,
 publishes real retained runtime/admin pairs and runs CLI, persistent MCP, Go
 and shipped TypeScript callers in both directions. The store subprocess helper
 reuses `seedBusySendRecords`; SQL arranges fixtures, production APIs perform
-the operations. Its passing sandbox matrices cover enums/Results, pair and
+the operations. Its test-only covering build uses the shared
+`storefix.BusySendLaterCapabilities` preset; the audit adapter observes
+runtime identity, wake calls and forbidden provider input. Reuse these for
+stored-capability divergence and delegated candidate creation. These
+synthetic checks do not qualify native delivery for that provider.
+Its passing sandbox matrices cover enums/Results, pair and
 revision races, uncertain commits, stale work, frozen force, retention and
 delete/reuse. Physical Docker output qualification belongs to the single
 [`MixedVersionComposition` case, `t2.75s.cw.mv`](../tickets/testplans/b.75s/t1.75s.cw/t2.75s.cw.mv/t2.75s.cw.mv.md),
@@ -24033,12 +24081,17 @@ migration preservation, reentry and refusal setup. `v17ColumnSpecs` and
 fixtures. For the v20→v21 hop and the busy-send core, `migration_fixtures_test.go`
 provides `makeV20Fixture` (a genuine v20 store with a row of every agent kind
 and lifecycle), `assertV21Backfill`, `v21ColumnSpecs`, `allV21Core` /
-`preAddV21Core` and `bindV21Row` (partial and bound states),
-`seedBusySendRecords` (representative core records), `breakV21Backfill`,
+`preAddV21Core` and `bindV21Row` (partial and bound states with an optional
+complete capability snapshot), `v21ClaudeCapabilities` / `seedV21Capabilities`
+(raw snapshot setup within the fixture transaction),
+`seedBusySendRecords` (atomic representative-core replacement, capability
+children before Launches), `breakV21Backfill`,
 `breakV21CoreIdentity` and `breakV21Commit` (failures after the DDL, after the
 backfill and at COMMIT), `dumpBeforeV21` (an older hop's dump without the
 core), `reapplyHops` (rerun the registered hops to the current version),
-`rewriteTableDDL` and `dbDump`'s omitted columns. Input-import fixtures stay at genuine v15 rather than current-minus-one. Request factories,
+`rewriteTableDDL` and `dbDump`'s omitted columns. `assertV21Backfill` checks
+complete covered snapshots and their absence on uncovered Launches.
+Input-import fixtures stay at genuine v15 rather than current-minus-one. Request factories,
 `SeedDecideFixtureAgent` optional RelayRequest seeds and `newPAEnvAgent`
 optional origin control provide reusable request-origin setup. Cursor reporter
 fixtures provide synthetic kernel/runtime/pane evidence and an exec-command
@@ -24049,8 +24102,25 @@ seeded store rows alone do not establish controller behavior. Future authors
 MUST reuse these fixtures for their respective responsibilities.
 
 **Busy-send record seeders (reusable test fixtures).**
-`internal/testsupport/storefix/busy_send.go`: `SeedBusySendResult` seeds a
-confirmed Message with its pair and Result, or an expired tombstone, in the
+[`internal/testsupport/storefix/busy_send.go`](../internal/testsupport/storefix/busy_send.go):
+`BusySendLaterCapabilities` supplies a synthetic later-provider snapshot with
+both modes, distinct limits and literal/budget measures;
+`BusySendWaitOnlyCapabilities` supplies a synthetic Wait-only budget snapshot.
+Each returns independent data. `SeedBusySendCapabilitiesTx` installs complete
+coverage, held limits and children in the fixture's transaction; nil removes
+capability facts for an uncovered Launch. `ReadBusySendCapabilitiesTx` observes
+them in that transaction; it is not the production validator. Tests MUST
+reuse these for coherent setup and readback, never to model mutable
+production capabilities or qualify a real provider.
+
+`SeedBusySendResumeCandidate` seeds a pending covered Codex resume candidate
+with a complete supplied capability snapshot and returns its token. It
+requires a finished covered fixture with no Messages. Tests MUST reuse it
+for delegated recipient outcomes; it grants no authoring authority, and
+callers supply any simulated exit evidence.
+
+`SeedBusySendResult` seeds a confirmed Message with its pair and Result, or
+an expired tombstone, in the
 instance's published conversation. `ExpireBusySendForce` expires an ended
 force attempt. `UnbindBusySend` clears a row's published binding.
 `BusySendResultSeed.FinalAt` optionally sets the Final transition time;
@@ -26081,14 +26151,22 @@ same. For writing `[tmux]` settings, see the config writer subsection above.
 `SpawnOption` values, so positional call sites compile unchanged. When two options set the same column, the later one wins.
 
 **Must use: busy-send coverage fixtures.** `SeedSpawn`'s option transaction
-seeds matching core provider, life and token facts without advancing
-`row_version`. Use [`pkg/api/apitest/busy_send.go`](../pkg/api/apitest/busy_send.go):
+seeds matching core provider, life, token and complete capability facts without
+advancing `row_version`. `WithBusySendCapabilities` supplies a covered
+snapshot, or nil for uncovered; omission keeps the selected agent's ordinary
+coverage. Use [`pkg/api/apitest/busy_send.go`](../pkg/api/apitest/busy_send.go):
 `SeedBusySendCoverage` seeds independent Launch/conversation coverage without
-changing membership; `ReadBusySendFacts` observes the published binding and
+changing membership, with at most one optional snapshot (nil/omitted for
+uncovered). Covered Claude defaults to its authoring data; unknown providers
+default to the synthetic Wait-only preset for existing fixture callers.
+Later-provider tests MUST supply an explicit snapshot from the
+[shared presets](#storefix-seeders-reusable-test-fixtures); this setup default
+is not a production fallback.
+`ReadBusySendFacts` observes the published binding and
 coverage plus all retained conversation/Launch facts in one read transaction,
 without provider work, including each conversation's Agent Defaults and
-reservations, each Launch's end cause and route kind, and each Message's
-stored text, options, custody and pair.
+reservations, each Launch's end cause, route kind and `BusyLaunchFact.Capabilities`,
+and each Message's stored text, options, custody and pair.
 `SeedBusySendRoute` records the current Launch's route kind and wake path, as
 a route would; `SeedBusySendReservation` sets the published conversation's
 reservations, so a held limit is reached without that many sends;

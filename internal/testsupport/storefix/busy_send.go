@@ -13,6 +13,192 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
+// BusySendLaterCapabilities is an explicitly synthetic later-provider snapshot
+// (reusable fixture), never qualification of a real provider or a product fallback.
+// Its escapes count occurrences in the original body, including overlapping outputs.
+func BusySendLaterCapabilities() *store.BusySendLaunchCapabilities {
+	return &store.BusySendLaunchCapabilities{HeldCount: 7, HeldBytes: 16384, Modes: []store.BusySendModeLimits{
+		{Mode: store.BusySendWaitTurn, MessageBytes: 512, PromptBytes: 4096, WrapperBytes: 64,
+			TextKind: store.BusySendTextUTF8TabLF, MeasureKind: store.BusySendMeasureLiteralEscapes,
+			Wrapping: store.BusySendWrapping{Prefix: "[later]\n", Suffix: "\n[/later]",
+				Escapes: []store.BusySendEscape{{Raw: "<", Escaped: "&lt;"}, {Raw: "&", Escaped: "&amp;"}}}},
+		{Mode: store.BusySendSteerTurn, MessageBytes: 256, PromptBytes: 2048, WrapperBytes: 32,
+			TextKind: store.BusySendTextUTF8TabLF, MeasureKind: store.BusySendMeasureWrapperBudget},
+	}}
+}
+
+// BusySendWaitOnlyCapabilities is a synthetic Wait-only snapshot (reusable
+// fixture). Its historical fixture numbers preserve old coverage-only callers;
+// they do not come from an unknown provider lookup or describe its real limits.
+func BusySendWaitOnlyCapabilities() *store.BusySendLaunchCapabilities {
+	return &store.BusySendLaunchCapabilities{HeldCount: 1000, HeldBytes: 8000000, Modes: []store.BusySendModeLimits{
+		{Mode: store.BusySendWaitTurn, MessageBytes: 8000, PromptBytes: 9600, WrapperBytes: 1567,
+			TextKind: store.BusySendTextUTF8TabLF, MeasureKind: store.BusySendMeasureWrapperBudget},
+	}}
+}
+
+// SeedBusySendCapabilitiesTx installs complete creation facts on an existing
+// fixture Launch, in its caller's transaction (reusable fixture). nil creates
+// an uncovered Launch; a nonnil value creates a covered one. This is setup
+// before the tested operation, never a simulated production snapshot update.
+// Conversation and spawns coverage remain the caller's responsibility.
+func SeedBusySendCapabilitiesTx(tx *sql.Tx, launchID string, c *store.BusySendLaunchCapabilities) error {
+	var storeID string
+	if err := tx.QueryRow(`SELECT store_id FROM busy_send_launches WHERE launch_id=?`, launchID).Scan(&storeID); err != nil {
+		return err
+	}
+	for _, table := range []string{"busy_send_launch_escapes", "busy_send_launch_modes"} {
+		if _, err := tx.Exec("DELETE FROM "+table+" WHERE launch_id=?", launchID); err != nil {
+			return err
+		}
+	}
+	coverage := store.BusySendNotCovered
+	var count, size any
+	if c != nil {
+		coverage, count, size = store.BusySendCovered, c.HeldCount, c.HeldBytes
+	}
+	if _, err := tx.Exec(`UPDATE busy_send_launches SET busy_send=?, held_count_limit=?, held_bytes_limit=? WHERE launch_id=?`,
+		string(coverage), count, size, launchID); err != nil {
+		return err
+	}
+	if c == nil {
+		return nil
+	}
+	for _, m := range c.Modes {
+		if _, err := tx.Exec(`INSERT INTO busy_send_launch_modes
+		    (launch_id,send_mode,store_id,message_bytes,prompt_bytes,text_kind,wrapper_bytes,measure_kind,prefix,suffix,escape_count)
+		    VALUES (?,?,?,?,?,?,?,?,?,?,?)`, launchID, string(m.Mode), storeID, m.MessageBytes, m.PromptBytes,
+			string(m.TextKind), m.WrapperBytes, string(m.MeasureKind), m.Wrapping.Prefix, m.Wrapping.Suffix, len(m.Wrapping.Escapes)); err != nil {
+			return err
+		}
+		for i, e := range m.Wrapping.Escapes {
+			if _, err := tx.Exec(`INSERT INTO busy_send_launch_escapes (launch_id,send_mode,escape_index,store_id,raw,escaped)
+			    VALUES (?,?,?,?,?,?)`, launchID, string(m.Mode), i, storeID, e.Raw, e.Escaped); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// SeedBusySendResumeCandidate seeds an empty covered Codex fixture's pending resume
+// and returns its token (reusable fixture). It models a recipient's stored
+// outcome, not authoring authority; callers own any simulated exit evidence.
+func SeedBusySendResumeCandidate(t *testing.T, dbPath, instanceID, socket string, atMillis int64, c *store.BusySendLaunchCapabilities) string {
+	t.Helper()
+	if c == nil || atMillis <= 0 {
+		t.Fatal("storefix.SeedBusySendResumeCandidate: snapshot and positive time required")
+	}
+	raw := openRawStore(t, dbPath, "SeedBusySendResumeCandidate")
+	defer func() { _ = raw.Close() }()
+	tx, err := raw.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var oldLaunch, conversation, storeID, provider string
+	var life int64
+	err = tx.QueryRow(`SELECT l.launch_id, l.conversation_id, l.store_id, l.provider, s.life_number
+	    FROM spawns s JOIN busy_send_launches l ON l.instance_id=s.instance_id AND l.phase='current'
+	    JOIN busy_conversations c ON c.conversation_id=l.conversation_id AND c.conversation_id=s.busy_conversation_id
+	    WHERE s.instance_id=? AND s.state IN ('ended','missing') AND c.publication='published'
+	        AND l.provider='codex' AND c.busy_send='covered' AND l.busy_send='covered' AND s.busy_send='covered'
+	        AND NOT EXISTS (SELECT 1 FROM busy_send_messages WHERE conversation_id=c.conversation_id)`, instanceID).
+		Scan(&oldLaunch, &conversation, &storeID, &provider, &life)
+	if err != nil {
+		t.Fatalf("storefix.SeedBusySendResumeCandidate: empty finished covered fixture: %v", err)
+	}
+	launchUUID := uuid.New()
+	token, launchID := hex.EncodeToString(launchUUID[:8]), launchUUID.String()
+	// Match the immediate pending row the recipient leaves before startup.
+	_, err = tx.Exec(`UPDATE spawns SET state='pending', settled_state='pending', state_changed_ms=?,
+	    permission_epoch=permission_epoch+1, settled_evidence=NULL,
+	    state_evidence=json_object('v','pending','life',life_number,'token',?,'epoch',permission_epoch+1,
+	        'at',?,'src','caller_command','checked',?),
+	    display_observation=NULL, display_evidence=NULL, observation_version=observation_version+1,
+	    process_evidence=NULL, pid=NULL, proc_starttime=NULL, ended_at=NULL,
+	    liveness_unverified_since=NULL, liveness_note=NULL, tmux_server_pid=NULL,
+	    tmux_server_started=NULL, tmux_server_starttime=NULL, pane_id=NULL, pane_pid=NULL,
+	    pane_starttime=NULL, end_reported_at=NULL, codex_startup=NULL, claude_capacity=NULL,
+	    subagent_tracking=CASE WHEN agent='claude' THEN 1 ELSE 0 END, turn_starts=0,
+	    launch_started_at=?, launch_token=?, tmux_socket=?, parent_id=NULL,
+	    launch_owner_pid=NULL, launch_owner_starttime=NULL, launch_owner_pidns=NULL, row_version=row_version+1
+	    WHERE instance_id=?`, atMillis, token, atMillis, atMillis, atMillis, token, nullIfEmpty(socket), instanceID)
+	if err == nil {
+		_, err = tx.Exec(`UPDATE busy_send_launches SET ended_at_ms=?, end_cause='process_exited', revision=revision+1
+		    WHERE launch_id=? AND ended_at_ms IS NULL`, atMillis, oldLaunch)
+	}
+	if err == nil {
+		_, err = tx.Exec(`INSERT INTO busy_send_launches
+		    (launch_id,store_id,instance_id,conversation_id,life_number,launch_token,provider,busy_send,
+		     kind,phase,recorded_at_ms,held_count_limit,held_bytes_limit)
+		    VALUES (?,?,?,?,?,?,?,'covered','resume','candidate',?,?,?)`,
+			launchID, storeID, instanceID, conversation, life, token, provider, atMillis, c.HeldCount, c.HeldBytes)
+	}
+	if err == nil {
+		err = SeedBusySendCapabilitiesTx(tx, launchID, c)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		t.Fatalf("storefix.SeedBusySendResumeCandidate: %v", err)
+	}
+	return token
+}
+
+// ReadBusySendCapabilitiesTx observes exact stored limits and ordered literals
+// in the caller's read transaction (reusable fixture); it performs no provider lookup.
+func ReadBusySendCapabilitiesTx(tx *sql.Tx, launchID string) (*store.BusySendLaunchCapabilities, error) {
+	var count, size sql.NullInt64
+	if err := tx.QueryRow(`SELECT held_count_limit,held_bytes_limit FROM busy_send_launches WHERE launch_id=?`, launchID).Scan(&count, &size); err != nil {
+		return nil, err
+	}
+	c := &store.BusySendLaunchCapabilities{HeldCount: count.Int64, HeldBytes: size.Int64}
+	rows, err := tx.Query(`SELECT send_mode,message_bytes,prompt_bytes,text_kind,wrapper_bytes,measure_kind,prefix,suffix
+	    FROM busy_send_launch_modes WHERE launch_id=? ORDER BY CASE send_mode WHEN 'wait_turn' THEN 0 ELSE 1 END`, launchID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var m store.BusySendModeLimits
+		if err := rows.Scan(&m.Mode, &m.MessageBytes, &m.PromptBytes, &m.TextKind, &m.WrapperBytes, &m.MeasureKind, &m.Wrapping.Prefix, &m.Wrapping.Suffix); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		c.Modes = append(c.Modes, m)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	for i := range c.Modes {
+		m := &c.Modes[i]
+		rows, err := tx.Query(`SELECT raw,escaped FROM busy_send_launch_escapes WHERE launch_id=? AND send_mode=? ORDER BY escape_index`, launchID, string(m.Mode))
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var e store.BusySendEscape
+			if err := rows.Scan(&e.Raw, &e.Escaped); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			m.Wrapping.Escapes = append(m.Wrapping.Escapes, e)
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !count.Valid && !size.Valid && len(c.Modes) == 0 {
+		return nil, nil
+	}
+	return c, nil
+}
+
 // BusySendResultSeed seeds one confirmed Message and its Result for reader
 // tests (reusable fixture). Retention tests invoke the real expiry writer.
 // Pair is canonical: a lowercase

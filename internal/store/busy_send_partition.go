@@ -8,8 +8,10 @@ import (
 // The inbox's prompt partition (SR-2.3): a frozen hand-over's Messages, in
 // accepted order, packed into the fewest prompts that fit the route's complete
 // prompt limit. Packing is pure: it reads no store, makes no provider, process
-// or file call, and keeps no limit of its own (the capability table's mode
-// limits, busy_send_capabilities.go, and the route's measure decide every fit).
+// or file call, and keeps no limit of its own. Production claims use only the
+// guarded destination Launch's stored mode and measure. Its delivery envelope
+// must preserve whole-Message fit across boundaries and retained resumes;
+// carried custody is never re-admitted or rewritten to make it fit.
 //
 // A prompt's body is each Message's separator line followed by its original
 // text, with two LF bytes between Messages:
@@ -23,12 +25,11 @@ import (
 
 // BusySendPromptMeasure returns the complete rendered size, in bytes, of a
 // prompt whose body is body: the body plus everything the route's own wrapper
-// adds, as the provider receives it. A route supplies it; it must be pure (no
-// I/O), never return less than len(body), and never shrink when a Message is
-// added to the body. nil is the mode's own measure from the capability table
-// (BusySendModeLimits.Measure): the provider's exact wrapping and escaping
-// where the table records them, else the body plus the mode's whole wrapper
-// budget.
+// adds, as the provider receives it. A partition test may supply it; it must
+// be pure (no I/O), never return less than len(body), and never shrink when a
+// Message is added to the body. Production callers always pass nil, selecting the stored
+// mode's explicit measure (BusySendModeLimits.Measure); no route callback can
+// override the Launch's arithmetic.
 type BusySendPromptMeasure func(body []byte) int64
 
 // BusySendPromptPart is one prompt of a partition: Count Messages starting at
@@ -39,9 +40,10 @@ type BusySendPromptPart struct {
 }
 
 // ErrBusySendPromptUnfit means a Message cannot fit a prompt alone under the
-// mode's prompt limit with the route's measured wrapper: the route's wrapper
-// exceeds the table's wrapper budget, or the table changed under accepted
-// custody. Nothing is claimed; the Message stays Held.
+// destination Launch's stored prompt limit and measure. This is a defensive
+// guard, never the planned outcome of a compatible resume: a later route must
+// preserve the delivery envelope for earlier accepted custody. Nothing is
+// claimed; the Message stays Held.
 var ErrBusySendPromptUnfit = errors.New("store: busy-send Message does not fit a prompt alone")
 
 // errBusySendMeasure reports a route measure that breaks its contract.
@@ -79,6 +81,9 @@ func busySendBodyBytes(texts [][]byte, n int) int {
 // measured on its actual rendering, so changing separator widths and the
 // route's wrapper are counted. A Message that cannot fit alone is
 // ErrBusySendPromptUnfit; a measure that breaks its contract is an error.
+// Stored literal escapes obey BusySendEscape's digit/LF restriction, so
+// changing a separator's ordinals cannot remove an existing escape match;
+// stopping at the first non-fitting prefix therefore remains sound.
 func PartitionBusySendPrompts(texts [][]byte, limits BusySendModeLimits, measure BusySendPromptMeasure) ([]BusySendPromptPart, error) {
 	if measure == nil {
 		measure = limits.Measure

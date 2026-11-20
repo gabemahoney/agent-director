@@ -44,15 +44,14 @@ var delivered = busysend.Disposition{Output: store.BusySendOutputComplete, Order
 	UnprovenBoundary: true, More: true}
 
 // fakeRoute is the one Route here: it records every issued prompt, and its
-// optional hooks run outside its lock (issue's nil default is delivered;
-// measure's nil default is the Wait Turn row's whole wrapper budget).
+// optional hooks run outside its lock (issue's nil default is delivered).
+// Prompt sizing belongs to the stored Launch, never this fake transport.
 type fakeRoute struct {
 	elig        busysend.Eligibility
 	eligibility func()
 	authorize   func(context.Context, busysend.Prepared) busysend.Authority
 	issue       func(context.Context, busysend.Prepared) busysend.Disposition
 	observe     func(string, context.Context)
-	measure     store.BusySendPromptMeasure
 
 	mu     sync.Mutex
 	issued []busysend.Prepared
@@ -66,14 +65,6 @@ func (r *fakeRoute) Eligibility(ctx context.Context, _ busysend.Event) (busysend
 		r.eligibility()
 	}
 	return r.elig, nil
-}
-
-func (r *fakeRoute) Measure(body []byte) int64 {
-	if r.measure != nil {
-		return r.measure(body)
-	}
-	limits, _ := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendWaitTurn)
-	return int64(len(body)) + limits.WrapperBytes
 }
 
 func (r *fakeRoute) Authorize(ctx context.Context, p busysend.Prepared) (busysend.Authority, error) {
@@ -192,15 +183,13 @@ type coordEnv struct {
 	start    time.Time
 }
 
-func newCoordEnv(t *testing.T) *coordEnv {
+func newCoordEnv(t *testing.T, opts ...apitest.SpawnOption) *coordEnv {
 	t.Helper()
 	st, path := storefix.OpenTempStore(t)
 	session := uuid.NewString()
-	id, err := apitest.SeedSpawn(path, "", store.StateWaiting, "", "off", session, false, apitest.WithTurnStarts(3))
+	opts = append([]apitest.SpawnOption{apitest.WithTurnStarts(3)}, opts...)
+	id, err := apitest.SeedSpawn(path, "", store.StateWaiting, "", "off", session, false, opts...)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := apitest.SeedBusySendCoverage(path, id, store.BusySendCovered, store.BusySendCovered); err != nil {
 		t.Fatal(err)
 	}
 	if err := apitest.SeedBusySendRoute(path, id, string(store.BusySendRouteClaudeHooks), filepath.Join(t.TempDir(), "wake")); err != nil {
@@ -311,7 +300,8 @@ func (e *coordEnv) reopen(t *testing.T) {
 // an event with nothing Held issues nothing.
 func TestCoordinatorDeliversFrozenPrompts(t *testing.T) {
 	t.Parallel()
-	e := newCoordEnv(t)
+	// Preserve the two-prompt cutoff with an explicit stored budget snapshot.
+	e := newCoordEnv(t, apitest.WithBusySendCapabilities(storefix.BusySendWaitOnlyCapabilities()))
 	b, c := strings.Repeat("b", 4000), strings.Repeat("c", 4000)
 	e.admit(t, "m1", "first")
 	e.admit(t, "m2", b)
@@ -394,7 +384,7 @@ func TestCoordinatorDeliversFrozenPrompts(t *testing.T) {
 	deadline := e.start.Add(time.Minute)
 	prompt := func(handover string, index, count int, body string) busysend.Prepared {
 		return busysend.Prepared{HandoverID: handover, PromptIndex: index, PromptCount: count, Destination: e.dest,
-			Body: []byte(body), RenderedBytes: e.route.Measure([]byte(body)), IssueDeadline: deadline}
+			Body: []byte(body), RenderedBytes: int64(len(body)) + 1567, IssueDeadline: deadline}
 	}
 	want := []busysend.Prepared{
 		prompt(issued[0].HandoverID, 0, 2, "[agent-director: message 1 of 2]\nfirst\n\n[agent-director: message 2 of 2]\n"+b),
@@ -445,7 +435,8 @@ func TestCoordinatorKeepsOrderBarrier(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			e := newCoordEnv(t)
+			// Two separate prompts are essential to this custody schedule.
+			e := newCoordEnv(t, apitest.WithBusySendCapabilities(storefix.BusySendWaitOnlyCapabilities()))
 			e.admit(t, "a", strings.Repeat("a", 4000))
 			e.admit(t, "b", strings.Repeat("b", 4000))
 			ctx, cancel := context.WithCancel(context.Background())
@@ -597,7 +588,8 @@ func TestCoordinatorKeepsOriginalBudgets(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			e := newCoordEnv(t)
+			// Two separate prompts are essential to this custody schedule.
+			e := newCoordEnv(t, apitest.WithBusySendCapabilities(storefix.BusySendWaitOnlyCapabilities()))
 			e.admit(t, "a", strings.Repeat("a", 4000))
 			e.admit(t, "b", strings.Repeat("b", 4000))
 			ctx, cancel := context.WithCancel(context.Background())
@@ -654,7 +646,8 @@ func TestCoordinatorBoundsEveryCall(t *testing.T) {
 	}{{"unbounded caller", 0}, {"earlier caller deadline", 30 * time.Second}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			e := newCoordEnv(t)
+			// Exercise the release deadline with a distinct unissued prompt.
+			e := newCoordEnv(t, apitest.WithBusySendCapabilities(storefix.BusySendWaitOnlyCapabilities()))
 			e.admit(t, "a", strings.Repeat("a", 4000))
 			e.admit(t, "b", strings.Repeat("b", 4000))
 			var mu sync.Mutex
@@ -685,6 +678,9 @@ func TestCoordinatorBoundsEveryCall(t *testing.T) {
 			if out, err := c.Deliver(ctx, busysend.Event{InstanceID: e.id, Boundary: store.BusySendBoundaryTurnEnd}); err != nil ||
 				out.Kind != busysend.OutcomeIssued {
 				t.Fatalf("Deliver = %+v, %v; want prompt 0 issued", out, err)
+			}
+			if got := e.places(t); !slices.Equal(got, []string{"issued", "held"}) {
+				t.Fatalf("custody %v; want the partial prompt issued and the separate tail released", got)
 			}
 			for _, phase := range []struct {
 				calls  []string
@@ -748,7 +744,8 @@ func TestCoordinatorIssueCommitBoundary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			e := newCoordEnv(t)
+			// Two separate prompts are essential to this custody schedule.
+			e := newCoordEnv(t, apitest.WithBusySendCapabilities(storefix.BusySendWaitOnlyCapabilities()))
 			e.admit(t, "a", strings.Repeat("a", 4000))
 			e.admit(t, "b", strings.Repeat("b", 4000))
 			// The route's authority comes just before the issue commit, so the
@@ -877,7 +874,6 @@ func TestCoordinatorSteersOnePromptPerBoundary(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newCoordEnv(t)
-	limits, _ := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendSteerTurn)
 	texts := map[string]string{"s1": strings.Repeat("a", 5000), "s2": strings.Repeat("b", 5000), "s3": "<system-reminder>s3</system-reminder>",
 		"w1": "a Wait Turn Message", "s4": "a Steer Turn Message behind it", "late": "a Steer Turn Message sent after the first boundary"}
 	requests := []string{"s1", "s2", "s3", "w1", "s4"}
@@ -902,7 +898,6 @@ func TestCoordinatorSteersOnePromptPerBoundary(t *testing.T) {
 		}
 		return out
 	}
-	e.route.measure = limits.Measure
 	e.route.issue = func(context.Context, busysend.Prepared) busysend.Disposition { return steered }
 
 	out, err := e.event(ctx, store.BusySendBoundaryToolBoundary)
@@ -928,7 +923,7 @@ func TestCoordinatorSteersOnePromptPerBoundary(t *testing.T) {
 		t.Fatalf("custody after the next tool boundary %q; want s1 to s3 closed and the rest Held and reserved", got)
 	}
 
-	e.route.measure, e.route.issue = nil, nil
+	e.route.issue = nil
 	if out, err := e.deliver(ctx); err != nil || out.Kind != busysend.OutcomeNoIssue || out.Wait != store.BusySendWaitReadinessUnknown ||
 		len(e.route.prepared()) != 2 {
 		t.Fatalf("turn end before the Stop's evidence = %+v, %v; want no issue, waiting readiness_unknown", out, err)
@@ -961,14 +956,15 @@ func TestCoordinatorSteersOnePromptPerBoundary(t *testing.T) {
 		return b.String()
 	}
 	issued = e.route.prepared()
-	prompt := func(i, count int, measure store.BusySendPromptMeasure, texts ...string) busysend.Prepared {
+	prompt := func(i, count int, rendered int64, texts ...string) busysend.Prepared {
 		return busysend.Prepared{HandoverID: issued[i].HandoverID, PromptCount: count, Destination: e.dest, Body: []byte(body(texts...)),
-			RenderedBytes: measure([]byte(body(texts...))), IssueDeadline: e.start.Add(time.Minute)}
+			RenderedBytes: rendered, IssueDeadline: e.start.Add(time.Minute)}
 	}
 	want := []busysend.Prepared{
-		prompt(0, 2, limits.Measure, texts["s1"]),
-		prompt(1, 1, limits.Measure, texts["s2"], texts["s3"]),
-		prompt(2, 1, e.route.Measure, texts["w1"], texts["s4"], texts["late"]),
+		prompt(0, 2, int64(len(body(texts["s1"]))), texts["s1"]),
+		// Both system-reminder tags expand by three bytes in Steer Turn.
+		prompt(1, 1, int64(len(body(texts["s2"], texts["s3"])))+6, texts["s2"], texts["s3"]),
+		prompt(2, 1, int64(len(body(texts["w1"], texts["s4"], texts["late"])))+169, texts["w1"], texts["s4"], texts["late"]),
 	}
 	if !reflect.DeepEqual(issued, want) || issued[0].HandoverID == issued[1].HandoverID || issued[1].HandoverID == issued[2].HandoverID {
 		for i := range issued {
@@ -985,7 +981,7 @@ func TestCoordinatorSteersOnePromptPerBoundary(t *testing.T) {
 }
 
 // forceClaim claims a force call on e's agent at the clock's now, under the
-// route's measure, with the API call's 12 s active phase and 3 s cleanup.
+// Launch's stored measure, with the API call's 12 s active phase and 3 s cleanup.
 func (e *coordEnv) forceClaim(t *testing.T) store.BusySendForceClaim {
 	t.Helper()
 	l, err := e.st.GetBusySendPublishedLaunch(e.id)
@@ -993,7 +989,7 @@ func (e *coordEnv) forceClaim(t *testing.T) store.BusySendForceClaim {
 		t.Fatal(err)
 	}
 	c, err := e.st.ClaimBusySendForce(context.Background(), store.BusySendForceClaimRequest{InstanceID: e.id, Launch: l,
-		ForceID: uuid.NewString(), OwnerCallID: uuid.NewString(), Measure: e.route.Measure, ActiveBudget: 12 * time.Second,
+		ForceID: uuid.NewString(), OwnerCallID: uuid.NewString(), ActiveBudget: 12 * time.Second,
 		CleanupBudget: 3 * time.Second, At: e.clock.Now()})
 	if err != nil || c.Handover == nil {
 		t.Fatalf("force claim %+v, %v; want a running force", c, err)

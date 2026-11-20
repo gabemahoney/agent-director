@@ -16,9 +16,12 @@ import (
 // and current Launch they belong to. It is observational: reading it issues
 // no input, wakes no route, changes no Result and repairs nothing.
 type BusySendObservation struct {
-	// Provider is the published conversation's provider, whose row of the
-	// capability table get publishes as delivery_capabilities.
+	// Provider is the published conversation's provider. Only route-specific
+	// force/confirmation metadata is projected from its local table row.
 	Provider string
+	// Capabilities are the published current Launch's immutable admission
+	// facts, taken in this observation's own read transaction.
+	Capabilities BusySendLaunchCapabilities
 	// Defaults are the published conversation's Agent Defaults.
 	Defaults BusySendAgentDefaults
 	// HeldCount and HeldBytes are the Messages actually Held and their text
@@ -81,6 +84,14 @@ func readBusySendObservationOn(ctx context.Context, conn *sql.Conn, storeID, ins
 		return nil, err
 	}
 	o := BusySendObservation{Provider: p.provider, Defaults: p.defaults}
+	caps, err := readBusySendLaunchCapabilities(ctx, conn, storeID, p.launch)
+	if err != nil {
+		return nil, err
+	}
+	if caps == nil {
+		return nil, errBusySendCapabilities
+	}
+	o.Capabilities = *caps
 	if o.HeldCount, o.HeldBytes, o.FirstWait, err = readBusySendHeld(ctx, conn, p.conversation); err != nil {
 		return nil, err
 	}

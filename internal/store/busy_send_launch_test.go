@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -135,6 +136,57 @@ func busyLaunchStage(t *testing.T, s *Store, id, kind, agent, token string) int6
 	return v
 }
 
+// busyLaunchSnapshots reads every retained/candidate snapshot independently of phase.
+func busyLaunchSnapshots(t *testing.T, s *Store, id string) map[string]*BusySendLaunchCapabilities {
+	t.Helper()
+	rows, err := s.db.Query(`SELECT launch_id FROM busy_send_launches WHERE instance_id=? ORDER BY launch_id`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := make(map[string]*BusySendLaunchCapabilities)
+	for _, id := range ids {
+		c, err := readBusySendLaunchCapabilities(context.Background(), s.db, s.StoreID(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[id] = c
+	}
+	return out
+}
+
+// These sequential tests simulate a covering release's authoring table, never
+// changing a snapshot after creation. Parallel tests run after cleanup.
+func busyLaunchAuthor(t *testing.T, provider string, c *BusySendLaunchCapabilities) {
+	t.Helper()
+	prior := busySendCapabilityTable
+	t.Cleanup(func() { busySendCapabilityTable = prior })
+	next := append([]BusySendCapabilities(nil), prior...)
+	row := BusySendCapabilitiesFor(provider)
+	row.Provider, row.HeldCount, row.HeldBytes, row.Modes = provider, c.HeldCount, c.HeldBytes, c.Modes
+	for i := range next {
+		if next[i].Provider == provider {
+			next[i] = row
+			busySendCapabilityTable = next
+			return
+		}
+	}
+	busySendCapabilityTable = append(next, row)
+}
+
 // TestBusySendFreshLaunchAllAgents: a fresh Launch records this release's
 // coverage for its agent, written out here (only Claude is covered), on the
 // row, its conversation and its current Launch alike.
@@ -152,6 +204,15 @@ func TestBusySendFreshLaunchAllAgents(t *testing.T) {
 				t.Fatalf("fresh row: %+v; want coverage %s", r, want)
 			}
 			busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_conversations c JOIN busy_send_launches l ON l.conversation_id=c.conversation_id WHERE c.instance_id=? AND c.publication='published' AND l.phase='current' AND c.provider=? AND l.provider=? AND c.busy_send=? AND l.busy_send=? AND l.launch_token=? AND l.life_number=?`, id, provider, provider, string(want), string(want), r.Identity.Token, r.LifeNumber)
+			var expected *BusySendLaunchCapabilities
+			if want == BusySendCovered {
+				expected = v21ClaudeCapabilities()
+			}
+			for launch, got := range busyLaunchSnapshots(t, s, id) {
+				if !reflect.DeepEqual(got, expected) {
+					t.Fatalf("fresh snapshot %s = %+v; want %+v", launch, got, expected)
+				}
+			}
 			reopened, e := Open(path)
 			if e != nil {
 				t.Fatal(e)
@@ -178,7 +239,22 @@ func TestBusySendReadersUsePersistedFacts(t *testing.T) {
 		mustExec(t, s.db, `UPDATE spawns SET busy_conversation_id=? WHERE instance_id=?`, storedBinding, id)
 		for _, want := range []BusySendCoverage{BusySendNotCovered, BusySendCovered} {
 			mustExec(t, s.db, `UPDATE spawns SET busy_send=? WHERE instance_id=?`, string(want), id)
-			mustExec(t, s.db, `UPDATE busy_send_launches SET busy_send=? WHERE instance_id=?`, string(want), id)
+			tx, err := s.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var launch string
+			if err := tx.QueryRow(`SELECT launch_id FROM busy_send_launches WHERE instance_id=?`, id).Scan(&launch); err != nil {
+				t.Fatal(err)
+			}
+			var caps *BusySendLaunchCapabilities
+			if want == BusySendCovered {
+				caps = v21ClaudeCapabilities()
+			}
+			seedV21Capabilities(t, tx, launch, caps)
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
 			before := dbDump(t, path)
 			got, e := s.GetBusySendCoverage(id)
 			if e != nil || got != want {
@@ -292,6 +368,20 @@ func TestBusySendStagedPublication(t *testing.T) {
 			old := busyLaunchFinish(t, s, id)
 			busyLaunchCovered(t, s, id)
 			const token = "1122334455667788"
+			oldSnapshots := busyLaunchSnapshots(t, s, id)
+			if tc.base == AgentCodex {
+				before := dbDump(t, path)
+				_, _, err := s.MoveToPendingWithExit(id, old.Snapshot, 2000, token, "", "", LaunchOwner{}, BusySendDefaultsChoice{}, busyLaunchExit(t, s, id))
+				if err == nil || !strings.Contains(err.Error(), "no covering capability table row") || !reflect.DeepEqual(before, dbDump(t, path)) {
+					t.Fatalf("covered resume without an author = %v; want refusal without writes", err)
+				}
+			}
+			candidate := v21ClaudeCapabilities()
+			candidate.HeldCount, candidate.HeldBytes = 7, 16384
+			candidate.Modes[0].MessageBytes, candidate.Modes[1].MessageBytes = 512, 256
+			if tc.want == BusySendCovered {
+				busyLaunchAuthor(t, tc.agent, candidate)
+			}
 			v := busyLaunchStage(t, s, id, tc.kind, tc.agent, token)
 			staged := busyLaunchRow(t, s, id)
 			if staged.BusyConversationID != old.BusyConversationID || staged.BusySend != tc.published || staged.TurnStarts != 0 {
@@ -299,6 +389,25 @@ func TestBusySendStagedPublication(t *testing.T) {
 			}
 			wantCoverage := string(tc.want)
 			busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_send_launches WHERE instance_id=? AND phase='candidate' AND busy_send=?`, id, wantCoverage)
+			snapshots := busyLaunchSnapshots(t, s, id)
+			if len(snapshots) != 2 {
+				t.Fatalf("staged snapshots: %+v", snapshots)
+			}
+			for launch, got := range snapshots {
+				want, old := oldSnapshots[launch]
+				if !old && tc.want == BusySendCovered {
+					want = candidate
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("staged snapshot %s = %+v; want %+v", launch, got, want)
+				}
+			}
+			if tc.published == BusySendCovered {
+				if a, err := s.AdmitBusySend(BusySendAdmissionRequest{InstanceID: id, Text: []byte(strings.Repeat("x", 513))}); err != nil || a.Outcome != BusySendAdmitted {
+					t.Fatalf("staged admission did not use old published limits: %+v, %v", a, err)
+				}
+			}
+
 			before := dbDump(t, path)
 			// A callback for another token must leave the entire staged write alone.
 
@@ -358,6 +467,21 @@ func TestBusySendStagedPublication(t *testing.T) {
 			if now.RowVersion != wantVersion {
 				t.Fatalf("publication version=%d; want %d", now.RowVersion, wantVersion)
 			}
+			if !reflect.DeepEqual(snapshots, busyLaunchSnapshots(t, s, id)) {
+				t.Fatal("publication rewrote a snapshot")
+			}
+
+			_, err := s.AdmitBusySend(BusySendAdmissionRequest{InstanceID: id, Text: []byte(strings.Repeat("x", 513))})
+			var refusal *BusySendRefusal
+			wantReason := BusySendRefuseTextBytes
+			var wantLimit *BusySendLimit = &BusySendLimit{Actual: 513, Allowed: 512}
+			if tc.want == BusySendNotCovered {
+				wantReason, wantLimit = BusySendRefuseAgentNotCovered, nil
+			}
+			if !errors.As(err, &refusal) || refusal.Reason != wantReason || !reflect.DeepEqual(refusal.Limit, wantLimit) {
+				t.Fatalf("published admission = %v; want %s %+v", err, wantReason, wantLimit)
+			}
+
 			committed := dbDump(t, path)
 			if res, e = s.PublishBusySendLaunch(id, v, token); e != nil || res != CondApplied {
 				t.Fatalf("idempotent publication=%v,%v", res, e)
@@ -451,6 +575,11 @@ func TestBusySendRestoreAndUncertainCandidates(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
+			oldSnapshots := busyLaunchSnapshots(t, s, id)
+			candidate := v21ClaudeCapabilities()
+			candidate.HeldCount = 9
+			candidate.Modes[0].MessageBytes = 512
+			busyLaunchAuthor(t, AgentClaude, candidate)
 			v := busyLaunchStage(t, s, id, kind, AgentClaude, "1122334455667788")
 			restore := func(version int64) (CondResult, error) {
 				if kind == "resume" {
@@ -458,6 +587,12 @@ func TestBusySendRestoreAndUncertainCandidates(t *testing.T) {
 				}
 				return s.RestoreAfterFailedReuse(id, version, prior.Life, time.Unix(3, 0))
 			}
+			for launch, want := range oldSnapshots {
+				if !reflect.DeepEqual(busyLaunchSnapshots(t, s, id)[launch], want) {
+					t.Fatal("staging rewrote the old snapshot")
+				}
+			}
+			snapshots := busyLaunchSnapshots(t, s, id)
 			before := dbDump(t, path)
 			res, e := restore(v - 1)
 			if e != nil || res != CondChanged {
@@ -470,6 +605,9 @@ func TestBusySendRestoreAndUncertainCandidates(t *testing.T) {
 			if e != nil || res != CondApplied {
 				t.Fatalf("restore=%v,%v", res, e)
 			}
+			if !reflect.DeepEqual(snapshots, busyLaunchSnapshots(t, s, id)) {
+				t.Fatal("restoration rewrote snapshots")
+			}
 			row := busyLaunchRow(t, s, id)
 			if row.BusyConversationID != old.BusyConversationID || row.BusySend != old.BusySend || row.TurnStarts != 7 {
 				t.Fatal("restore lost published facts/counter")
@@ -480,10 +618,14 @@ func TestBusySendRestoreAndUncertainCandidates(t *testing.T) {
 				busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_conversations WHERE instance_id=? AND publication='abandoned'`, id)
 			}
 			v = busyLaunchStage(t, s, id, kind, AgentClaude, "2233445566778899")
+			snapshots = busyLaunchSnapshots(t, s, id)
 			if e = s.MarkBusySendLaunchUncertain(id, "2233445566778899"); e != nil {
 				t.Fatal(e)
 			}
 			busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_send_launches WHERE instance_id=? AND phase='uncertain'`, id)
+			if !reflect.DeepEqual(snapshots, busyLaunchSnapshots(t, s, id)) {
+				t.Fatal("uncertainty rewrote snapshots")
+			}
 			before = dbDump(t, path)
 			if e = s.MarkBusySendLaunchUncertain(id, "1122334455667788"); e != nil {
 				t.Fatal(e)
@@ -515,8 +657,26 @@ func TestBusySendDeletionRetirementAndRespawn(t *testing.T) {
 			t.Run(mode+map[bool]string{true: "-no-core", false: "-retained"}[noCore], func(t *testing.T) {
 				s, path := openTempStore(t)
 				id := busyLaunchInsert(t, s, AgentClaude)
-				mustExec(t, s.db, `DELETE FROM busy_send_launches WHERE instance_id=?`, id)
-				mustExec(t, s.db, `DELETE FROM busy_conversations WHERE instance_id=?`, id)
+				if noCore {
+					tx, err := s.db.Begin()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer tx.Rollback()
+					for _, table := range []string{"busy_send_launch_escapes", "busy_send_launch_modes"} {
+						if _, err := tx.Exec("DELETE FROM "+table+" WHERE launch_id IN (SELECT launch_id FROM busy_send_launches WHERE instance_id=?)", id); err != nil {
+							t.Fatal(err)
+						}
+					}
+					for _, table := range []string{"busy_send_launches", "busy_conversations"} {
+						if _, err := tx.Exec("DELETE FROM "+table+" WHERE instance_id=?", id); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := tx.Commit(); err != nil {
+						t.Fatal(err)
+					}
+				}
 				var rec busySendRecords
 				if !noCore {
 					rec = seedBusySendRecords(t, s.db, s.StoreID(), id)
@@ -540,6 +700,7 @@ func TestBusySendDeletionRetirementAndRespawn(t *testing.T) {
 						result_reason = NULL, wait_reason = NULL, wait_since_ms = NULL, result_final = 1, final_at_ms = 5000,
 						retention = 'expired', expired_at_ms = 9000 WHERE message_id = ?`, rec.held)
 				}
+				snapshots := busyLaunchSnapshots(t, s, id)
 				before := dbDump(t, path)
 				remove := func(snapshot RowSnapshot) (CondResult, error) {
 					if mode == "expire" {
@@ -598,8 +759,15 @@ func TestBusySendDeletionRetirementAndRespawn(t *testing.T) {
 				if !noCore {
 					busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_conversations WHERE instance_id=? AND publication='published' AND generation=4`, id)
 				}
+				afterSnapshots := busyLaunchSnapshots(t, s, id)
+				for launch, want := range snapshots {
+					got, ok := afterSnapshots[launch]
+					if !ok || !reflect.DeepEqual(got, want) {
+						t.Fatal("delete/respawn changed retained capabilities")
+					}
+				}
 				after := dbDump(t, path)
-				for _, table := range []string{"busy_send_messages", "busy_send_results", "busy_send_forces", "busy_send_force_members", "busy_send_pause_claims", "busy_send_handovers", "busy_send_handover_members", "busy_send_prompts", "busy_send_launch_processes"} {
+				for _, table := range []string{"busy_send_messages", "busy_send_results", "busy_send_forces", "busy_send_force_members", "busy_send_pause_claims", "busy_send_handovers", "busy_send_handover_members", "busy_send_prompts", "busy_send_launch_processes", "busy_send_launch_modes", "busy_send_launch_escapes"} {
 					if !reflect.DeepEqual(before["rows "+table], after["rows "+table]) {
 						t.Errorf("delete/respawn changed retained %s", table)
 					}
@@ -688,7 +856,7 @@ func TestBusySendAdoptionPublishesCandidate(t *testing.T) {
 				}
 				// Hook state/session facts may change; already-published core facts do not.
 				after := dbDump(t, path)
-				for _, table := range []string{"busy_send_launches", "busy_conversations"} {
+				for _, table := range []string{"busy_send_launches", "busy_conversations", "busy_send_launch_modes", "busy_send_launch_escapes"} {
 					if !reflect.DeepEqual(before["rows "+table], after["rows "+table]) {
 						t.Errorf("hook republished %s", table)
 					}
@@ -843,6 +1011,43 @@ func TestBusySendFirstReportInPublishes(t *testing.T) {
 				t.Fatal("report-in retained old coverage")
 			}
 			busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_send_launches WHERE instance_id=? AND launch_token='1122334455667788' AND phase='current'`, id)
+		})
+	}
+}
+
+// PM1: failures after some child rows exist roll back the complete creation,
+// including spawn and both staged creation paths, not just the Launch row.
+func TestBusySendCapabilityCreationRollback(t *testing.T) {
+	for _, kind := range []string{"spawn", "resume", "reuse"} {
+		t.Run(kind, func(t *testing.T) {
+			s, path := openTempStore(t)
+			var id string
+			if kind != "spawn" {
+				id = busyLaunchInsert(t, s, AgentClaude)
+				busyLaunchFinish(t, s, id)
+			}
+			mustExec(t, s.db, `CREATE TRIGGER fail_snapshot AFTER INSERT ON busy_send_launch_escapes BEGIN SELECT RAISE(ABORT,'snapshot write failed'); END`)
+			before := dbDump(t, path)
+			var err error
+			switch kind {
+			case "spawn":
+				err = s.InsertPending(Spawn{InstanceID: uuid.NewString(), Agent: AgentClaude, CWD: t.TempDir(), TmuxSessionName: "ad-" + uuid.NewString(), RelayMode: "off"})
+			case "resume":
+				row := busyLaunchRow(t, s, id)
+				_, _, err = s.MoveToPendingWithExit(id, row.Snapshot, 2000, "1122334455667788", "", "", LaunchOwner{}, BusySendDefaultsChoice{}, busyLaunchExit(t, s, id))
+			case "reuse":
+				row, _, e := s.ReadForReuse(id)
+				if e != nil {
+					t.Fatal(e)
+				}
+				_, _, _, err = s.ResetForReuse(id, row.Snapshot, row.Agent, Spawn{Agent: AgentClaude, CWD: t.TempDir(), TmuxSessionName: "ad-" + id, RelayMode: "off", Identity: LaunchIdentity{Token: "1122334455667788"}, BusySendExit: busyLaunchExit(t, s, id)})
+			}
+			if err == nil || !strings.Contains(err.Error(), "snapshot write failed") {
+				t.Fatalf("creation: %v", err)
+			}
+			if !reflect.DeepEqual(before, dbDump(t, path)) {
+				t.Fatal("failed snapshot creation left partial facts")
+			}
 		})
 	}
 }

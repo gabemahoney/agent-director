@@ -25,12 +25,9 @@ procedures belong in [operator actions](operator-actions.md#recovering-a-version
 ## 1. Architecture as it exists today
 
 Schema dispatch and fresh-store DDL live in `internal/store/schema.go`;
-`schemaVersion` in `store.go` is **21**. The twenty-three tables are `spawns`,
-`permission_requests`, `session_history`, `store_meta`, `subagents`,
-`subagent_launches`, `cursor_runtimes`, `input_launches`, `input_attempts`,
-`input_imports`, `cursor_inputs`, `cursor_proofs` and the eleven tables of
-the busy-send core (`busy_conversations` and the `busy_send_*` tables).
-`busy_send_schema.go` owns the v20→v21 hop, the core's fresh-store
+`schemaVersion` in `store.go` is **21**. The
+[permanent busy-send core](architecture.md#internalstore) is declared in
+`busy_send_schema.go`, which owns the v20→v21 hop, the core's fresh-store
 `busySendCoreDDL` and open's recognition of the core.
 `inputDeliveryDDL` in `input_delivery_schema.go` is shared by
 fresh creation and the administrator import in `input_delivery_migration.go`.
@@ -185,8 +182,10 @@ changes into settled hops.
 (`busySendCoreObjects`), three `spawns` columns appended after
 `observation_writer` (`busy_send`, `busy_conversation_id`, `turn_starts`; a
 compatible partial state keeps an existing one where it is) and the
-`store_meta` identity row `busy_send_core`. Each column's meaning and code
-set is documented beside the DDL.
+`store_meta` identity row `busy_send_core`. Covered Launches also hold immutable
+held limits, per-mode admission records and ordered literal escapes; uncovered
+Launches have none. Each column's meaning and code set is documented beside
+the DDL.
 
 This is the core's only conversion. At v21 every open recognizes the core
 and migrates nothing, whatever sentinel is present: it requires the identity
@@ -194,7 +193,11 @@ row and every declaration exactly as recorded (whitespace aside, CHECKs
 included). Anything else is `ErrSchemaMismatch` ("busy-send core not
 recognized"), with nothing rebuilt or repaired; a failed schema read keeps
 its own error. No later hop may edit or drop a core declaration:
-`TestBusySendCoreContract` pins them by digest.
+`TestBusySendCoreContract` pins them by digest. `BusySendCoreContractIdentity`
+derives the installer contract from the same final declarations, including
+the capability records and raw-literal restrictions. An intermediate
+prerelease v21 core with older declarations is `ErrSchemaMismatch`, never
+silently upgraded; its authorized owner must recreate test stores.
 
 The sentinel gate (§1a) applies unchanged, as for the other post-v16 hops:
 the installer's ordinary open with an exact `{from:20,to:21}` sentinel runs
@@ -208,7 +211,11 @@ each names this store and refers only to existing records; a bound row's
 conversation and Launch are its instance's one published conversation and
 one current Launch, with the row's provider, life, launch token (NULL-safe)
 and coverage; no unbound row already has a published or candidate
-conversation or a current or pending Launch. A proven difference refuses with
+conversation or a current or pending Launch. Every existing Launch's capability
+snapshot must be complete and interpretable, including historical Launches,
+or absent when uncovered. An unbound row requiring covered backfill needs a
+supplying authoring table; missing facts are never invented. A proven difference
+refuses with
 `ErrSchemaMismatch` ("v20→v21 incompatible …", "invalid …", "ambiguous …",
 "… names another store", "… refers to a missing record"); the v20 schema,
 data, stamp and sentinel remain.
@@ -217,15 +224,19 @@ The backfill records only rows with no conversation binding. Each gets one
 published conversation (the instance's next generation) and one current
 Launch of kind `migrated`, with the row's provider, life and launch token,
 and coverage from `BusySendCoverageForAgent`, or `covered` when the row's
-existing `busy_send` already says so: coverage never decreases. A NULL or
-empty agent records provider `claude`, the readers' rule; `spawns.agent` is
+existing `busy_send` already says so: coverage never decreases. Its covered
+Launch's complete capabilities come from that version's authoring table and
+commit atomically with the Launch. A NULL or empty agent records provider
+`claude`, the readers' rule; `spawns.agent` is
 not rewritten. A missing token or session stays missing; no route, wake
 path, process, receipt, emission or Message is invented, and nothing is
 delivered. The backfill writes only the row's `busy_send` and
 `busy_conversation_id`. Bound rows and recorded core facts stay untouched, so
-compatible partial state keeps its established coverage, bindings and
-counters. In a genuine v20 store, Claude rows (including legacy NULL/empty
-agents) become `covered` without a route; other providers remain `not_covered`.
+compatible partial state keeps its established coverage, bindings, counters
+and complete bound capability snapshots byte-for-byte, even if the local
+authoring table differs or lacks that provider. In a genuine v20 store, Claude
+rows (including legacy NULL/empty agents) become `covered` without a route;
+other providers remain `not_covered`.
 Every `turn_starts` starts at the new column's default, 0.
 
 `busy_send_schema_test.go` covers the contract, record representation,

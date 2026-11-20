@@ -46,8 +46,17 @@ const storeTimestampLayout = "2006-01-02 15:04:05"
 // session_history entries WithSessionHistory seeds, in seeding order; they
 // are not spawns columns and never enter cols.
 type spawnOpts struct {
-	cols    map[string]any
-	history []SessionHistorySeed
+	cols                map[string]any
+	history             []SessionHistorySeed
+	busyCapabilities    *store.BusySendLaunchCapabilities
+	busyCapabilitiesSet bool
+}
+
+// WithBusySendCapabilities supplies complete immutable creation facts to
+// SeedSpawn (reusable fixture). nil explicitly creates an uncovered Launch.
+// Use storefix's named synthetic presets for a later provider or Wait-only case.
+func WithBusySendCapabilities(c *store.BusySendLaunchCapabilities) SpawnOption {
+	return func(o *spawnOpts) { o.busyCapabilities, o.busyCapabilitiesSet = c, true }
 }
 
 // set records value for column; nil stores NULL.

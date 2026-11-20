@@ -256,7 +256,7 @@ func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 	    WHERE instance_id = ? AND phase = 'current'`, id, id, id, id); err != nil {
 		return fmt.Errorf("SeedSpawn: core Launch identity: %w", err)
 	}
-	if err := seedAgentCoverage(tx, id); err != nil {
+	if err := seedAgentCoverage(tx, id, o); err != nil {
 		return err
 	}
 	if err := insertSessionHistory(tx, id, o.history); err != nil {
@@ -274,20 +274,22 @@ func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 // inserts a Claude row, and WithAgent changes the agent afterwards. A Launch
 // that is not a covered Claude one keeps no route, as recordBusySendClaudeRoute
 // records none for it.
-func seedAgentCoverage(tx *sql.Tx, id string) error {
+func seedAgentCoverage(tx *sql.Tx, id string, o *spawnOpts) error {
 	var agent string
 	if err := tx.QueryRow(`SELECT COALESCE(agent, '') FROM spawns WHERE instance_id = ?`, id).Scan(&agent); err != nil {
 		return fmt.Errorf("SeedSpawn: core coverage: %w", err)
 	}
 	coverage := store.BusySendCoverageForAgent(agent)
-	for _, q := range []string{
-		`UPDATE spawns SET busy_send = ? WHERE instance_id = ?`,
-		`UPDATE busy_send_launches SET busy_send = ? WHERE instance_id = ? AND phase = 'current'`,
-		`UPDATE busy_conversations SET busy_send = ? WHERE instance_id = ? AND publication = 'published'`,
-	} {
-		if _, err := tx.Exec(q, string(coverage), id); err != nil {
-			return fmt.Errorf("SeedSpawn: core coverage: %w", err)
+	var capabilities []*store.BusySendLaunchCapabilities
+	if o.busyCapabilitiesSet {
+		coverage = store.BusySendNotCovered
+		if o.busyCapabilities != nil {
+			coverage = store.BusySendCovered
 		}
+		capabilities = append(capabilities, o.busyCapabilities)
+	}
+	if err := seedBusySendCoverageTx(tx, id, coverage, coverage, capabilities...); err != nil {
+		return fmt.Errorf("SeedSpawn: core coverage: %w", err)
 	}
 	if coverage == store.BusySendCovered && (agent == "" || agent == store.AgentClaude) {
 		return nil

@@ -125,6 +125,8 @@ type reply struct {
 	Result        json.RawMessage           `json:"result"`
 	Error         string                    `json:"error"`
 	Barrier       string                    `json:"barrier"`
+	ErrName       string                    `json:"err_name"`
+	ErrDetails    json.RawMessage           `json:"err_details"`
 	UnknownCommit bool                      `json:"unknown_commit"`
 	StoreBusy     bool                      `json:"store_busy"`
 	Guard         *store.BusySendGuardError `json:"guard"`
@@ -271,10 +273,14 @@ func (f *fixture) caller(t *testing.T, generationIndex int, surface string) func
 	g := f.b.generations[generationIndex]
 	if surface == "cli" {
 		return func(op string, p map[string]any) reply {
-			verb := map[string]string{"send": "send-keys", "lookup": "get-delivery", "force-lookup": "get-force"}[op]
+			verb := map[string]string{"send": "send-keys", "lookup": "get-delivery", "force-lookup": "get-force", "get": "get", "get-many": "get-many", "resume": "resume"}[op]
 			args := []string{"--store-path", f.db, verb}
 			for k, v := range p {
 				flag := "--" + strings.ReplaceAll(k, "_", "-")
+				if ids, ok := v.([]string); ok {
+					args = append(args, ids...)
+					continue
+				}
 				if b, ok := v.(bool); ok {
 					args = append(args, flag+"="+fmt.Sprint(b))
 				} else {
@@ -283,9 +289,16 @@ func (f *fixture) caller(t *testing.T, generationIndex int, surface string) func
 			}
 			cmd := exec.Command(g.runtime, args...)
 			cmd.Env = f.env
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
 			out, err := cmd.Output()
 			if err != nil {
-				return reply{Error: fmt.Sprintf("%v: %s", err, out)}
+				var failure struct {
+					ErrName    string          `json:"err_name"`
+					ErrDetails json.RawMessage `json:"err_details"`
+				}
+				_ = json.Unmarshal(bytes.Split(stderr.Bytes(), []byte{'\n'})[0], &failure)
+				return reply{Error: fmt.Sprintf("%v: %s", err, stderr.String()), ErrName: failure.ErrName, ErrDetails: failure.ErrDetails}
 			}
 			return reply{Result: out}
 		}
@@ -310,7 +323,14 @@ func (f *fixture) caller(t *testing.T, generationIndex int, surface string) func
 				p.read(&r)
 				if r.ID == id {
 					if r.Error != nil {
-						t.Fatalf("MCP error: %s", r.Error)
+						var wire struct {
+							Data json.RawMessage `json:"data"`
+						}
+						if err := json.Unmarshal(r.Error, &wire); err != nil || wire.Data == nil {
+							t.Fatalf("MCP error: %s", r.Error)
+						}
+						synthetic, _ := json.Marshal(map[string]any{"isError": true, "content": []map[string]any{{"text": string(wire.Data)}}})
+						return synthetic
 					}
 					return r.Result
 				}
@@ -319,7 +339,7 @@ func (f *fixture) caller(t *testing.T, generationIndex int, surface string) func
 		rpc("initialize", map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "mixed-version", "version": "1"}})
 		p.write(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
 		return func(op string, params map[string]any) reply {
-			verb := map[string]string{"send": "send-keys", "lookup": "get-delivery", "force-lookup": "get-force"}[op]
+			verb := map[string]string{"send": "send-keys", "lookup": "get-delivery", "force-lookup": "get-force", "get": "get", "get-many": "get-many", "resume": "resume"}[op]
 			var r struct {
 				IsError bool `json:"isError"`
 				Content []struct {
@@ -330,8 +350,14 @@ func (f *fixture) caller(t *testing.T, generationIndex int, surface string) func
 			if err := json.Unmarshal(must, &r); err != nil {
 				t.Fatal(err)
 			}
-			if r.IsError || len(r.Content) != 1 {
+			if len(r.Content) != 1 {
 				return reply{Error: string(must)}
+			}
+			if r.IsError {
+				var failure reply
+				_ = json.Unmarshal([]byte(r.Content[0].Text), &failure)
+				failure.Error = string(must)
+				return failure
 			}
 			return reply{Result: json.RawMessage(r.Content[0].Text)}
 		}

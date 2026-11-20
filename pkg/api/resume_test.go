@@ -678,7 +678,14 @@ func TestResumeRestore(t *testing.T) {
 				opts = append(opts, codexRowOpts(seedCodexFolder(t, filepath.Join(home, "codex")).env())...)
 			}
 			r := e.seedResumable(t, tc.prior, opts...)
-			priorBusy := seedBusyCoveredConversation(t, e.dbPath, r.ID)
+			// These exercise local restore: Codex stays uncovered; a covered
+			// Codex conversation would require a separate covering recipient.
+			priorBusy := busyFacts(t, e.dbPath, r.ID)
+			resumeCoverage := store.BusySendNotCovered
+			if !tc.codex {
+				priorBusy = seedBusyCoveredConversation(t, e.dbPath, r.ID)
+				resumeCoverage = store.BusySendCovered
+			}
 			for call, s := range tc.scripts {
 				e.rec.Script(tmuxfix.AnySocket, s, call)
 			}
@@ -711,7 +718,7 @@ func TestResumeRestore(t *testing.T) {
 				if tc.noRestore || tc.outcome == apitest.RestoreRowChanged || tc.failRestore {
 					phase = "uncertain"
 				}
-				assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", phase, store.BusySendCovered)
+				assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", phase, resumeCoverage)
 			}
 			assertOneName(t, err, tc.want)
 			if got, want := callKinds(e.rec), append([]tmux.Call{tmux.CallLookup, create}, tc.calls...); !reflect.DeepEqual(got, want) {
@@ -782,8 +789,8 @@ func TestResumeRestore(t *testing.T) {
 				if st, n := e.columns(t, r.ID).State, len(e.rec.SocketCallsOf(create)); st != store.StatePending || n != 2 {
 					t.Errorf("after the second resume: state %v, creates %d; want pending, 2", st, n)
 				}
-				assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "current", store.BusySendCovered)
-				if facts := busyFacts(t, e.dbPath, r.ID); facts.Binding != priorBusy.Binding || facts.Coverage != store.BusySendCovered {
+				assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "current", resumeCoverage)
+				if facts := busyFacts(t, e.dbPath, r.ID); facts.Binding != priorBusy.Binding || facts.Coverage != resumeCoverage {
 					t.Fatalf("retry lost retained conversation coverage: %+v", facts)
 				}
 			}

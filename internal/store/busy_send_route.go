@@ -73,6 +73,9 @@ type BusySendRouteFacts struct {
 	Kind BusySendLaunchKind
 	// Destination is the current Launch's, with the row's recorded session.
 	Destination BusySendDestination
+	// Capabilities are this destination Launch's immutable admission and
+	// prompt-measure facts, read in this same transaction.
+	Capabilities BusySendLaunchCapabilities
 	// WakePath is the current Launch's recorded wake endpoint, "" for none.
 	WakePath string
 	// State is the row's raw lifecycle state, never the settle display.
@@ -133,6 +136,16 @@ func (s *Store) ReadBusySendRouteFacts(ctx context.Context, instanceID string, g
 			return fmt.Errorf("agent_args: %w", err)
 		}
 		out.Covered = f.launchCoverage == BusySendCovered && f.routeKind != ""
+		if f.launchCoverage == BusySendCovered {
+			caps, err := readBusySendLaunchCapabilities(ctx, conn, s.StoreID(), f.launch)
+			if err != nil {
+				return err
+			}
+			if caps == nil {
+				return errBusySendCapabilities
+			}
+			out.Capabilities = *caps
+		}
 		out.Ended, out.Kind, out.WakePath, out.State = f.launchEnded, BusySendLaunchKind(kind), f.wakePath, f.state
 		out.TurnStarts, out.PermissionHold = f.turnStarts, f.permissionHold
 		out.Destination = BusySendDestination{LaunchID: f.launch, LaunchToken: f.token, Provider: f.provider, SessionID: f.sessionID,

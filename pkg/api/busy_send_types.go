@@ -136,7 +136,8 @@ type DeliveryFacts struct {
 // DeliveryCapabilities is what busy send offers a Covered Agent, on get and
 // get-many (SR-5.6): its Send Modes with their limits and its held limits,
 // all in UTF-8 bytes, its force capability, and what Confirm From Transcripts
-// can do for it, from the one published capability table. An uncovered row
+// can do for it: admission facts come from its current Launch's snapshot,
+// and force/confirmation metadata from this binary's route. An uncovered row
 // has none.
 type DeliveryCapabilities struct {
 	Modes []DeliveryModeLimits `json:"modes"`
@@ -220,24 +221,26 @@ func busySendDeliveryOf(o *store.BusySendObservation) *DeliveryFacts {
 	return out
 }
 
-// deliveryCapabilitiesOf projects provider's row of the capability table.
-func deliveryCapabilitiesOf(provider string) *DeliveryCapabilities {
-	caps := store.BusySendCapabilitiesFor(provider)
+// deliveryCapabilitiesOf projects the observed Launch's admission facts and
+// only this binary's route-specific force/confirmation metadata.
+func deliveryCapabilitiesOf(o *store.BusySendObservation) *DeliveryCapabilities {
+	caps := o.Capabilities
 	out := &DeliveryCapabilities{Modes: []DeliveryModeLimits{}, HeldCount: caps.HeldCount, HeldBytes: caps.HeldBytes}
 	for _, m := range caps.Modes {
 		out.Modes = append(out.Modes, DeliveryModeLimits{SendMode: string(m.Mode), MessageBytes: m.MessageBytes,
 			PromptBytes: m.PromptBytes, TextKind: string(m.TextKind)})
 	}
-	out.ConfirmFromTranscriptsCapability = string(caps.ConfirmFromTranscripts)
-	out.ConfirmFromTranscriptsReason = string(caps.ConfirmFromTranscriptsReason)
-	if caps.ForceAdmission == "" {
+	route := store.BusySendCapabilitiesFor(o.Provider)
+	out.ConfirmFromTranscriptsCapability = string(route.ConfirmFromTranscripts)
+	out.ConfirmFromTranscriptsReason = string(route.ConfirmFromTranscriptsReason)
+	if route.ForceAdmission == "" {
 		return out
 	}
-	out.Force = &DeliveryForceCapability{Admission: string(caps.ForceAdmission), Limits: []string{}, States: []DeliveryForceState{}}
-	for _, l := range caps.ForceLimits {
+	out.Force = &DeliveryForceCapability{Admission: string(route.ForceAdmission), Limits: []string{}, States: []DeliveryForceState{}}
+	for _, l := range route.ForceLimits {
 		out.Force.Limits = append(out.Force.Limits, string(l))
 	}
-	for _, s := range caps.ForceStates {
+	for _, s := range route.ForceStates {
 		out.Force.States = append(out.Force.States, DeliveryForceState{State: string(s.State), Outcome: string(s.Outcome),
 			Reason: string(s.Reason)})
 	}

@@ -190,8 +190,19 @@ func admitBusySend(ctx context.Context, conn *sql.Conn, storeID string, req Busy
 	case !confirmed && (req.CallerUUID != "" || req.DeliveryRequestID != ""):
 		return BusySendAdmission{}, fmt.Errorf("%w: an unconfirmed send (from the agent's defaults) carries no caller_uuid or delivery_request_id", ErrBusySendMalformed)
 	}
-	if err := busySendEligible(p, mode, req.Text); err != nil {
+	caps, err := readBusySendLaunchCapabilities(ctx, conn, storeID, p.launch)
+	if err != nil {
 		return BusySendAdmission{}, err
+	}
+	if caps == nil {
+		return BusySendAdmission{}, errBusySendCapabilities
+	}
+	if err := busySendEligible(p, *caps, mode, req.Text); err != nil {
+		return BusySendAdmission{}, err
+	}
+	seq := busySendAddBytes(p.acceptedSeq, 1)
+	if seq < 0 {
+		return BusySendAdmission{}, fmt.Errorf("store: busy-send accepted sequence is unrepresentable")
 	}
 	wait, err := initialBusySendWait(ctx, conn, p)
 	if err != nil {
@@ -201,7 +212,7 @@ func admitBusySend(ctx context.Context, conn *sql.Conn, storeID string, req Busy
 	if err != nil {
 		return BusySendAdmission{}, err
 	}
-	seq, size, digest := p.acceptedSeq+1, int64(len(req.Text)), sha256.Sum256(req.Text)
+	size, digest := int64(len(req.Text)), sha256.Sum256(req.Text)
 	if _, err := conn.ExecContext(ctx, `INSERT INTO busy_send_messages
 	    (message_id, store_id, conversation_id, instance_id, accepted_seq, accepted_at_ms, send_mode, confirmed,
 	     text, text_bytes, text_sha256, place, handover_id, reserved, result_class, result_final, result_reason,
@@ -235,13 +246,13 @@ func admitBusySend(ctx context.Context, conn *sql.Conn, storeID string, req Busy
 // busySendEligible is new-send eligibility after pair arbitration, in order:
 // an Agent Command, the Send Mode the provider offers, its text kind, and the
 // Message, prompt and held limits (SR-1.5, SR-1.6). The limits are the
-// capability table's (busy_send_capabilities.go).
-func busySendEligible(p busySendPublishedRow, mode BusySendMode, text []byte) error {
+// published current Launch's immutable snapshot, read after pair arbitration
+// and malformed-option validation in the same durable transaction.
+func busySendEligible(p busySendPublishedRow, caps BusySendLaunchCapabilities, mode BusySendMode, text []byte) error {
 	if isAgentCommand(text) {
 		return &BusySendRefusal{Reason: BusySendRefuseAgentCommand,
 			Detail: "the text's first non-whitespace character is / or !, an Agent Command"}
 	}
-	caps := BusySendCapabilitiesFor(p.provider)
 	limits, offered := caps.Mode(mode)
 	if !offered {
 		return &BusySendRefusal{Reason: BusySendRefuseSteerUnsupported,
@@ -256,17 +267,29 @@ func busySendEligible(p busySendPublishedRow, mode BusySendMode, text []byte) er
 		return &BusySendRefusal{Reason: reason, Limit: &BusySendLimit{Actual: actual, Allowed: allowed},
 			Detail: fmt.Sprintf("%s %d exceeds the published %d", what, actual, allowed)}
 	}
-	switch {
-	case size > limits.MessageBytes:
+	if size > limits.MessageBytes {
 		return refuse(BusySendRefuseTextBytes, size, limits.MessageBytes, "text bytes")
-	case limits.SinglePromptBytes(text) > limits.PromptBytes:
-		// A guard against a later table change: under the published table a
-		// valid Message at the text limit always fits a prompt alone.
-		return refuse(BusySendRefusePromptSize, limits.SinglePromptBytes(text), limits.PromptBytes, "prompt bytes")
-	case p.reservedCount+1 > caps.HeldCount:
-		return refuse(BusySendRefuseHeldCount, p.reservedCount+1, caps.HeldCount, "held Messages")
-	case p.reservedBytes+size > caps.HeldBytes:
-		return refuse(BusySendRefuseHeldBytes, p.reservedBytes+size, caps.HeldBytes, "held bytes")
+	}
+	prompt := limits.SinglePromptBytes(text)
+	if prompt < 0 {
+		return fmt.Errorf("%w: prompt size is unrepresentable", errBusySendCapabilities)
+	}
+	if prompt > limits.PromptBytes {
+		return refuse(BusySendRefusePromptSize, prompt, limits.PromptBytes, "prompt bytes")
+	}
+	count := busySendAddBytes(p.reservedCount, 1)
+	if count < 0 {
+		return fmt.Errorf("store: busy-send held count is unrepresentable")
+	}
+	if count > caps.HeldCount {
+		return refuse(BusySendRefuseHeldCount, count, caps.HeldCount, "held Messages")
+	}
+	heldBytes := busySendAddBytes(p.reservedBytes, size)
+	if heldBytes < 0 {
+		return fmt.Errorf("store: busy-send held bytes are unrepresentable")
+	}
+	if heldBytes > caps.HeldBytes {
+		return refuse(BusySendRefuseHeldBytes, heldBytes, caps.HeldBytes, "held bytes")
 	}
 	return nil
 }

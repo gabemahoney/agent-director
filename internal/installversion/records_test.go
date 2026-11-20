@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/layout"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"golang.org/x/sys/unix"
 )
 
@@ -108,11 +109,14 @@ func TestInstalledVersionCorruption(t *testing.T) {
 }
 
 func TestPublicationValidation(t *testing.T) {
-	for _, kind := range []string{"version", "commit", "core-version", "core-digest", "covered", "admin-copy", "missing-facts", "malformed-facts", "core-mismatch", "coverage-regression"} {
+	core, digest := store.BusySendCoreContractIdentity()
+	for _, kind := range []string{"version", "commit", "core-version", "core-digest", "covered", "admin-copy", "missing-facts", "malformed-facts", "core-mismatch", "pre-capability-digest", "intermediate-capability-digest", "coverage-regression"} {
 		t.Run(kind, func(t *testing.T) {
-			f := newPublicationFixture(t)
+			f := newPublicationFixture(t, Contract{FormatVersion, core, digest})
 			publishOK(t, f.root, f.a)
-			c := makeCandidate(t, factsFor("candidate"))
+			facts := factsFor("candidate")
+			facts.CoreVersion, facts.CoreDeclarationsSHA256 = core, digest
+			c := makeCandidate(t, facts)
 			reported := c.Facts
 			reason := "version_conflict"
 			switch kind {
@@ -130,6 +134,16 @@ func TestPublicationValidation(t *testing.T) {
 				reported.Commit = "different"
 			case "core-mismatch":
 				c.Facts.CoreVersion = "different"
+				reported = c.Facts
+				reason = "core_mismatch"
+			case "pre-capability-digest", "intermediate-capability-digest":
+				// b.kii PM1: v21/core-v1 stays fixed, but both executables
+				// must match the final immutable declaration anchor. These
+				// are self-consistent pairs, not runtime/admin disagreements.
+				c.Facts.CoreDeclarationsSHA256 = "45bbc95a6429e2f483f3ab4bc1cc0b8d12d40f607e06b6bf4416d87fff1cb7f7"
+				if kind == "intermediate-capability-digest" {
+					c.Facts.CoreDeclarationsSHA256 = "1d3840eb6589d5cd258eecec4f9f7514a225881e96b95ba0896c6abceaae061c"
+				}
 				reported = c.Facts
 				reason = "core_mismatch"
 			case "coverage-regression":
@@ -159,6 +173,16 @@ func TestPublicationValidation(t *testing.T) {
 			assertUsablePublication(t, f.root, "old")
 			// A rejected expansion must not raise the floor.
 			publishOK(t, f.root, f.b)
+			assertUsablePublication(t, f.root, "new")
+			result, err := (Engine{Root: f.root}).Rollback("old")
+			must(t, err)
+			if result.PublicationState != "published" || !result.Durable {
+				t.Fatalf("rollback result %+v", result)
+			}
+			assertUsablePublication(t, f.root, "old")
+			anchor, err := ReadContract(f.root)
+			must(t, err)
+			assertSame(t, anchor, Contract{FormatVersion, core, digest})
 		})
 	}
 }

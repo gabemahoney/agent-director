@@ -45,10 +45,6 @@ type BusySendClaimRequest struct {
 	Boundary BusySendBoundary
 	// RaceExposed is SR-3.3a's boundary-race exposure the route reports.
 	RaceExposed bool
-	// Measure is the route's complete-payload measure (nil: the mode's own
-	// measure from the capability table, BusySendModeLimits.Measure). The
-	// limits are the capability table's.
-	Measure BusySendPromptMeasure
 	// IssueBudget and JobBudget are the finite job's original budgets from
 	// At: no intent or revalidation passes after the issue deadline, and the
 	// job ends by the job deadline. Neither is ever renewed.
@@ -207,8 +203,8 @@ func (f busySendIssueFacts) destinationMatches(d BusySendDestination) bool {
 // evidence it was taken (ineligible, readiness_unknown; SR-3.3,
 // readBusySendAwaiting); then freezes the eligible
 // contiguous prefix of Held Messages at its last accepted sequence, partitions
-// it (PartitionBusySendPrompts) under the conversation provider's mode limits
-// and req.Measure, and records the hand-over, its prompts and ordered
+// it (PartitionBusySendPrompts) under the guarded destination Launch's stored
+// mode limits and measure, and records the hand-over, its prompts and ordered
 // membership with the captured destination, the row's Turn Start counter and
 // permission epoch and the original deadlines; the Messages become claimed,
 // keep their reservations and wait handover_in_progress, and the conversation
@@ -307,7 +303,14 @@ func claimBusySendHandover(ctx context.Context, conn *sql.Conn, storeID string, 
 	if req.Boundary == BusySendBoundaryToolBoundary {
 		mode = BusySendSteerTurn
 	}
-	limits, offered := BusySendCapabilitiesFor(f.provider).Mode(mode)
+	caps, err := readBusySendLaunchCapabilities(ctx, conn, storeID, f.launch)
+	if err != nil {
+		return BusySendClaim{}, err
+	}
+	if caps == nil {
+		return BusySendClaim{}, errBusySendCapabilities
+	}
+	limits, offered := caps.Mode(mode)
 	if !offered {
 		return ineligible(BusySendWaitReadinessUnknown, fmt.Sprintf("send_mode %s is not offered for this agent", mode))
 	}
@@ -315,7 +318,7 @@ func claimBusySendHandover(ctx context.Context, conn *sql.Conn, storeID string, 
 	for i, m := range members {
 		texts[i] = m.text
 	}
-	parts, err := PartitionBusySendPrompts(texts, limits, req.Measure)
+	parts, err := PartitionBusySendPrompts(texts, limits, nil)
 	if err != nil {
 		return BusySendClaim{}, err
 	}

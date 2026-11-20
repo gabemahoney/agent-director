@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
 
 // BusySendFacts is the canonical persisted coverage observer (reusable fixture).
@@ -44,6 +45,7 @@ type BusyLaunchFact struct {
 	Life, Revision                                    int64
 	Token, EndCause, RouteKind                        sql.NullString
 	EndedAt                                           sql.NullInt64
+	Capabilities                                      *store.BusySendLaunchCapabilities
 }
 
 // ReadBusySendFacts observes all core facts for id in one read transaction.
@@ -98,6 +100,12 @@ func ReadBusySendFacts(path, id string) (BusySendFacts, error) {
 	if err != nil {
 		return out, err
 	}
+	for i := range out.Launches {
+		l := &out.Launches[i]
+		if l.Capabilities, err = storefix.ReadBusySendCapabilitiesTx(tx, l.ID); err != nil {
+			return out, err
+		}
+	}
 	rows, err = tx.Query(`SELECT m.message_id, m.conversation_id, m.send_mode, m.place, m.accepted_seq, m.text, m.confirmed, m.reserved,
 	    p.caller_uuid, p.delivery_request_id FROM busy_send_messages m LEFT JOIN busy_send_results p ON p.message_id = m.message_id
 	    WHERE m.instance_id = ? ORDER BY m.accepted_at_ms, m.accepted_seq`, id)
@@ -120,10 +128,13 @@ func ReadBusySendFacts(path, id string) (BusySendFacts, error) {
 	return out, tx.Commit()
 }
 
-// SeedBusySendCoverage creates contradictory membership/conversation facts
-// without changing the binary's covered set. Launch and conversation may differ
-// (an uncovered Launch in a covered conversation); no row version advances.
-func SeedBusySendCoverage(path, id string, launch, conversation store.BusySendCoverage) error {
+// SeedBusySendCoverage arranges creation facts without changing the binary's
+// covered set. Launch and conversation may differ; no row version advances.
+// An optional snapshot supplies exact limits. Without it, Claude uses its
+// authoring table and other covered providers use the explicitly synthetic
+// storefix.BusySendWaitOnlyCapabilities preset, solely for old fixture callers.
+// Uncovered Launches always have no limits or children. Call only during setup.
+func SeedBusySendCoverage(path, id string, launch, conversation store.BusySendCoverage, capabilities ...*store.BusySendLaunchCapabilities) error {
 	db, err := openRawStore(path)
 	if err != nil {
 		return err
@@ -134,12 +145,44 @@ func SeedBusySendCoverage(path, id string, launch, conversation store.BusySendCo
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck
+	if err := seedBusySendCoverageTx(tx, id, launch, conversation, capabilities...); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func seedBusySendCoverageTx(tx *sql.Tx, id string, launch, conversation store.BusySendCoverage, capabilities ...*store.BusySendLaunchCapabilities) error {
+	if len(capabilities) > 1 {
+		return fmt.Errorf("SeedBusySendCoverage: at most one snapshot")
+	}
+	var launchID, provider string
+	if err := tx.QueryRow(`SELECT launch_id,provider FROM busy_send_launches WHERE instance_id=? AND phase='current'`, id).Scan(&launchID, &provider); err != nil {
+		return err
+	}
+	var c *store.BusySendLaunchCapabilities
+	if launch == store.BusySendCovered {
+		if len(capabilities) == 1 {
+			c = capabilities[0]
+		} else if provider == store.AgentClaude {
+			local := store.BusySendCapabilitiesFor(provider)
+			c = &store.BusySendLaunchCapabilities{HeldCount: local.HeldCount, HeldBytes: local.HeldBytes, Modes: local.Modes}
+		} else {
+			c = storefix.BusySendWaitOnlyCapabilities()
+		}
+		if c == nil {
+			return fmt.Errorf("SeedBusySendCoverage: covered Launch requires a snapshot")
+		}
+	} else if launch != store.BusySendNotCovered || (len(capabilities) == 1 && capabilities[0] != nil) {
+		return fmt.Errorf("SeedBusySendCoverage: invalid coverage/snapshot combination")
+	}
+	if err := storefix.SeedBusySendCapabilitiesTx(tx, launchID, c); err != nil {
+		return err
+	}
 	for _, q := range []struct {
 		sql   string
 		value store.BusySendCoverage
 	}{
 		{`UPDATE spawns SET busy_send=? WHERE instance_id=?`, launch},
-		{`UPDATE busy_send_launches SET busy_send=? WHERE instance_id=? AND phase='current'`, launch},
 		{`UPDATE busy_conversations SET busy_send=? WHERE instance_id=? AND publication='published'`, conversation},
 	} {
 		r, e := tx.Exec(q.sql, string(q.value), id)
@@ -154,7 +197,7 @@ func SeedBusySendCoverage(path, id string, launch, conversation store.BusySendCo
 			return fmt.Errorf("SeedBusySendCoverage: expected one row, got %d", n)
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // SeedBusySendRoute records the current Launch's route kind and wake file as

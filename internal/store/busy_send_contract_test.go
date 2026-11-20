@@ -6,12 +6,12 @@ import (
 )
 
 // Serial: mutations of compiled declarations must finish before parallel store tests run.
-// This is separate from the historical 25-object SQL digest pin.
+// This is separate from the 27-object SQL digest pin (PM1's unreleased v21 change).
 func TestBusySendCoreContractIdentity(t *testing.T) {
 	objects, columns := busySendCoreObjects, busySendSpawnColumns
 	t.Cleanup(func() { busySendCoreObjects, busySendSpawnColumns = objects, columns })
 	version, digest := BusySendCoreContractIdentity()
-	if version != "busy-send-core-v1:" || digest != "45bbc95a6429e2f483f3ab4bc1cc0b8d12d40f607e06b6bf4416d87fff1cb7f7" {
+	if version != "busy-send-core-v1:" || digest != "48949be96b1ee5db31161ee71b9d2aa594003801298819194c64b05446612601" {
 		t.Fatalf("identity = %q, %q", version, digest)
 	}
 	check := func(t *testing.T, changed bool) {

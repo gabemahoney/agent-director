@@ -3,6 +3,8 @@ package store
 import (
 	"bytes"
 	"fmt"
+	"math"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -10,10 +12,12 @@ import (
 // Send Modes it offers, each mode's Message, prompt and text-kind limits, the
 // per-agent held limits, its force admission, limits and force-state table
 // (SR-4.4), and its Confirm From Transcripts capability (SR-4.5). It is the
-// one definition admission, the inbox
-// coordinator's partitioner, a route's prompt renderer and get's
-// delivery_capabilities read; none of them keeps a limit of its own. Live
-// qualification (O4, SR-8.3) may raise a limit by changing this table only.
+// authoring definition for new Launch snapshots and this binary's route
+// metadata. Admission, projection and packing read the immutable snapshot.
+// New Launch admission limits may differ, but a covering table and route must
+// keep every whole Message any earlier Launch in the retained conversation
+// could accept deliverable at every applicable boundary, including Wait Turn
+// and force after resume. Retained custody is never re-admitted or rewritten.
 // Every value counts UTF-8 bytes: a byte count is never below the UTF-16 length
 // Claude Code counts, so Claude's prompt limit stays under the 10,000-character
 // point at which Claude may show a preview in place of hook text (O4). These
@@ -29,6 +33,9 @@ const BusySendTextUTF8TabLF BusySendTextKind = "utf8_tab_lf"
 // BusySendModeLimits are one offered Send Mode's published limits.
 type BusySendModeLimits struct {
 	Mode BusySendMode
+	// MeasureKind fixes the stored arithmetic, including literal wrapping
+	// with empty prefix/suffix/escapes. Empty is only for unpersisted callers.
+	MeasureKind BusySendMeasureKind
 	// MessageBytes is the most bytes of one Message's own text; separators and
 	// wrappers do not count (SR-1.6).
 	MessageBytes int64
@@ -38,14 +45,22 @@ type BusySendModeLimits struct {
 	// WrapperBytes is the budget for what the route's fixed wrapper adds to
 	// one prompt: Wrapping's prefix and suffix stay within it, so a Message
 	// at MessageBytes with no text the provider escapes always fits a prompt
-	// alone. When no wrapping is recorded, it is also the mode's measure
-	// (Measure: the body plus this budget).
+	// alone. The wrapper_budget measure counts the body plus this budget;
+	// literal_escapes uses Wrapping even when its literal fields are empty.
 	WrapperBytes int64
 	// Wrapping is the provider's exact transformation of a prompt body as the
 	// agent receives it (Measure); zero for a mode with none recorded.
 	Wrapping BusySendWrapping
 	TextKind BusySendTextKind
 }
+
+// BusySendMeasureKind has permanent closed meanings in the core.
+type BusySendMeasureKind string
+
+const (
+	BusySendMeasureWrapperBudget  BusySendMeasureKind = "wrapper_budget"
+	BusySendMeasureLiteralEscapes BusySendMeasureKind = "literal_escapes"
+)
 
 // BusySendWrapping is the provider's exact transformation of one prompt body
 // as the agent receives it: the fixed text around it and the substitutions
@@ -58,20 +73,50 @@ type BusySendWrapping struct {
 }
 
 // BusySendEscape is one substitution the provider makes inside a body: every
-// occurrence of Raw is shown as Escaped.
+// occurrence of Raw is shown as Escaped. Permanent literal measures require
+// nonempty Raw with no ASCII digit or LF, and Escaped cannot be shorter.
+// Digits and LF divide the rendered body into fragments that Raw cannot
+// cross. Adding a Message changes only separator ordinal digits in existing
+// fragments' boundaries; the fragments themselves and their occurrence
+// counts stay unchanged. New fragments add only nonnegative expansion, and
+// body bytes never decrease. This preserves the partitioner's monotone fit
+// assumption even as separator ordinal widths grow. Prefix/suffix bytes are
+// fixed and are not subject to escapes. See busySendLaunchEscapesDDL for the
+// matching byte-level storage checks.
 type BusySendEscape struct {
 	Raw, Escaped string
+}
+
+func validBusySendEscape(e BusySendEscape) bool {
+	return e.Raw != "" && !strings.ContainsAny(e.Raw, "0123456789\n") && len(e.Escaped) >= len(e.Raw)
 }
 
 // Measure is the byte length of body as the agent receives it: Prefix, the
 // body with every occurrence of each escape's Raw counted as its Escaped,
 // and Suffix.
 func (w BusySendWrapping) Measure(body []byte) int64 {
-	n := int64(len(w.Prefix) + len(body) + len(w.Suffix))
+	n := busySendAddBytes(int64(len(body)), int64(len(w.Prefix)))
+	n = busySendAddBytes(n, int64(len(w.Suffix)))
 	for _, e := range w.Escapes {
-		n += int64(bytes.Count(body, []byte(e.Raw)) * (len(e.Escaped) - len(e.Raw)))
+		if !validBusySendEscape(e) {
+			return -1
+		}
+		count, delta := int64(bytes.Count(body, []byte(e.Raw))), int64(len(e.Escaped)-len(e.Raw))
+		if delta != 0 && count > math.MaxInt64/delta {
+			return -1
+		}
+		n = busySendAddBytes(n, count*delta)
 	}
 	return n
+}
+
+// -1 cannot be a valid size; admission and partitioning refuse it rather
+// than letting overflow turn an oversized prompt into an admissible one.
+func busySendAddBytes(a, b int64) int64 {
+	if a < 0 || b < 0 || a > math.MaxInt64-b {
+		return -1
+	}
+	return a + b
 }
 
 // zero reports whether no wrapping is recorded.
@@ -79,12 +124,16 @@ func (w BusySendWrapping) zero() bool {
 	return w.Prefix == "" && w.Suffix == "" && len(w.Escapes) == 0
 }
 
-// Measure is the complete size of a prompt with body as the mode's route
-// delivers it: Wrapping's exact measure, or the body plus WrapperBytes for a
-// mode with no recorded wrapping. It is a BusySendPromptMeasure.
+// Measure is the complete size of a prompt with body, using MeasureKind's
+// permanent arithmetic. An empty kind retains the legacy inference only for
+// unpersisted callers; stored snapshots always name their measure explicitly.
+// It is a BusySendPromptMeasure, returning -1 for an unrepresentable size.
 func (l BusySendModeLimits) Measure(body []byte) int64 {
-	if l.Wrapping.zero() {
-		return int64(len(body)) + l.WrapperBytes
+	if l.MeasureKind == BusySendMeasureWrapperBudget || (l.MeasureKind == "" && l.Wrapping.zero()) {
+		return busySendAddBytes(int64(len(body)), l.WrapperBytes)
+	}
+	if l.MeasureKind != "" && l.MeasureKind != BusySendMeasureLiteralEscapes {
+		return -1
 	}
 	return l.Wrapping.Measure(body)
 }
@@ -215,6 +264,7 @@ var claudeWakeWrapping = BusySendWrapping{
 // this table; under these figures no valid single Message reaches it.
 var claudeWaitTurn = BusySendModeLimits{
 	Mode:         BusySendWaitTurn,
+	MeasureKind:  BusySendMeasureLiteralEscapes,
 	MessageBytes: claudeWaitTurnMessageBytes,
 	PromptBytes:  claudeWaitTurnPromptBytes,
 	WrapperBytes: claudeWaitTurnPromptBytes - claudeWaitTurnMessageBytes - int64(len(BusySendSeparator(1, 1))),
@@ -254,6 +304,7 @@ var claudeSteerWrapping = BusySendWrapping{
 // at the same text limit does (claudeWaitTurn).
 var claudeSteerTurn = BusySendModeLimits{
 	Mode:         BusySendSteerTurn,
+	MeasureKind:  BusySendMeasureLiteralEscapes,
 	MessageBytes: claudeWaitTurnMessageBytes,
 	PromptBytes:  claudeWaitTurnPromptBytes,
 	WrapperBytes: claudeWaitTurn.WrapperBytes,
@@ -294,32 +345,13 @@ var busySendCapabilityTable = []BusySendCapabilities{{
 	ConfirmFromTranscriptsReason: BusySendConfirmHookSightingFirst,
 }}
 
-// busySendFallbackCapabilities admits for a covered provider this version has
-// no row for, a conversation a later release covered: every version admits and
-// holds a covered Launch's Messages whatever its provider (SR-7.2), under
-// limits that keep the PRD's corpus and SR-1.6's held minimum. It offers Wait
-// Turn only, since Steer Turn needs a provider route this version knows, so a
-// Steer Turn send is refused steer_unsupported. It publishes no force route,
-// and this version reads no transcript to confirm a force for it.
-var busySendFallbackCapabilities = BusySendCapabilities{
-	HeldCount:              claudeHeldCount,
-	HeldBytes:              claudeHeldBytes,
-	Modes:                  []BusySendModeLimits{busySendFallbackWaitTurn},
-	ConfirmFromTranscripts: BusySendConfirmCannotConfirm,
-}
-
-// busySendFallbackWaitTurn is Claude's Wait Turn limits without Claude's
-// wrapping, which no other provider applies: its whole wrapper budget counts.
-var busySendFallbackWaitTurn = func() BusySendModeLimits {
-	l := claudeWaitTurn
-	l.Wrapping = BusySendWrapping{}
-	return l
-}()
-
-// BusySendCapabilitiesFor returns provider's row, or the fallback for a
-// provider the table does not name. The caller gets its own copy.
+// BusySendCapabilitiesFor returns this binary's authoring/route table row.
+// A provider without a local row has no modes or limits and cannot confirm
+// from transcripts. That absence says nothing about an existing Launch's
+// admission capabilities: runtime admission and projection read its snapshot.
+// The caller gets its own copy, including all literal escapes.
 func BusySendCapabilitiesFor(provider string) BusySendCapabilities {
-	c := busySendFallbackCapabilities
+	c := BusySendCapabilities{ConfirmFromTranscripts: BusySendConfirmCannotConfirm}
 	for _, row := range busySendCapabilityTable {
 		if row.Provider == provider {
 			c = row
@@ -327,6 +359,9 @@ func BusySendCapabilitiesFor(provider string) BusySendCapabilities {
 	}
 	c.Provider = provider
 	c.Modes = append([]BusySendModeLimits(nil), c.Modes...)
+	for i := range c.Modes {
+		c.Modes[i].Wrapping.Escapes = append([]BusySendEscape(nil), c.Modes[i].Wrapping.Escapes...)
+	}
 	c.ForceLimits = append([]BusySendForceLimit(nil), c.ForceLimits...)
 	c.ForceStates = append([]BusySendForceStateOutcome(nil), c.ForceStates...)
 	return c

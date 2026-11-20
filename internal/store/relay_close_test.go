@@ -535,6 +535,11 @@ func TestClosedRequestHoldsNothingAfterResume(t *testing.T) {
 					} else {
 						c.close(t, s)
 					}
+					if mustGetSpawn(t, s, relayID).Agent == AgentCodex {
+						// Test-only future covering writer: this historical Codex
+						// fixture retains the Claude-sized delivery envelope.
+						busyLaunchAuthor(t, AgentCodex, v21ClaudeCapabilities())
+					}
 					resumeRelayRow(t, s)
 					if got := openTokens(t, s, relayID); len(got) != 0 {
 						t.Fatalf("requests awaiting an answer after the resume = %v; want none", got)

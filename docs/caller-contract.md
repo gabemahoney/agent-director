@@ -166,8 +166,9 @@ error; it never fabricates a successful `not_covered` row.
 
 Resume retains the conversation and preserves its coverage; fresh reuse
 starts a new conversation even with the same agent. A candidate awaiting
-creation or publication keeps the earlier published coverage and
-[Agent Defaults](#agent-defaults) visible, and sends use those defaults, until
+creation or publication keeps the earlier published coverage,
+[admission capabilities](#busy-send-refusals) and [Agent Defaults](#agent-defaults)
+visible and authoritative for sends until
 the new launch is published following creation, adoption or report-in.
 A lost [delegated resume reply](#launch-end-resume-and-reuse) does not tell
 you whether that publication occurred.
@@ -175,7 +176,8 @@ you whether that publication occurred.
 A covered row also shows `agent_defaults`, its [settings](#agent-defaults),
 on `get`, `get-many`, `status` and `list`; `delivery`, its inbox, on `get`,
 `get-many` and `status`; and `delivery_capabilities`, what busy send can do
-for it, on `get` and `get-many`: its [limits](#busy-send-refusals), its
+for it, on `get` and `get-many`: its
+[current launch's admission capabilities](#busy-send-refusals), its
 [force capability](#claude-code-force-capability) and its
 [Confirm From Transcripts](#confirm-from-transcripts) capability. Uncovered
 rows omit all three. Permission-request delivery fields keep their separate
@@ -366,14 +368,21 @@ in the table's order.
 | `prompt_size` | The Message would not fit one prompt on its own. | `false`, `none` |
 | `held_count`, `held_bytes` | The agent's held limit is full. | `true`, `new_send`: send again once Held Messages drain. |
 
-`false`, `none`: the same send can never succeed. Read each `send_mode`'s
-limits from `delivery_capabilities.modes`, which can change: they are
-agent-director's policy, counted in UTF-8 bytes, not measured provider
-maxima. `message_bytes` counts a Message's own text; `prompt_bytes` counts a
-whole prompt with agent-director's separators and the mode's wrapping and
+`false`, `none`: the same send can never succeed. `delivery_capabilities.modes`
+reports the published current launch's offered modes, text kind and
+Message/prompt limits; `held_count` and `held_bytes` report its held limits.
+These admission capabilities are fixed when the launch is created; different
+values apply from the next published launch. Force and Confirm From Transcripts
+capabilities describe the calling version's route separately.
+
+The limits are agent-director's policy, counted in UTF-8 bytes, not measured
+provider maxima. `message_bytes` counts a Message's own text; `prompt_bytes`
+counts a whole prompt with agent-director's separators and the mode's wrapping and
 escaping, and a Message within `message_bytes` always fits a prompt on its
-own, whichever mode delivers it. Claude Code offers `wait_turn` and
-`steer_turn`, each allowing 8,000 Message bytes and 9,600 prompt bytes of
+own, whichever boundary delivers it. Retained Held Messages remain deliverable
+whole through resume, with their original text and options.
+Claude Code offers `wait_turn` and `steer_turn`, each allowing 8,000 Message
+bytes and 9,600 prompt bytes of
 `utf8_tab_lf` text; its held limits are 1,000 Messages and 8,000,000 bytes.
 
 ### Message Results

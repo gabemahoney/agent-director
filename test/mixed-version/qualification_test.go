@@ -2,13 +2,17 @@ package mixedversion_test
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/installversion"
+	"github.com/gabemahoney/agent-director/internal/layout"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/google/uuid"
@@ -33,7 +37,7 @@ func TestMixedVersionCoreABI(t *testing.T) {
 	for writer := range b.generations {
 		t.Run(b.generations[writer].name, func(t *testing.T) {
 			f := newFixture(t)
-			wantIdentity := map[string]string{"core_version": "busy-send-core-v1:", "core_declarations_sha256": "45bbc95a6429e2f483f3ab4bc1cc0b8d12d40f607e06b6bf4416d87fff1cb7f7"}
+			wantIdentity := map[string]string{"core_version": "busy-send-core-v1:", "core_declarations_sha256": "48949be96b1ee5db31161ee71b9d2aa594003801298819194c64b05446612601"}
 			for _, d := range f.drivers {
 				exact(t, value[map[string]string](t, d.call("identity", nil)), wantIdentity)
 			}
@@ -881,5 +885,259 @@ func TestMixedVersionUnconfirmedOmissions(t *testing.T) {
 			want["wait"] = map[string]any{"reason": "earlier_message", "since": w["since"]}
 			exact(t, second, want)
 		})
+	}
+}
+
+// PM1: the case catalogue is shared across all four real retained interfaces.
+// No abandoned force is seeded: E35 owns that separate explicit-send recovery.
+func TestMixedVersionStoredCapabilities(t *testing.T) {
+	for _, surface := range []string{"go", "cli", "mcp", "ts"} {
+		t.Run(surface, func(t *testing.T) {
+			f := newFixture(t)
+			for _, d := range f.drivers {
+				local := value[store.BusySendCapabilities](t, d.call("local-capabilities", "codex"))
+				if len(local.Modes) != 0 || local.ForceAdmission != "" {
+					t.Fatalf("sender acquired a local provider: %+v", local)
+				}
+			}
+			wake, audit := filepath.Join(f.home, "later-wake"), filepath.Join(f.home, "wake-calls")
+			if err := os.WriteFile(wake, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(f.home, "unexpected-exec")
+			traps := filepath.Join(f.home, "traps")
+			if err := os.Mkdir(traps, 0700); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"tmux", "claude", "codex", "agent-director"} {
+				body := "#!/bin/sh\nprintf invoked >> '" + strings.ReplaceAll(marker, "'", "'\"'\"'") + "'\nexit 89\n"
+				if err := os.WriteFile(filepath.Join(traps, name), []byte(body), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config := filepath.Join(f.home, ".config/agent-director/config.toml")
+			if err := os.WriteFile(config, []byte("[tmux]\ncommand = '"+filepath.Join(traps, "tmux")+"'\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			processAudit := filepath.Join(f.home, "caller-processes")
+			f.env = append(f.env, "PATH="+traps, "AD_MIXED_WAKE_AUDIT="+audit, "AD_MIXED_PROCESS_AUDIT="+processAudit)
+			later, waitOnly := storefix.BusySendLaterCapabilities(), storefix.BusySendWaitOnlyCapabilities()
+			ids := []string{"later-" + uuid.NewString(), "wait-only-" + uuid.NewString()}
+			for i, caps := range []*store.BusySendLaunchCapabilities{later, waitOnly} {
+				mode := store.BusySendWaitTurn
+				if i == 0 {
+					mode = store.BusySendSteerTurn
+				}
+				value[string](t, f.drivers[1].call("seed", map[string]any{"ID": ids[i], "State": "ended", "Token": uuid.NewString(),
+					"Agent": "codex", "Route": "codex_app_server", "Wake": wake, "Capabilities": caps,
+					"Defaults": store.BusySendAgentDefaults{SendMode: mode}}))
+			}
+			send := f.caller(t, 0, surface)
+			caller := uuid.NewString()
+			requestIDs := []string{"explicit", "default"}
+			var firstPID int
+			for i, text := range []string{" explicit\tü <&>\n", " default\n漢字 🙂 "} {
+				params := map[string]any{"instance_id": ids[0], "text": text, "confirmed_delivery": true,
+					"caller_uuid": caller, "delivery_request_id": requestIDs[i]}
+				if i == 0 {
+					params["send_mode"] = "steer_turn"
+				}
+				past := time.Unix(100, 0)
+				if err := os.Chtimes(wake, past, past); err != nil {
+					t.Fatal(err)
+				}
+				result := value[api.DeliveryResult](t, send("send", params))
+				if result.Class != "held" || result.Final || result.Forced || result.LaunchToken != nil {
+					t.Fatalf("not durable ordinary custody: %+v", result)
+				}
+				info, err := os.Stat(wake)
+				if err != nil || !info.ModTime().After(past) || info.Size() != 0 {
+					t.Fatalf("not a real content-free wake: %+v / %v", info, err)
+				}
+				calls := readWakeCalls(t, audit)
+				if len(calls) != i+1 {
+					t.Fatalf("wake invocations=%+v; want %d", calls, i+1)
+				}
+				if calls[i].Path != wake || calls[i].Version != f.b.generations[0].version || calls[i].PID <= 0 {
+					t.Fatalf("wrong notification: %+v", calls[i])
+				}
+				if i == 0 {
+					firstPID = calls[i].PID
+				} else if (surface == "go" || surface == "mcp") && calls[i].PID != firstPID {
+					t.Fatal("persistent caller re-executed between admissions")
+				}
+				exact(t, value[api.DeliveryResult](t, send("send", params)), result)
+				lookup := value[api.GetDeliveryResult](t, send("lookup", map[string]any{"caller_uuid": caller, "delivery_request_id": requestIDs[i]}))
+				exact(t, lookup, api.GetDeliveryResult{Lookup: "found", Result: &result})
+				exact(t, readWakeCalls(t, audit), calls)
+			}
+			facts := value[apitest.BusySendFacts](t, f.drivers[1].call("facts", ids[0]))
+			if len(facts.Messages) != 2 {
+				t.Fatalf("custody: %+v", facts)
+			}
+			for i, m := range facts.Messages {
+				text := []string{" explicit\tü <&>\n", " default\n漢字 🙂 "}[i]
+				if string(m.Text) != text || m.SendMode != "steer_turn" || m.Seq != int64(i+1) || !m.Reserved ||
+					m.Place != "held" || m.CallerUUID.String != caller || m.RequestID.String != requestIDs[i] {
+					t.Fatalf("changed custody: %+v", m)
+				}
+			}
+			calls := readWakeCalls(t, audit)
+			row := value[api.SpawnRow](t, send("get", map[string]any{"instance_id": ids[0]}))
+			many := value[api.GetManyResult](t, send("get-many", map[string]any{"instance_ids": ids}))
+			if len(many.Spawns) != 2 || len(many.NotFound) != 0 {
+				t.Fatalf("get-many: %+v", many)
+			}
+			for i, projected := range []api.SpawnRow{row, many.Spawns[0], many.Spawns[1]} {
+				caps := api.DeliveryCapabilities{Modes: []api.DeliveryModeLimits{{SendMode: "wait_turn", MessageBytes: 512, PromptBytes: 4096, TextKind: "utf8_tab_lf"},
+					{SendMode: "steer_turn", MessageBytes: 256, PromptBytes: 2048, TextKind: "utf8_tab_lf"}}, HeldCount: 7, HeldBytes: 16384, ConfirmFromTranscriptsCapability: "cannot_confirm"}
+				count, mode := int64(2), "steer_turn"
+				if i == 2 {
+					caps.Modes = []api.DeliveryModeLimits{{SendMode: "wait_turn", MessageBytes: 8000, PromptBytes: 9600, TextKind: "utf8_tab_lf"}}
+					caps.HeldCount, caps.HeldBytes, count, mode = 1000, 8000000, 0, "wait_turn"
+				}
+				exact(t, projected.DeliveryCapabilities, &caps)
+				if projected.AgentDefaults == nil || projected.AgentDefaults.SendMode != mode ||
+					projected.Delivery == nil || projected.Delivery.HeldCount != count || projected.Delivery.Force != nil {
+					t.Fatalf("projection disagrees with stored Launch: %+v", projected)
+				}
+			}
+			for _, refusal := range []struct {
+				id, text string
+				details  api.CantSendDetails
+			}{
+				{ids[1], "not offered", api.CantSendDetails{Class: "cant_send", Reason: "steer_unsupported", ResendSafe: true, RetryWith: "new_send"}},
+				{ids[0], strings.Repeat("x", 257), api.CantSendDetails{Class: "cant_send", Reason: "text_bytes", RetryWith: "none", Limit: &api.CantSendLimit{Actual: 257, Allowed: 256}}},
+			} {
+				got := send("send", map[string]any{"instance_id": refusal.id, "text": refusal.text, "send_mode": "steer_turn"})
+				if got.Error == "" || got.ErrName != "ErrCantSend" {
+					t.Fatalf("refusal=%+v", got)
+				}
+				exact(t, decode[api.CantSendDetails](t, got.ErrDetails), refusal.details)
+			}
+			exact(t, readWakeCalls(t, audit), calls)
+			exact(t, value[apitest.BusySendFacts](t, f.drivers[1].call("facts", ids[0])), facts)
+			exact(t, storefix.ReadBusySendCounts(t, f.db), storefix.BusySendCounts{Messages: 2, Pairs: 2})
+			processes := readWakeCalls(t, processAudit)
+			wantProcesses, executable := 1, f.b.generations[0].runtime
+			if surface == "go" {
+				executable = f.b.generations[0].driver
+			}
+			if surface == "cli" || surface == "ts" {
+				wantProcesses = 10
+			}
+			// Both subprocess clients launch once per verb. TS construction's
+			// version probe scrubs the audit environment before any calls.
+			if len(processes) != wantProcesses {
+				t.Fatalf("unexpected runtime process/re-exec: %+v; want %d", processes, wantProcesses)
+			}
+			for _, process := range processes {
+				if process.Path != executable || process.Version != f.b.generations[0].version {
+					t.Fatalf("unexpected executable: %+v", process)
+				}
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("provider/tmux/re-exec trap entered: %v", err)
+			}
+		})
+	}
+}
+
+type wakeCall struct {
+	Path    string
+	PID     int
+	Version string
+}
+
+func readWakeCalls(t *testing.T, path string) []wakeCall {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	var calls []wakeCall
+	for decoder.More() {
+		var call wakeCall
+		if err := decoder.Decode(&call); err != nil {
+			t.Fatal(err)
+		}
+		calls = append(calls, call)
+	}
+	return calls
+}
+
+// The covering-side delegate substitutes provider startup only. Its new
+// candidate goes through MoveToPendingWithExit with the compiled author row;
+// no snapshot is copied from the old caller and no canned success is decoded.
+func TestMixedVersionDelegatedCapabilities(t *testing.T) {
+	f := newFixture(t)
+	id := "delegated-" + uuid.NewString()
+	original := storefix.BusySendLaterCapabilities()
+	original.Modes = original.Modes[:1]
+	original.HeldCount, original.HeldBytes = 3, 8192 // the covering writer retains this delivery envelope
+	value[string](t, f.drivers[0].call("seed", map[string]any{"ID": id, "State": "ended", "Agent": "codex", "Token": uuid.NewString(), "Session": uuid.NewString(), "Capabilities": original}))
+	directory := filepath.Join(f.b.root, "covering")
+	cmd := exec.Command(filepath.Join(directory, "agent-director-admin"), "--home", f.home, "publish-version", "--binary", filepath.Join(directory, "agent-director"))
+	cmd.Env = f.env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("publish covering fixture: %v\n%s", err, out)
+	}
+	audit := filepath.Join(f.home, "delegate-writer")
+	f.env = append(f.env, "AD_MIXED_DELEGATE_AUDIT="+audit)
+	retained := f.caller(t, 0, "go")
+	out := value[api.ResumeResult](t, retained("resume", map[string]any{"instance_id": id, "send_mode": "steer_turn"}))
+	exact(t, out, api.ResumeResult{InstanceID: id, PreTrust: "skipped"})
+	data, err := os.ReadFile(audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var writer struct {
+		PID       int
+		CallerPID int `json:"caller_pid"`
+		Token     string
+		Facts     installversion.Facts
+	}
+	if err := json.Unmarshal(data, &writer); err != nil {
+		t.Fatal(err)
+	}
+	_, digest := store.BusySendCoreContractIdentity()
+	if writer.PID <= 0 || writer.CallerPID <= 0 || writer.PID == writer.CallerPID || writer.Token == "" ||
+		writer.Facts.Version != "9.0.0-mixed-covering" || writer.Facts.CoreDeclarationsSHA256 != digest {
+		t.Fatalf("wrong author process/contract: %+v", writer)
+	}
+	facts := value[apitest.BusySendFacts](t, f.drivers[0].call("facts", id))
+	if len(facts.Launches) != 2 {
+		t.Fatalf("delegate did not write candidate: %+v", facts)
+	}
+	candidateIndex, matches := 0, 0
+	for i, launch := range facts.Launches {
+		if launch.Token.Valid && launch.Token.String == writer.Token {
+			candidateIndex = i
+			matches++
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("writer token %q matched %d Launches; want exactly one: %+v", writer.Token, matches, facts.Launches)
+	}
+	candidate := facts.Launches[candidateIndex]
+	if candidate.Kind != "resume" || candidate.Phase != "candidate" || candidate.Provider != "codex" {
+		t.Fatalf("candidate %+v", candidate)
+	}
+	exact(t, candidate.Capabilities, storefix.BusySendLaterCapabilities())
+	exact(t, facts.Launches[1-candidateIndex].Capabilities, original)
+	decoded := value[store.Spawn](t, f.drivers[0].call("row", id))
+	if decoded.Identity.Token != writer.Token {
+		t.Fatalf("decoded candidate identity token %q; want audited writer token %q", decoded.Identity.Token, writer.Token)
+	}
+	row := value[api.SpawnRow](t, retained("get", map[string]any{"instance_id": id}))
+	if row.DeliveryCapabilities == nil || len(row.DeliveryCapabilities.Modes) != 1 {
+		t.Fatalf("candidate leaked before publication: %+v", row)
+	}
+	// Production publication remains a separate guarded step; this regression
+	// ends at the delegated candidate writer and never launches a real provider.
+	if _, err := os.Stat(filepath.Join(layout.Dir(f.home), "versions")); err != nil {
+		t.Fatal(err)
 	}
 }

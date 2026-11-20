@@ -158,7 +158,7 @@ func (inv *invocation) deliver() (Outcome, error) {
 		return Outcome{Kind: OutcomeNoIssue, Detail: "the invocation's issue phase ended before its claim"}, nil
 	}
 	claim, err := c.Store.ClaimBusySendHandover(inv.issue, store.BusySendClaimRequest{InstanceID: ev.InstanceID,
-		Destination: elig.Destination, Boundary: ev.Boundary, RaceExposed: elig.RaceExposed, Measure: c.Route.Measure,
+		Destination: elig.Destination, Boundary: ev.Boundary, RaceExposed: elig.RaceExposed,
 		IssueBudget: c.Budgets.Issue, JobBudget: c.Budgets.Job, At: inv.start})
 	switch {
 	case store.CommitUnconfirmed(err):

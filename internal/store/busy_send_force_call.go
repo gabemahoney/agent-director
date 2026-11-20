@@ -31,9 +31,6 @@ type BusySendForceClaimRequest struct {
 	Launch BusySendPublishedLaunch
 	// ForceID and OwnerCallID are the attempt's AD-made identities.
 	ForceID, OwnerCallID string
-	// Measure is the route's complete-payload measure (nil: the capability
-	// table's own, BusySendModeLimits.Measure).
-	Measure BusySendPromptMeasure
 	// ActiveBudget is the call's active issue and admission phase and
 	// CleanupBudget its call-owned cleanup after it, both fixed from At and
 	// never renewed: the hand-over's issue deadline is At+ActiveBudget, and
@@ -80,7 +77,7 @@ type BusySendForceClaim struct {
 // itself stores only the attempt: it changes no custody beyond what those
 // recovery steps returned to Held (BusySendForceClaim.Returned). Otherwise every
 // then-Held Message, in accepted order, is frozen as the force's carried
-// membership and claimed into a force hand-over with the capability table's
+// membership and claimed into a force hand-over with the guarded Launch's
 // prompt partition, the captured destination and the original deadlines; the
 // force runs, owned by OwnerCallID at revision 1, and the conversation names
 // it as its latest force that began a hand-over (SR-5.6). The turn-end,
@@ -194,8 +191,16 @@ func claimBusySendForce(ctx context.Context, conn *sql.Conn, storeID string, req
 		return refuse(BusySendForceInputUnresolved)
 	}
 	// A force's prompt is a forced wake of the route's Wait Turn delivery,
-	// so it takes that mode's limits and the route's measure.
-	limits, offered := BusySendCapabilitiesFor(f.provider).Mode(BusySendWaitTurn)
+	// so it takes that Launch's stored Wait Turn limits and measure. Across
+	// resume, its envelope must still fit all earlier admitted whole Messages.
+	caps, err := readBusySendLaunchCapabilities(ctx, conn, storeID, f.launch)
+	if err != nil {
+		return BusySendForceClaim{}, err
+	}
+	if caps == nil {
+		return BusySendForceClaim{}, errBusySendCapabilities
+	}
+	limits, offered := caps.Mode(BusySendWaitTurn)
 	if !offered {
 		return refuse(BusySendForceRouteUnavailable)
 	}
@@ -203,7 +208,7 @@ func claimBusySendForce(ctx context.Context, conn *sql.Conn, storeID string, req
 	for i, m := range members {
 		texts[i] = m.text
 	}
-	parts, err := PartitionBusySendPrompts(texts, limits, req.Measure)
+	parts, err := PartitionBusySendPrompts(texts, limits, nil)
 	if err != nil {
 		return BusySendForceClaim{}, err
 	}

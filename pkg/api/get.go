@@ -513,7 +513,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 	}
 	if observation != nil {
 		out.AgentDefaults, out.Delivery = agentDefaultsOf(observation.Defaults), busySendDeliveryOf(observation)
-		out.DeliveryCapabilities = deliveryCapabilitiesOf(observation.Provider)
+		out.DeliveryCapabilities = deliveryCapabilitiesOf(observation)
 	}
 
 	// b.v2c AC6/AC8: surface the visible history (the current life's archived

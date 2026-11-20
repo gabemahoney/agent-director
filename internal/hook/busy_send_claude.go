@@ -22,7 +22,7 @@ import (
 // turn end, while it is idle, and for a force, that is its FileChanged hook
 // with asyncRewake, which Claude Code turns into a queued wake prompt. That
 // prompt is the hook's text inside Claude Code's measured wrapping, recorded
-// once in the capability table (claudeWaitTurn's Wrapping): a fixed prefix
+// in the Launch's Wait Turn snapshot: a fixed prefix
 // naming the hook, the text with two closing tags escaped, and a fixed
 // suffix. AD's own UserPromptSubmit hook sees the wrapped prompt; undoing the
 // wrapping exactly gives the take evidence SR-3.3 needs
@@ -37,33 +37,18 @@ import (
 // Steer Turn (SR-3.4, SR-3.1) goes the same route at a parent tool boundary
 // instead: the owned PostToolBatch hook of the running turn returns the next
 // prompt of the Steer Turn prefix, its body unchanged, as its stdout's one
-// additionalContext (handleClaudeSteer), measured by the table's Steer Turn
-// row (claudeSteerTurn). That is the input issued into a running turn whose
+// additionalContext (handleClaudeSteer), measured by the Launch's Steer Turn
+// snapshot. That is the input issued into a running turn whose
 // parent Stop is its take evidence.
 
-// claudeWaitTurn is Claude's Wait Turn row of the capability table, whose
-// limits and wrapping this route reads and keeps none of its own.
-func claudeWaitTurn() store.BusySendModeLimits {
-	limits, _ := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendWaitTurn)
-	return limits
-}
-
-// claudeSteerTurn is Claude's Steer Turn row of the capability table, whose
-// limits and measure the steer reads and keeps none of its own; false when
-// the table offers no Steer Turn for Claude, and then nothing is steered.
-func claudeSteerTurn() (store.BusySendModeLimits, bool) {
-	return store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendSteerTurn)
-}
-
-// unwrapClaudeWake undoes the table's wrapping of a UserPromptSubmit prompt
+// unwrapClaudeWake undoes the captured Launch's wrapping of a UserPromptSubmit prompt
 // exactly, returning the body AD's hook wrote, or false when the prompt is not
 // a wake in that wrapping or its escaping cannot be undone exactly: a body
 // holding an escaped form (literal or escaped, the two are
 // indistinguishable) or a raw escaped text (which the escaping never leaves)
 // gives nothing. Nothing is trimmed or normalized. A changed wrapping matches
 // nothing, so it gives no evidence (SR-3.5).
-func unwrapClaudeWake(prompt string) ([]byte, bool) {
-	w := claudeWaitTurn().Wrapping
+func unwrapClaudeWake(prompt string, w store.BusySendWrapping) ([]byte, bool) {
 	if w.Prefix == "" || len(prompt) <= len(w.Prefix)+len(w.Suffix) ||
 		!strings.HasPrefix(prompt, w.Prefix) || !strings.HasSuffix(prompt, w.Suffix) {
 		return nil, false
@@ -391,7 +376,11 @@ func handleClaudeWake(ctx context.Context, stderr io.Writer, st HookStore, hc Ha
 	if !ok || filepath.Clean(res.FilePath) != f.WakePath {
 		return false
 	}
-	route := newClaudeRoute(rs, hc, instanceID, gate, f, claudeWaitTurn(), stderr, logger)
+	limits, offered := f.Capabilities.Mode(store.BusySendWaitTurn)
+	if !offered {
+		return false
+	}
+	route := newClaudeRoute(rs, hc, instanceID, gate, f, limits, stderr, logger)
 	c := busysend.Coordinator{Store: rs, Route: route, Budgets: claudeWakeBudgets, Now: hc.clock()}
 	deliver, ev := c.Deliver, busysend.Event{InstanceID: instanceID, Boundary: store.BusySendBoundaryTurnEnd}
 	if now := c.Now(); claudeForceCallRunning(f, now) {
@@ -435,18 +424,21 @@ func handleClaudeWake(ctx context.Context, stderr io.Writer, st HookStore, hc Ha
 // pause fence. It never carries a force's authority: a live force's
 // hand-over bars its claim. A subagent's or background child's callback
 // (agent_id), another or a changed session, a stale gate, an uncovered
-// Launch, a table offering no Steer Turn, or a failed read delivers and
+// Launch, a snapshot offering no Steer Turn, or a failed read delivers and
 // consumes nothing. It writes no state, answers no permission and returns no
 // decision or stop control: PostToolBatch is not a state report, and the hook
 // exits 0 whatever it wrote.
 func handleClaudeSteer(ctx context.Context, stdout io.Writer, st HookStore, hc HandleConfig, instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) {
 	rs, ok := st.(claudeRouteStore)
-	limits, offered := claudeSteerTurn()
-	if !ok || !offered || stdout == nil {
+	if !ok || stdout == nil {
 		return
 	}
 	f, ok := claudeRouteFacts(ctx, st, instanceID, gate, res, logger)
 	if !ok {
+		return
+	}
+	limits, offered := f.Capabilities.Mode(store.BusySendSteerTurn)
+	if !offered {
 		return
 	}
 	route := newClaudeRoute(rs, hc, instanceID, gate, f, limits, stdout, logger)
@@ -459,7 +451,7 @@ func handleClaudeSteer(ctx context.Context, stdout io.Writer, st HookStore, hc H
 
 // newClaudeRoute is the route of one owned callback that claudeRouteFacts
 // authenticated with f: it pins f's destination, the callback's own session
-// included, with limits, the mode's row of the capability table, and records
+// included, with limits from that Launch's stored mode, and records
 // this hook process's identity, when readable, as its helper issuer.
 func newClaudeRoute(st claudeRouteStore, hc HandleConfig, instanceID string, gate store.HookGate, f store.BusySendRouteFacts,
 	limits store.BusySendModeLimits, out io.Writer, logger *log.Logger) *claudeRoute {
@@ -495,8 +487,8 @@ type claudeRoute struct {
 	// that reuses the provider session, is never adopted.
 	dest store.BusySendDestination
 	gate store.HookGate
-	// limits are Claude's Wait Turn row of the capability table, or its Steer
-	// Turn row for a steer.
+	// limits are this captured Launch's Wait Turn snapshot, or its Steer
+	// Turn snapshot for a steer. A later binary's table never replaces them.
 	limits store.BusySendModeLimits
 	// startupPrompt is HandleConfig.ClaudeStartupPrompt: whether agent
 	// arguments carry a startup prompt, which goes first in the Launch's
@@ -609,8 +601,8 @@ func (r *claudeRoute) launchWait(f store.BusySendRouteFacts) store.BusySendWaitR
 	return ""
 }
 
-// Measure is the complete prompt as the agent receives it: the capability
-// table's exact measure of the mode's wrapping and escaping (decision 12),
+// Measure is the complete prompt as the agent receives it: the captured
+// Launch's exact measure of the mode's wrapping and escaping (decision 12),
 // Wait Turn's for a wake, Steer Turn's for a steer.
 func (r *claudeRoute) Measure(body []byte) int64 { return r.limits.Measure(body) }
 
@@ -635,6 +627,14 @@ func (r *claudeRoute) Authorize(ctx context.Context, p busysend.Prepared) (busys
 	}
 	if wait := r.wait(f); wait != "" {
 		return busysend.Authority{Wait: wait}, nil
+	}
+	// The store partition and this route use the same immutable Launch facts.
+	// Check the whole output before the issue commit, including a frozen
+	// force prompt prepared by another compatible runtime. Never resize it.
+	measured := r.Measure(p.Body)
+	if measured < int64(len(p.Body)) || measured > r.limits.PromptBytes || measured != p.RenderedBytes {
+		logf(r.logger, "hook: busy-send %s (instance=%s): prompt disagrees with Launch measure; nothing issued", r.event(), r.instanceID)
+		return busysend.Authority{Wait: store.BusySendWaitReadinessUnknown}, nil
 	}
 	if r.steer {
 		env, err := claudeSteerEnvelope(p.Body)
@@ -771,7 +771,15 @@ func recordClaudeSighting(ctx context.Context, st HookStore, instanceID string, 
 	if !gate.ClaudeTurnStart || !claudeCallbackSession(res, res.SessionID) {
 		return
 	}
-	body, ok := unwrapClaudeWake(res.Prompt)
+	f, ok := claudeRouteFacts(ctx, st, instanceID, gate, res, logger)
+	if !ok {
+		return
+	}
+	limits, offered := f.Capabilities.Mode(store.BusySendWaitTurn)
+	if !offered || limits.MeasureKind != store.BusySendMeasureLiteralEscapes {
+		return
+	}
+	body, ok := unwrapClaudeWake(res.Prompt, limits.Wrapping)
 	if !ok {
 		return
 	}

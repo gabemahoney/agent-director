@@ -2,14 +2,13 @@ package api_test
 
 import (
 	"errors"
-	"strings"
+	"reflect"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/resumedelegate"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
-	"github.com/google/uuid"
 )
 
 // B21: "install a version that covers agent codex and retry resume".
@@ -36,19 +35,11 @@ func TestAdviceFollow_B22_ResumeUnknownOutcomeGet(t *testing.T) {
 	// Serial: effective HOME and trail observations; the runner models the recipient.
 	e := newDelegateEnv(t)
 	e.covering(t)
-	token := strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
+	var token string
+	capabilities := storefix.BusySendWaitOnlyCapabilities()
 	e.run(t, func(resumedelegate.Request) ([]byte, bool, error) {
-		// A real recipient mutation, through the store's normal candidate API,
-		// occurs before the transport loses its response. No local launch runs.
-		row, err := e.st.GetSpawn(e.row.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		res, _, err := e.st.MoveToPendingWithExit(row.InstanceID, row.Snapshot, e.clock.Now().UnixMilli(), token,
-			e.socket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, e.st, row.InstanceID))
-		if err != nil || res != store.CondApplied {
-			t.Fatalf("recipient move: %v / %v", res, err)
-		}
+		// Real authoring is covered by TestMixedVersionDelegatedCapabilities and TestBusySendStagedPublication.
+		token = storefix.SeedBusySendResumeCandidate(t, e.dbPath, e.row.ID, e.socket, e.clock.Now().UnixMilli(), capabilities)
 		return nil, true, errors.New("response lost after recipient move")
 	})
 	_, err := e.c.Resume(api.ResumeParams{InstanceID: e.row.ID})
@@ -65,5 +56,16 @@ func TestAdviceFollow_B22_ResumeUnknownOutcomeGet(t *testing.T) {
 	}
 	if len(e.calls) != 1 || len(e.rec.SocketCalls()) != 0 {
 		t.Fatalf("automatic retry/input: calls %d; tmux %+v", len(e.calls), e.rec.SocketCalls())
+	}
+	// Validate the fixture only after the advice flow: the candidate must
+	// publish normally and pass the production capabilities reader unchanged.
+	assertBusyLaunchPhase(t, e.dbPath, e.row.ID, "resume", "candidate", store.BusySendCovered)
+	if res, err := e.st.PublishBusySendLaunch(e.row.ID, 0, token); err != nil || res != store.CondApplied {
+		t.Fatalf("seeded candidate publication: %v / %v", res, err)
+	}
+	assertBusyLaunchPhase(t, e.dbPath, e.row.ID, "resume", "current", store.BusySendCovered)
+	observation, err := e.st.ReadBusySendObservation(e.row.ID, store.DefaultLockWait)
+	if err != nil || observation == nil || !reflect.DeepEqual(observation.Capabilities, *capabilities) {
+		t.Fatalf("seeded candidate capabilities: %+v / %v", observation, err)
 	}
 }

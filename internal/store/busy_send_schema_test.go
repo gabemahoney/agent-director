@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -32,8 +33,10 @@ import (
 // released this value never changes; a change to it strands every store
 // already at v21. Before release it changed in place for the pause claim's
 // refusal after its signal intent (b.kii E6 decision 3) and removal of the
-// retired Cursor codes (E7). Existing v21 test stores are recreated.
-const busySendCoreV1Digest = "62f1d2c9b2481a47b9271d4a5f92dae5c7e5ee70180e6f87d641bb3a3e112bf6"
+// retired Cursor codes (E7), and immutable Launch capabilities (PM1), whose
+// raw escape restriction preserves append-monotone measurement (repair 1).
+// Existing v21 test stores are recreated.
+const busySendCoreV1Digest = "1fa5ac4b4fee6639127fe725de0f4cd4fd3730e5dd72c3afd3a6b79c2f17e3e3"
 
 // busySendCoreDigest hashes db's recorded core declarations, each object's
 // type, name and SQL text (whitespace collapsed) in name order, and returns
@@ -56,8 +59,8 @@ func busySendCoreDigest(t *testing.T, db *sql.DB) (digest, text string) {
 		fmt.Fprintf(&b, "%s %s: %s\n", kind, name, strings.Join(strings.Fields(ddl), " "))
 		objects++
 	}
-	if objects != 25 {
-		t.Errorf("the core has %d declared tables and indexes; want 11 tables and 14 indexes", objects)
+	if objects != 27 {
+		t.Errorf("the core has %d declared tables and indexes; want 13 tables and 14 indexes", objects)
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:]), b.String()
@@ -99,7 +102,7 @@ func assertSpawnsCoreChecks(t *testing.T, db *sql.DB, id string) {
 }
 
 // TestBusySendCoreContract: a fresh store records exactly the permanent core
-// (its declarations' digest, 11 tables and 14 indexes), its identity
+// (its declarations' digest, 13 tables and 14 indexes), its identity
 // "busy-send-core-v1:<store id>", spawns' CHECK clauses, and each closed code
 // set's CHECK list equal to its Go codes, while the extensible reason sets
 // keep no list and their fixed strings (SR-2.1, SR-7.2).
@@ -145,6 +148,10 @@ func TestBusySendCoreContract(t *testing.T) {
 		{"busy_send_launches", "route_kind", codes(BusySendRouteClaudeHooks, BusySendRouteCodexAppServer)},
 		{"busy_send_launches", "override_send_mode", codes(BusySendWaitTurn, BusySendSteerTurn)},
 		{"busy_send_launches", "end_cause", codes(BusySendProcessExited, BusySendLaunchPublished, BusySendCreationFailed, BusySendLaunchRecordDeleted, BusySendLaunchCandidateReplaced, busySendAgentMissing)},
+		{"busy_send_launch_modes", "send_mode", codes(BusySendWaitTurn, BusySendSteerTurn)},
+		{"busy_send_launch_modes", "text_kind", codes(BusySendTextUTF8TabLF)},
+		{"busy_send_launch_modes", "measure_kind", codes(BusySendMeasureWrapperBudget, BusySendMeasureLiteralEscapes)},
+		{"busy_send_launch_escapes", "send_mode", codes(BusySendWaitTurn, BusySendSteerTurn)},
 		{"busy_send_launch_processes", "role", codes(BusySendProcessAgent, BusySendProcessAppServer, BusySendProcessTUI, BusySendProcessHelper)},
 		{"busy_send_messages", "send_mode", codes(BusySendWaitTurn, BusySendSteerTurn)},
 		{"busy_send_messages", "place", codes(BusySendHeld, BusySendClaimed, BusySendIssued, BusySendClosed)},
@@ -345,8 +352,8 @@ func TestBusySendRecordsRepresentation(t *testing.T) {
 			`INSERT INTO busy_conversations (conversation_id, store_id, instance_id, generation, publication, provider, recorded_at_ms, published_at_ms)
 				VALUES ('conv-3', '{store}', 'rec', 3, 'published', 'claude', 1, 1)`}, "UNIQUE"},
 		{"a second current Launch", []string{
-			`INSERT INTO busy_send_launches (launch_id, store_id, instance_id, conversation_id, life_number, provider, busy_send, kind, phase, recorded_at_ms)
-				VALUES ('launch-3', '{store}', 'rec', '{conv}', 3, 'claude', 'covered', 'reuse', 'current', 1)`}, "UNIQUE"},
+			`INSERT INTO busy_send_launches (launch_id, store_id, instance_id, conversation_id, life_number, provider, busy_send, held_count_limit, held_bytes_limit, kind, phase, recorded_at_ms)
+				VALUES ('launch-3', '{store}', 'rec', '{conv}', 3, 'claude', 'covered', 1000, 8000000, 'reuse', 'current', 1)`}, "UNIQUE"},
 		{"a second open hand-over", []string{
 			`UPDATE busy_send_handovers SET state = 'open', closed_at_ms = NULL WHERE handover_id = '{oldHandover}'`}, "UNIQUE"},
 		{"a second open force", []string{forceSQL("running-1"), forceSQL("running-2")}, "UNIQUE"},
@@ -385,6 +392,25 @@ func TestBusySendRecordsRepresentation(t *testing.T) {
 		{"a membership naming no Message", []string{
 			`INSERT INTO busy_send_handover_members (handover_id, member_index, message_id, prompt_index, store_id)
 				VALUES ('{handover}', 2, 'no-such-message', 0, '{store}')`}, "FOREIGN KEY"},
+		{"covered limits cannot be absent", []string{`UPDATE busy_send_launches SET held_count_limit=NULL WHERE launch_id='{launch}'`}, "CHECK"},
+		{"held capacity must be positive", []string{`UPDATE busy_send_launches SET held_bytes_limit=0 WHERE launch_id='{launch}'`}, "CHECK"},
+		{"held capacity must be an integer", []string{`UPDATE busy_send_launches SET held_count_limit=1.5 WHERE launch_id='{launch}'`}, "CHECK"},
+		{"uncovered limits must be absent", []string{`UPDATE busy_send_launches SET busy_send='not_covered' WHERE launch_id='{launch}'`}, "CHECK"},
+		{"message limit must be positive", []string{`UPDATE busy_send_launch_modes SET message_bytes=0 WHERE launch_id='{launch}' AND send_mode='wait_turn'`}, "CHECK"},
+		{"prompt limit must be an integer", []string{`UPDATE busy_send_launch_modes SET prompt_bytes=1.5 WHERE launch_id='{launch}' AND send_mode='wait_turn'`}, "CHECK"},
+		{"wrapper budget must be nonnegative", []string{`UPDATE busy_send_launch_modes SET wrapper_bytes=-1 WHERE launch_id='{launch}' AND send_mode='wait_turn'`}, "CHECK"},
+		{"unknown mode is refused", []string{`UPDATE busy_send_launch_modes SET send_mode='later_turn' WHERE launch_id='{launch}' AND send_mode='wait_turn'`}, "CHECK"},
+		{"unknown text kind is refused", []string{`UPDATE busy_send_launch_modes SET text_kind='binary' WHERE launch_id='{launch}' AND send_mode='wait_turn'`}, "CHECK"},
+		{"unknown measure is refused", []string{`UPDATE busy_send_launch_modes SET measure_kind='rewrite' WHERE launch_id='{launch}' AND send_mode='wait_turn'`}, "CHECK"},
+		{"budget measure cannot carry literals", []string{`UPDATE busy_send_launch_modes SET measure_kind='wrapper_budget' WHERE launch_id='{launch}' AND send_mode='wait_turn'`}, "CHECK"},
+		{"literal prefix must be text", []string{`UPDATE busy_send_launch_modes SET prefix=x'FF' WHERE launch_id='{launch}' AND send_mode='wait_turn'`}, "CHECK"},
+		{"escape count must be an integer", []string{`UPDATE busy_send_launch_modes SET escape_count=1.5 WHERE launch_id='{launch}' AND send_mode='wait_turn'`}, "CHECK"},
+		{"escape index must be nonnegative", []string{`UPDATE busy_send_launch_escapes SET escape_index=-1 WHERE launch_id='{launch}' AND send_mode='wait_turn' AND escape_index=0`}, "CHECK"},
+		{"escape cannot match empty text", []string{`UPDATE busy_send_launch_escapes SET raw='' WHERE launch_id='{launch}' AND send_mode='wait_turn' AND escape_index=0`}, "CHECK"},
+		{"escape cannot shrink bytes", []string{`UPDATE busy_send_launch_escapes SET raw='é',escaped='a' WHERE launch_id='{launch}' AND send_mode='wait_turn' AND escape_index=0`}, "CHECK"},
+		{"mode must name a Launch", []string{`UPDATE busy_send_launch_modes SET launch_id='missing' WHERE launch_id='{launch}' AND send_mode='wait_turn'`}, "FOREIGN KEY"},
+		{"escape must name a mode", []string{`UPDATE busy_send_launch_escapes SET launch_id='missing' WHERE launch_id='{launch}' AND send_mode='wait_turn' AND escape_index=0`}, "FOREIGN KEY"},
+		{"mode deletion does not cascade escapes", []string{`DELETE FROM busy_send_launch_modes WHERE launch_id='{launch}' AND send_mode='wait_turn'`}, "FOREIGN KEY"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, r := seed(t)
@@ -419,6 +445,228 @@ func TestBusySendRecordsRepresentation(t *testing.T) {
 	}
 }
 
+// b.kii PM1 repair 1: unsafe Raw literals are rejected by the validator and
+// SQLite independently; digits/LF in fixed text and escaped output stay legal.
+func TestBusySendLaunchEscapeLiterals(t *testing.T) {
+	cases := []struct {
+		name, raw string
+		valid     bool
+	}{
+		{"current Claude literals", "", true},
+		{"digits and LF outside Raw", "<", true},
+		{"non-ASCII decimal digit", "٢", true},
+	}
+	for _, literal := range invalidV21RawLiterals() {
+		cases = append(cases, struct {
+			name, raw string
+			valid     bool
+		}{literal.name, literal.raw, false})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := v21ClaudeCapabilities()
+			w := &c.Modes[0].Wrapping
+			if tc.raw != "" {
+				w.Prefix, w.Suffix = "0\n", "\n9"
+				w.Escapes[0] = BusySendEscape{Raw: tc.raw, Escaped: "0\n" + tc.raw}
+			}
+			t.Run("validator", func(t *testing.T) {
+				err := validateBusySendLaunchCapabilities(c)
+				if tc.valid && err != nil || !tc.valid && !errors.Is(err, errBusySendCapabilities) {
+					t.Errorf("validate Raw %q = %v; valid=%v", tc.raw, err, tc.valid)
+				}
+				if !tc.valid && w.Measure([]byte("unmatched")) != -1 {
+					t.Error("invalid Raw has a usable measure even without a matching body")
+				}
+			})
+			t.Run("SQLite", func(t *testing.T) {
+				s, r := seedBusySendRecordsRow(t)
+				tx, err := s.db.Begin()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				if _, err := tx.Exec(`UPDATE busy_send_launch_modes SET prefix=?,suffix=? WHERE launch_id=? AND send_mode='wait_turn'`, w.Prefix, w.Suffix, r.launch); err != nil {
+					t.Fatal(err)
+				}
+				res, err := tx.Exec(`UPDATE busy_send_launch_escapes SET raw=?,escaped=? WHERE launch_id=? AND send_mode='wait_turn' AND escape_index=0`, w.Escapes[0].Raw, w.Escapes[0].Escaped, r.launch)
+				if !tc.valid {
+					if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+						t.Fatalf("SQL Raw %q = %v; want CHECK refusal", tc.raw, err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n, _ := res.RowsAffected(); n != 1 {
+					t.Fatalf("escape setup changed %d rows; want 1", n)
+				}
+				if err := tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				got, err := readBusySendLaunchCapabilities(context.Background(), s.db, s.StoreID(), r.launch)
+				if err != nil || !reflect.DeepEqual(got, c) {
+					t.Fatalf("accepted snapshot = %+v, %v; want %+v", got, err, c)
+				}
+			})
+		})
+	}
+}
+
+// PM1: readers reject corrupt snapshots as store errors, never as unsupported
+// mode/provider fallbacks. Deliberate corruption bypasses DDL only in this test.
+func TestBusySendLaunchCapabilitiesReadFailures(t *testing.T) {
+	cases := []struct{ name, sql string }{
+		{"missing all modes", `DELETE FROM busy_send_launch_modes WHERE launch_id='{launch}'`},
+		{"missing Wait Turn", `DELETE FROM busy_send_launch_escapes WHERE launch_id='{launch}' AND send_mode='wait_turn'; DELETE FROM busy_send_launch_modes WHERE launch_id='{launch}' AND send_mode='wait_turn'`},
+		{"missing trailing escape", `DELETE FROM busy_send_launch_escapes WHERE launch_id='{launch}' AND send_mode='wait_turn' AND escape_index=1`},
+		{"escape gap", `UPDATE busy_send_launch_escapes SET escape_index=3 WHERE launch_id='{launch}' AND send_mode='wait_turn' AND escape_index=1`},
+		{"Launch from another store", `UPDATE busy_send_launches SET store_id='other' WHERE launch_id='{launch}'`},
+		{"mode from another store", `UPDATE busy_send_launch_modes SET store_id='other' WHERE launch_id='{launch}'`},
+		{"escape from another store", `UPDATE busy_send_launch_escapes SET store_id='other' WHERE launch_id='{launch}'`},
+		{"uncovered with children", `UPDATE busy_send_launches SET busy_send='not_covered',held_count_limit=NULL,held_bytes_limit=NULL WHERE launch_id='{launch}'`},
+		{"missing held limit", `UPDATE busy_send_launches SET held_bytes_limit=NULL WHERE launch_id='{launch}'`},
+		{"real held limit", `UPDATE busy_send_launches SET held_count_limit=2.5 WHERE launch_id='{launch}'`},
+		{"nonpositive held limit", `UPDATE busy_send_launches SET held_count_limit=0 WHERE launch_id='{launch}'`},
+		{"real message limit", `UPDATE busy_send_launch_modes SET message_bytes=1.5 WHERE launch_id='{launch}'`},
+		{"nonpositive prompt limit", `UPDATE busy_send_launch_modes SET prompt_bytes=0 WHERE launch_id='{launch}'`},
+		{"negative wrapper", `UPDATE busy_send_launch_modes SET wrapper_bytes=-1 WHERE launch_id='{launch}'`},
+		{"unknown mode", `UPDATE busy_send_launch_modes SET send_mode='later_turn' WHERE launch_id='{launch}' AND send_mode='wait_turn'`},
+		{"unknown text kind", `UPDATE busy_send_launch_modes SET text_kind='binary' WHERE launch_id='{launch}'`},
+		{"unknown measure", `UPDATE busy_send_launch_modes SET measure_kind='rewrite' WHERE launch_id='{launch}'`},
+		{"blob literal", `UPDATE busy_send_launch_modes SET prefix=x'FF' WHERE launch_id='{launch}'`},
+		{"budget with literals", `UPDATE busy_send_launch_modes SET measure_kind='wrapper_budget' WHERE launch_id='{launch}'`},
+		{"empty escape", `UPDATE busy_send_launch_escapes SET raw='' WHERE launch_id='{launch}'`},
+		{"shrinking escape", `UPDATE busy_send_launch_escapes SET escaped='x' WHERE launch_id='{launch}'`},
+	}
+	for _, literal := range invalidV21RawLiterals() {
+		cases = append(cases, struct{ name, sql string }{"invalid Raw " + literal.name,
+			fmt.Sprintf(`UPDATE busy_send_launch_escapes SET raw=CAST(x'%x' AS TEXT) WHERE launch_id='{launch}' AND send_mode='wait_turn' AND escape_index=0`, literal.raw)})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, r := seedBusySendRecordsRow(t)
+			ctx := context.Background()
+			conn, err := s.db.Conn(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, q := range []string{`PRAGMA foreign_keys=OFF`, `PRAGMA ignore_check_constraints=ON`,
+				strings.ReplaceAll(tc.sql, "{launch}", r.launch), `PRAGMA ignore_check_constraints=OFF`, `PRAGMA foreign_keys=ON`} {
+				if _, err := conn.ExecContext(ctx, q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_ = conn.Close()
+			before := dbDump(t, s.filePath)
+			if _, err := readBusySendLaunchCapabilities(ctx, s.db, s.StoreID(), r.launch); !errors.Is(err, errBusySendCapabilities) {
+				t.Fatalf("snapshot read = %v; want invalid capabilities", err)
+			}
+			// Public reads intentionally short-circuit uncovered Launches;
+			// the core reader above still validates their absent-facts rule.
+			if tc.name != "uncovered with children" {
+				if _, err := s.ReadBusySendObservation("rec", time.Second); !errors.Is(err, errBusySendCapabilities) {
+					t.Fatalf("observation = %v; want store error", err)
+				}
+				if _, err := s.AdmitBusySend(BusySendAdmissionRequest{InstanceID: "rec", Text: []byte("new")}); !errors.Is(err, errBusySendCapabilities) {
+					t.Fatalf("admission = %v; want store error", err)
+				}
+			}
+			if !reflect.DeepEqual(before, dbDump(t, s.filePath)) {
+				t.Fatal("invalid snapshot read/admission changed the store")
+			}
+		})
+	}
+}
+
+// PM1 fixes byte arithmetic, including empty literal measures and original-body
+// escape counting. Overflow is invalid, never a small admissible prompt.
+func TestBusySendStoredMeasureSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode BusySendModeLimits
+		body string
+		want int64
+	}{
+		{"empty literal is not a budget", BusySendModeLimits{MeasureKind: BusySendMeasureLiteralEscapes, WrapperBytes: 999}, "é", 2},
+		{"budget", BusySendModeLimits{MeasureKind: BusySendMeasureWrapperBudget, WrapperBytes: 7}, "é", 9},
+		{"ordered escapes count the original", BusySendModeLimits{MeasureKind: BusySendMeasureLiteralEscapes,
+			Wrapping: BusySendWrapping{Prefix: "é[", Suffix: "]", Escapes: []BusySendEscape{{"<", "&lt;"}, {"&", "&amp;"}}}}, "<&", 13},
+		{"digits and LF outside Raw", BusySendModeLimits{MeasureKind: BusySendMeasureLiteralEscapes,
+			Wrapping: BusySendWrapping{Prefix: "0\n", Suffix: "\n9", Escapes: []BusySendEscape{{"<", "0\n"}}}}, "<", 6},
+		{"overflow", BusySendModeLimits{MeasureKind: BusySendMeasureWrapperBudget, WrapperBytes: math.MaxInt64}, "x", -1},
+		{"invalid measure", BusySendModeLimits{MeasureKind: "future"}, "x", -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.mode.Measure([]byte(tc.body)); got != tc.want {
+				t.Fatalf("Measure(%q) = %d; want %d", tc.body, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBusySendLaunchCapabilitiesOverflow(t *testing.T) {
+	s, r := seedBusySendRecordsRow(t)
+	c := &BusySendLaunchCapabilities{HeldCount: math.MaxInt64, HeldBytes: math.MaxInt64,
+		Modes: []BusySendModeLimits{{Mode: BusySendWaitTurn, TextKind: BusySendTextUTF8TabLF,
+			MessageBytes: 1, PromptBytes: math.MaxInt64, MeasureKind: BusySendMeasureWrapperBudget, WrapperBytes: math.MaxInt64}}}
+	tx, err := s.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	seedV21Capabilities(t, tx, r.launch, c)
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	before := dbDump(t, s.filePath)
+	if _, err := s.AdmitBusySend(BusySendAdmissionRequest{InstanceID: "rec", Text: []byte("x")}); !errors.Is(err, errBusySendCapabilities) {
+		t.Fatalf("overflow admission = %v; want store error", err)
+	}
+	if !reflect.DeepEqual(before, dbDump(t, s.filePath)) {
+		t.Fatal("overflow allocated custody or changed the snapshot")
+	}
+}
+
+// PM1: capability insertion failures, including a deferred child reference at
+// COMMIT, roll back schema, core rows and stamp, preserving the authorization.
+func TestV21CapabilityInsertRollback(t *testing.T) {
+	for _, stage := range []string{"mode", "escape", "commit"} {
+		t.Run(stage, func(t *testing.T) {
+			f := makeV20Fixture(t, t.TempDir())
+			preAddV21Core(t, f.path, "busy_conversations", "busy_send_launches", "busy_send_launch_modes", "busy_send_launch_escapes")
+			withRaw(t, f.path, func(db *sql.DB) {
+				q := `CREATE TRIGGER fail_capability BEFORE INSERT ON busy_send_launch_modes BEGIN SELECT RAISE(ABORT,'capability insert failed'); END`
+				if stage == "escape" {
+					q = strings.Replace(q, "busy_send_launch_modes", "busy_send_launch_escapes", 1)
+				} else if stage == "commit" {
+					q = `CREATE TRIGGER fail_capability AFTER INSERT ON busy_send_launch_escapes BEGIN
+					    UPDATE busy_send_launch_escapes SET launch_id=NEW.launch_id || '-missing' WHERE launch_id=NEW.launch_id AND send_mode=NEW.send_mode AND escape_index=NEW.escape_index; END`
+				}
+				mustExec(t, db, q)
+			})
+			before := dbDump(t, f.path)
+			writeSentinel(t, f.dir, 20, schemaVersion)
+			s, err := openMigrationTestStore(t, f.path)
+			if s != nil {
+				_ = s.Close()
+			}
+			want := "capability insert failed"
+			if stage == "commit" {
+				want = "FOREIGN KEY constraint failed"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("migration = %v; want %s", err, want)
+			}
+			if !reflect.DeepEqual(before, dbDump(t, f.path)) || readUserVersion(t, f.path) != 20 {
+				t.Fatal("failed capability insert changed schema, records or stamp")
+			}
+			assertSentinel(t, f.dir, true)
+		})
+	}
+}
+
 // seedBusySendRecordsRow opens a store whose pending Claude row "rec" is bound,
 // covered, to seedBusySendRecords' published conversation and current Launch.
 func seedBusySendRecordsRow(t *testing.T) (*Store, busySendRecords) {
@@ -429,10 +677,7 @@ func seedBusySendRecordsRow(t *testing.T) (*Store, busySendRecords) {
 	}
 	// Replace the fresh insertion's empty core with the richer fixture before
 	// exposing it to a test. No retained custody exists at this point.
-	mustExec(t, s.db, `DELETE FROM busy_send_launches WHERE instance_id='rec'`)
-	mustExec(t, s.db, `DELETE FROM busy_conversations WHERE instance_id='rec'`)
 	r := seedBusySendRecords(t, s.db, s.StoreID(), "rec")
-	mustExec(t, s.db, `UPDATE spawns SET busy_conversation_id=?,busy_send='covered',life_number=?,launch_token=? WHERE instance_id='rec'`, r.conversation, recLife, recToken)
 	return s, r
 }
 
@@ -540,6 +785,7 @@ func TestV21MigrationRecordsEveryInstance(t *testing.T) {
 	assertV21Backfill(t, f.path, f.ids...)
 	withRaw(t, f.path, func(db *sql.DB) {
 		for table, want := range map[string]int{"busy_conversations": len(f.ids), "busy_send_launches": len(f.ids),
+			"busy_send_launch_modes": 4, "busy_send_launch_escapes": 8,
 			"busy_send_launch_processes": 0, "busy_send_messages": 0, "busy_send_results": 0, "busy_send_handovers": 0,
 			"busy_send_prompts": 0, "busy_send_handover_members": 0, "busy_send_forces": 0, "busy_send_force_members": 0, "busy_send_pause_claims": 0} {
 			var n int
@@ -728,14 +974,19 @@ func TestV21MigrationHeldUntilRoute(t *testing.T) {
 // TestV21MigrationCompatibleReentry: over a compatible partial core holding
 // 'pre' bound by an earlier run (NULL token on both sides), 'rec' bound to
 // seedBusySendRecords' covered records, v20CodexID unbound beside a retired
-// first conversation and v20DroidID unbound but already recorded covered, the
+// first conversation and v20DroidID bound with a complete synthetic snapshot, the
 // hop keeps every recorded core row and bound row exactly, records only the
-// unbound rows (Codex's next generation; Droid covered, as coverage never
-// decreases), and a second run changes nothing.
+// unbound rows (Codex's next generation). Different established capability
+// numbers and ordered literals survive, even for a locally unknown provider.
 func TestV21MigrationCompatibleReentry(t *testing.T) {
 	f := makeV20Fixture(t, t.TempDir())
 	preAddV21Core(t, f.path, allV21Core()...)
 	bindV21Row(t, f.path, "pre", 1, BusySendNotCovered, nil)
+	other := v21ClaudeCapabilities()
+	other.HeldCount, other.HeldBytes = 17, 123456
+	other.Modes[0].MessageBytes, other.Modes[0].PromptBytes = 321, 4321
+	other.Modes[0].Wrapping = BusySendWrapping{Prefix: "0\n<", Suffix: ">\n9", Escapes: []BusySendEscape{{"<", "&lt;0\n"}, {"&", "&amp;"}}}
+	bindV21Row(t, f.path, v20DroidID, 1, BusySendCovered, nil, other)
 	var rec busySendRecords
 	withRaw(t, f.path, func(db *sql.DB) {
 		insertRow(t, db, "spawns", map[string]any{"instance_id": "rec", "agent": AgentClaude, "state": StateWaiting, "cwd": "/work/rec",
@@ -745,11 +996,10 @@ func TestV21MigrationCompatibleReentry(t *testing.T) {
 		insertRow(t, db, "busy_conversations", map[string]any{"conversation_id": "codex-retired", "store_id": f.storeID, "instance_id": v20CodexID,
 			"generation": 1, "publication": "retired", "provider": AgentCodex, "recorded_at_ms": 100, "published_at_ms": 100,
 			"retired_at_ms": 200, "retired_reason": "record_deleted"})
-		mustExec(t, db, `UPDATE spawns SET busy_send = 'covered' WHERE instance_id = ?`, v20DroidID)
 	})
 	var cols []string
 	withRaw(t, f.path, func(db *sql.DB) { cols = tableColumnNames(t, db, "spawns") })
-	boundRows := map[string]map[string]string{"pre": readRawSpawn(t, f.path, "pre", cols), "rec": readRawSpawn(t, f.path, "rec", cols)}
+	boundRows := map[string]map[string]string{"pre": readRawSpawn(t, f.path, "pre", cols), "rec": readRawSpawn(t, f.path, "rec", cols), v20DroidID: readRawSpawn(t, f.path, v20DroidID, cols)}
 	before := dbDump(t, f.path)
 	writeSentinel(t, f.dir, 20, schemaVersion)
 	s, err := openMigrationTestStore(t, f.path)
@@ -758,6 +1008,15 @@ func TestV21MigrationCompatibleReentry(t *testing.T) {
 	}
 	s.Close()
 	after := dbDump(t, f.path)
+	withRaw(t, f.path, func(db *sql.DB) {
+		got, err := readBusySendLaunchCapabilities(context.Background(), db, f.storeID, "launch-conv-"+v20DroidID+"-1")
+		if err != nil || !reflect.DeepEqual(got, other) {
+			t.Fatalf("retained unknown-provider snapshot = %+v, %v; want %+v", got, err, other)
+		}
+		if got.Modes[0].Measure([]byte("<&")) != 17 {
+			t.Fatal("stored ordered escapes did not retain original-body byte semantics")
+		}
+	})
 	for key, value := range before {
 		if strings.HasPrefix(key, "rows busy_") {
 			rows, got := value.([]string), after[key].([]string)
@@ -829,7 +1088,7 @@ func TestV21MigrationRefusesBeforeMutation(t *testing.T) {
 		}
 	}
 	other := "0000000000000000"
-	for _, tc := range []struct {
+	cases := []struct {
 		name    string
 		arrange func(*testing.T, string)
 		want    string
@@ -882,6 +1141,15 @@ func TestV21MigrationRefusesBeforeMutation(t *testing.T) {
 			`INSERT INTO busy_send_launches (launch_id, store_id, instance_id, conversation_id, life_number, provider, busy_send, kind, phase,
 			recorded_at_ms) SELECT 'pending', value, 'pre', 'retired', 0, 'claude', 'not_covered', 'spawn', 'uncertain', 1
 			FROM store_meta WHERE key = 'store_id'`), "ambiguous busy_send_launches"},
+		{"unbound covered provider has no author", withCore(`UPDATE spawns SET agent='droid',busy_send='covered' WHERE instance_id='pre'`), "no covering capability table row"},
+		{"covered snapshot lacks modes", func(t *testing.T, path string) {
+			bound(BusySendCovered, nil)(t, path)
+			exec(`DELETE FROM busy_send_launch_escapes`, `DELETE FROM busy_send_launch_modes`)(t, path)
+		}, "invalid busy-send Launch capabilities"},
+		{"snapshot lacks its trailing escape", func(t *testing.T, path string) {
+			bound(BusySendCovered, nil)(t, path)
+			exec(`DELETE FROM busy_send_launch_escapes WHERE send_mode='wait_turn' AND escape_index=1`)(t, path)
+		}, "invalid busy-send Launch capabilities"},
 		{"a core identity of another store", exec(`INSERT INTO store_meta (key, value) VALUES ('busy_send_core', 'busy-send-core-v1:` + other + `')`), "incompatible busy-send core identity"},
 		{"core records of another store", bound(BusySendNotCovered, func(conv, launch map[string]any) {
 			conv["store_id"], launch["store_id"] = other, other
@@ -891,14 +1159,32 @@ func TestV21MigrationRefusesBeforeMutation(t *testing.T) {
 			exec(`INSERT INTO busy_send_launch_processes (launch_id, role, store_id, pid, start_time, recorded_at_ms)
 				SELECT 'no-such-launch', 'agent', value, 1, 'x', 0 FROM store_meta WHERE key = 'store_id'`)(t, path)
 		}, "busy_send_launch_processes refers to a missing record"},
-	} {
+	}
+	// b.kii PM1 repair 1: a recognized partial schema can still contain unsafe
+	// data. Validate it before the exempt hop writes anything or consumes consent.
+	for _, literal := range invalidV21RawLiterals() {
+		cases = append(cases, struct {
+			name    string
+			arrange func(*testing.T, string)
+			want    string
+		}{"invalid Raw " + literal.name, func(t *testing.T, path string) {
+			bound(BusySendCovered, nil)(t, path)
+			exec(`PRAGMA ignore_check_constraints=ON`, fmt.Sprintf(`UPDATE busy_send_launch_escapes SET raw=CAST(x'%x' AS TEXT) WHERE send_mode='wait_turn' AND escape_index=0`, literal.raw))(t, path)
+		}, "invalid busy-send Launch capabilities"})
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := makeVersionedDB(t, dir, 20)
 			seedV16PermissionHistory(t, path)
 			tc.arrange(t, path)
 			before := dbDump(t, path)
+			ddlBefore := schemaDeclarations(t, path)
 			writeSentinel(t, dir, 20, schemaVersion)
+			sentinelBefore, err := os.ReadFile(filepath.Join(dir, sentinelFilename))
+			if err != nil {
+				t.Fatal(err)
+			}
 			s, err := openMigrationTestStore(t, path)
 			if s != nil {
 				s.Close()
@@ -907,10 +1193,13 @@ func TestV21MigrationRefusesBeforeMutation(t *testing.T) {
 				!strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Open = %v; want a v20→v21 schema mismatch naming %q", err, tc.want)
 			}
-			if readUserVersion(t, path) != 20 || !reflect.DeepEqual(before, dbDump(t, path)) {
+			if readUserVersion(t, path) != 20 || !reflect.DeepEqual(before, dbDump(t, path)) || !slices.Equal(ddlBefore, schemaDeclarations(t, path)) {
 				t.Error("the refused hop changed the schema, data or stamp")
 			}
 			assertSentinel(t, dir, true)
+			if got, err := os.ReadFile(filepath.Join(dir, sentinelFilename)); err != nil || string(got) != string(sentinelBefore) {
+				t.Errorf("the refused hop changed the sentinel: %q, %v; want %q", got, err, sentinelBefore)
+			}
 		})
 	}
 }
@@ -944,7 +1233,7 @@ func TestV21MigrationUncertainCommit(t *testing.T) {
 		t.Fatalf("user_version %d; want the committed %d", v, schemaVersion)
 	}
 	bound := assertV21Backfill(t, f.path, f.ids...)
-	launches := dbDump(t, f.path)["rows busy_send_launches"]
+	committed := dbDump(t, f.path)
 	for i := 0; i < 2; i++ {
 		mark := TrailMark(t)
 		s, err := Open(f.path)
@@ -959,8 +1248,10 @@ func TestV21MigrationUncertainCommit(t *testing.T) {
 		if got := assertV21Recorded(t, f.path, v20ClaudeID); got.conversation != bound[v20ClaudeID].conversation || got.acceptedSeq != 7 {
 			t.Errorf("reopen %d: conversation %+v; want %s with the later accepted_seq 7 kept", i, got, bound[v20ClaudeID].conversation)
 		}
-		if got := dbDump(t, f.path)["rows busy_send_launches"]; !reflect.DeepEqual(got, launches) {
-			t.Errorf("reopen %d changed the committed Launches:\n got  %v\n want %v", i, got, launches)
+		for _, table := range []string{"busy_send_launches", "busy_send_launch_modes", "busy_send_launch_escapes"} {
+			if got := dbDump(t, f.path)["rows "+table]; !reflect.DeepEqual(got, committed["rows "+table]) {
+				t.Errorf("reopen %d changed the committed %s", i, table)
+			}
 		}
 		assertSentinel(t, f.dir, true)
 		if n := len(trailEventsSince(t, mark, "ad.schema.migrated")); n != 0 {
@@ -1009,7 +1300,26 @@ func TestV21OpenRefusesUnrecognizedCore(t *testing.T) {
 		{"identity missing", exec(`DELETE FROM store_meta WHERE key = 'busy_send_core'`)},
 		{"identity of another store", exec(`UPDATE store_meta SET value = 'busy-send-core-v1:0000000000000000' WHERE key = 'busy_send_core'`)},
 		{"a core table missing", exec(`DROP TABLE busy_send_pause_claims`)},
+		{"pre-capability v21 is never converted", func(t *testing.T, path string) {
+			withRaw(t, path, func(db *sql.DB) {
+				mustExec(t, db, `DROP TABLE busy_send_launch_escapes`)
+				mustExec(t, db, `DROP TABLE busy_send_launch_modes`)
+				mustExec(t, db, `DROP TABLE busy_send_launches`)
+				mustExec(t, db, preCapabilitiesV21LaunchDDL)
+				for _, o := range busySendCoreObjects {
+					if o.kind == "index" && strings.Contains(o.ddl, " ON busy_send_launches(") {
+						mustExec(t, db, o.ddl)
+					}
+				}
+			})
+		}},
 		{"a core index missing", exec(`DROP INDEX idx_busy_send_forces_open`)},
+		{"pre-monotone v21 is never converted", func(t *testing.T, path string) {
+			withRaw(t, path, func(db *sql.DB) {
+				mustExec(t, db, `DROP TABLE busy_send_launch_escapes`)
+				mustExec(t, db, preMonotoneV21EscapesDDL)
+			})
+		}},
 		{"a spawns column missing", exec(`ALTER TABLE spawns DROP COLUMN busy_conversation_id`)},
 		{"a table declared otherwise", rewrite("busy_send_pause_claims", "'standing', 'released', 'ended')", "'standing', 'released', 'ended', 'lost')")},
 		{"unreleased Cursor launch route", rewrite("busy_send_launches", "'claude_hooks', 'codex_app_server'", "'claude_hooks', 'codex_app_server', 'cursor_acp'")},
@@ -1026,6 +1336,7 @@ func TestV21OpenRefusesUnrecognizedCore(t *testing.T) {
 			fresh.Close()
 			tc.arrange(t, path)
 			before := dbDump(t, path)
+			ddlBefore := schemaDeclarations(t, path)
 			s, err := Open(path)
 			if s != nil {
 				s.Close()
@@ -1033,7 +1344,7 @@ func TestV21OpenRefusesUnrecognizedCore(t *testing.T) {
 			if !errors.Is(err, errBusySendCoreUnrecognized) || !errors.Is(err, ErrSchemaMismatch) || !strings.Contains(err.Error(), "busy-send core not recognized") {
 				t.Fatalf("Open = %v; want ErrSchemaMismatch, busy-send core not recognized", err)
 			}
-			if !reflect.DeepEqual(before, dbDump(t, path)) {
+			if readUserVersion(t, path) != schemaVersion || !reflect.DeepEqual(before, dbDump(t, path)) || !slices.Equal(ddlBefore, schemaDeclarations(t, path)) {
 				t.Error("the refused open changed the store")
 			}
 			assertSentinel(t, filepath.Dir(path), false)

@@ -20,6 +20,26 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
+func TestResumeDelegationRejectsOldCapabilityContract(t *testing.T) {
+	// Serial: scratch HOME; reuse the selector's no-launch/custody observers.
+	// b.kii PM1: the old v21 tag alone cannot authorize a covering runtime.
+	e := newDelegateEnv(t)
+	e.ready(t, "pre-capability", 1, []string{"claude", "codex"}, "45bbc95a6429e2f483f3ab4bc1cc0b8d12d40f607e06b6bf4416d87fff1cb7f7", true)
+	e.ready(t, "intermediate-capability", 2, []string{"claude", "codex"}, "1d3840eb6589d5cd258eecec4f9f7514a225881e96b95ba0896c6abceaae061c", true)
+	e.run(t, func(resumedelegate.Request) ([]byte, bool, error) {
+		t.Fatal("delegated to an incompatible capability contract")
+		return nil, false, nil
+	})
+	check := e.untouched(t)
+	_, err := e.c.Resume(api.ResumeParams{InstanceID: e.row.ID})
+	assertOneName(t, err, "ErrSpawnNotResumable")
+	want := api.NotResumableDetails{Cause: "covering_version_unavailable", Provider: "codex"}
+	if !reflect.DeepEqual(api.ErrDetails(err), want) || len(e.calls) != 0 {
+		t.Fatalf("resume = %v / %+v, calls=%d; want %+v without a launch", err, api.ErrDetails(err), len(e.calls), want)
+	}
+	check()
+}
+
 func TestResumeDelegationRetainedBeforeFloorGrowth(t *testing.T) {
 	// Serial: scratch HOME; one selector fixture for retained-ready versus
 	// newly refused candidates, not a second publication-validation matrix.

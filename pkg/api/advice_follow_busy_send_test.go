@@ -106,8 +106,8 @@ func TestAdviceFollow_A32_CantSendSameLaunchWithout(t *testing.T) {
 	}
 }
 
-// busySteerUnsupported is steer_turn's refusal for a covered provider with no
-// capability row, whose fallback offers Wait Turn only.
+// busySteerUnsupported is steer_turn's refusal when the stored Launch offers
+// only Wait Turn (or a creating version's own table cannot offer Steer).
 var busySteerUnsupported = api.CantSendDetails{Class: "cant_send", Reason: "steer_unsupported", ResendSafe: true, RetryWith: "new_send"}
 
 // busyAdviceRow is a Client and a covered live row of agent ("" is Claude)
@@ -136,11 +136,15 @@ func busyFollowAccepted(t *testing.T, e *killEnv, c *api.Client, p api.SendKeysP
 	return res
 }
 
-// TestAdviceFollow_E25_SteerUnsupportedSendWaitTurn: a covered send with Steer Turn to a provider with no capability row (a later release's covered Codex row, whose fallback offers Wait Turn only), then the same send with Wait Turn.
+// TestAdviceFollow_E25_SteerUnsupportedSendWaitTurn: a genuinely Wait-only
+// stored Launch refuses Steer, then accepts the literal Wait Turn follow-up.
 // E25: "send it with send_mode wait_turn"
 func TestAdviceFollow_E25_SteerUnsupportedSendWaitTurn(t *testing.T) {
 	t.Parallel()
 	e, c, id := busyAdviceRow(t, "codex")
+	if err := apitest.SeedBusySendCoverage(e.dbPath, id, store.BusySendCovered, store.BusySendCovered, storefix.BusySendWaitOnlyCapabilities()); err != nil {
+		t.Fatal(err)
+	}
 	p := api.SendKeysParams{InstanceID: id, Text: "steer", SendMode: ptr("steer_turn")}
 	_, err := c.SendKeys(p)
 	adviceAssertAdvice(t, err, api.ErrCantSend, "send it with send_mode wait_turn")

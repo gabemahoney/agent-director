@@ -118,6 +118,9 @@ const busyConversationsDDL = `CREATE TABLE IF NOT EXISTS busy_conversations (
 //     when the Launch is created from the launching version's covered set
 //     (SR-9.1) and kept until it ends. spawns.busy_send repeats the current
 //     Launch's value for the row's readers.
+//   - held_count_limit, held_bytes_limit: immutable admission reservation
+//     limits, positive for covered Launches and NULL otherwise. Modes and
+//     their measures are the Launch's busy_send_launch_modes/escapes rows.
 //   - kind, phase: BusySendLaunchKind, BusySendLaunchPhase. One current and at
 //     most one candidate or uncertain Launch per instance. The candidate
 //     Launch and its external creation outcome stay apart from the published
@@ -155,6 +158,8 @@ const busySendLaunchesDDL = `CREATE TABLE IF NOT EXISTS busy_send_launches (
     launch_token          TEXT,
     provider              TEXT NOT NULL CHECK(provider <> ''),
     busy_send             TEXT NOT NULL CHECK(busy_send IN ('not_covered', 'covered')),
+    held_count_limit      INTEGER,
+    held_bytes_limit      INTEGER,
     kind                  TEXT NOT NULL CHECK(kind IN ('spawn', 'reuse', 'resume', 'migrated')),
     phase                 TEXT NOT NULL CHECK(phase IN ('candidate', 'uncertain', 'failed', 'current', 'superseded')),
     route_kind            TEXT CHECK(route_kind IN ('claude_hooks', 'codex_app_server')),
@@ -168,6 +173,9 @@ const busySendLaunchesDDL = `CREATE TABLE IF NOT EXISTS busy_send_launches (
     recorded_at_ms        INTEGER NOT NULL,
     ended_at_ms           INTEGER,
     end_cause             TEXT CHECK(end_cause IN ('process_exited', 'launch_published', 'creation_failed', 'record_deleted', 'candidate_replaced', 'agent_missing')),
+    CHECK((busy_send = 'covered' AND typeof(held_count_limit) = 'integer' AND held_count_limit > 0
+        AND typeof(held_bytes_limit) = 'integer' AND held_bytes_limit > 0)
+        OR (busy_send = 'not_covered' AND held_count_limit IS NULL AND held_bytes_limit IS NULL)),
     CHECK(kind IS 'resume' OR (override_send_mode IS NULL AND override_confirmed IS NULL AND override_confirm_from_transcripts IS NULL)),
     CHECK((ended_at_ms IS NULL) = (end_cause IS NULL)),
     CHECK((phase = 'failed') = (end_cause IS 'creation_failed')),
@@ -175,6 +183,55 @@ const busySendLaunchesDDL = `CREATE TABLE IF NOT EXISTS busy_send_launches (
     CHECK(end_cause IS NOT 'record_deleted' OR phase IS 'superseded'),
     CHECK(end_cause IS NOT 'candidate_replaced' OR phase IS 'superseded'),
     FOREIGN KEY(conversation_id) REFERENCES busy_conversations(conversation_id) DEFERRABLE INITIALLY DEFERRED
+);`
+
+// These are immutable admission facts, inserted with their Launch. Later
+// versions read and write the same columns directly, even for providers an
+// older binary cannot route. Only numbers and literal wrapping data can vary:
+// new modes, text kinds, measure algorithms or declaration changes require an
+// SR-7.2-compatible redesign, never a conversion of this permanent core.
+// Every covered Launch has wait_turn; uncovered Launches have no mode rows.
+// literal_escapes counts each ordered raw literal on the ORIGINAL body and
+// adds its byte expansion; it is not sequential replacement. wrapper_budget
+// counts only body bytes plus wrapper_bytes, with no literal wrapping.
+const busySendLaunchModesDDL = `CREATE TABLE IF NOT EXISTS busy_send_launch_modes (
+    launch_id      TEXT NOT NULL,
+    send_mode      TEXT NOT NULL CHECK(send_mode IN ('wait_turn', 'steer_turn')),
+    store_id       TEXT NOT NULL,
+    message_bytes  INTEGER NOT NULL CHECK(typeof(message_bytes) = 'integer' AND message_bytes > 0),
+    prompt_bytes   INTEGER NOT NULL CHECK(typeof(prompt_bytes) = 'integer' AND prompt_bytes > 0),
+    text_kind      TEXT NOT NULL CHECK(text_kind IN ('utf8_tab_lf')),
+    wrapper_bytes  INTEGER NOT NULL CHECK(typeof(wrapper_bytes) = 'integer' AND wrapper_bytes >= 0),
+    measure_kind   TEXT NOT NULL CHECK(measure_kind IN ('wrapper_budget', 'literal_escapes')),
+    prefix         TEXT NOT NULL CHECK(typeof(prefix) = 'text'),
+    suffix         TEXT NOT NULL CHECK(typeof(suffix) = 'text'),
+    escape_count   INTEGER NOT NULL CHECK(typeof(escape_count) = 'integer' AND escape_count >= 0),
+    CHECK(measure_kind <> 'wrapper_budget' OR (prefix = '' AND suffix = '' AND escape_count = 0)),
+    PRIMARY KEY(launch_id, send_mode),
+    FOREIGN KEY(launch_id) REFERENCES busy_send_launches(launch_id) DEFERRABLE INITIALLY DEFERRED
+);`
+
+// escape_index is contiguous from zero. Raw literals exclude ASCII digits
+// and LF, preserving append-monotone measurement as separator ordinals change
+// (BusySendEscape). BLOB instr checks inspect every byte, including after NUL,
+// without depending on text decoding. Expansions cannot undercount the body.
+// The mode reader also checks coverage, store identity and completeness;
+// foreign keys never cascade, so deleting an instance retains these facts.
+const busySendLaunchEscapesDDL = `CREATE TABLE IF NOT EXISTS busy_send_launch_escapes (
+    launch_id      TEXT NOT NULL,
+    send_mode      TEXT NOT NULL CHECK(send_mode IN ('wait_turn', 'steer_turn')),
+    escape_index   INTEGER NOT NULL CHECK(typeof(escape_index) = 'integer' AND escape_index >= 0),
+    store_id       TEXT NOT NULL,
+    raw            TEXT NOT NULL CHECK(typeof(raw) = 'text' AND length(CAST(raw AS BLOB)) > 0
+        AND instr(CAST(raw AS BLOB), x'0a') = 0
+        AND instr(CAST(raw AS BLOB), x'30') = 0 AND instr(CAST(raw AS BLOB), x'31') = 0
+        AND instr(CAST(raw AS BLOB), x'32') = 0 AND instr(CAST(raw AS BLOB), x'33') = 0
+        AND instr(CAST(raw AS BLOB), x'34') = 0 AND instr(CAST(raw AS BLOB), x'35') = 0
+        AND instr(CAST(raw AS BLOB), x'36') = 0 AND instr(CAST(raw AS BLOB), x'37') = 0
+        AND instr(CAST(raw AS BLOB), x'38') = 0 AND instr(CAST(raw AS BLOB), x'39') = 0),
+    escaped        TEXT NOT NULL CHECK(typeof(escaped) = 'text' AND length(CAST(escaped AS BLOB)) >= length(CAST(raw AS BLOB))),
+    PRIMARY KEY(launch_id, send_mode, escape_index),
+    FOREIGN KEY(launch_id, send_mode) REFERENCES busy_send_launch_modes(launch_id, send_mode) DEFERRABLE INITIALLY DEFERRED
 );`
 
 // busy_send_launch_processes binds a Launch to the processes its route owns
@@ -586,6 +643,8 @@ type busySendCoreObject struct {
 var busySendCoreObjects = []busySendCoreObject{
 	{"busy_conversations", "table", busyConversationsDDL},
 	{"busy_send_launches", "table", busySendLaunchesDDL},
+	{"busy_send_launch_modes", "table", busySendLaunchModesDDL},
+	{"busy_send_launch_escapes", "table", busySendLaunchEscapesDDL},
 	{"busy_send_launch_processes", "table", busySendLaunchProcessesDDL},
 	{"busy_send_messages", "table", busySendMessagesDDL},
 	{"busy_send_results", "table", busySendResultsDDL},
@@ -1002,7 +1061,68 @@ func validateV20toV21(ctx context.Context, tx *sql.Tx) (string, v21Plan, error) 
 			return "", plan, fmt.Errorf("%w: store: v20→v21 %s", ErrSchemaMismatch, check.refusal)
 		}
 	}
+	if err := validateV21Capabilities(ctx, tx, storeID, plan); err != nil {
+		if errors.Is(err, errBusySendCapabilities) {
+			return "", plan, fmt.Errorf("%w: store: v20→v21 %w", ErrSchemaMismatch, err)
+		}
+		return "", plan, err
+	}
 	return storeID, plan, nil
+}
+
+// Validate every established snapshot, including historical Launches, before
+// any DDL. Bound records are never regenerated from this version's table.
+// An unbound covered row needs a real covering author to create its Launch.
+func validateV21Capabilities(ctx context.Context, tx *sql.Tx, storeID string, plan v21Plan) error {
+	if plan.objects["busy_send_launches"] {
+		rows, err := tx.QueryContext(ctx, `SELECT launch_id FROM busy_send_launches`)
+		if err != nil {
+			return err
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if _, err := readBusySendLaunchCapabilitiesPresent(ctx, tx, storeID, id,
+				plan.objects["busy_send_launch_modes"], plan.objects["busy_send_launch_escapes"]); err != nil {
+				return err
+			}
+		}
+	}
+	coverage, unbound := `'not_covered'`, `1`
+	if plan.columns["busy_send"] {
+		coverage = `busy_send`
+	}
+	if plan.columns["busy_conversation_id"] {
+		unbound = `busy_conversation_id IS NULL`
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT `+busySendProviderSQL("agent")+`, `+coverage+` FROM spawns WHERE `+unbound)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var provider, covered string
+		if err := rows.Scan(&provider, &covered); err != nil {
+			return err
+		}
+		c := ResumeLaunchCoverage(BusySendCoverage(covered), provider)
+		if _, err := newBusySendLaunchCapabilities(provider, c); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // v21Check is one of phase 1's read-only refusal checks: query selects true
@@ -1188,6 +1308,11 @@ func backfillV21Conversations(ctx context.Context, tx *sql.Tx, storeID string, n
 		if r.covered {
 			coverage = BusySendCovered
 		}
+		caps, err := newBusySendLaunchCapabilities(r.provider, coverage)
+		if err != nil {
+			return err
+		}
+		heldCount, heldBytes := heldLimitArgs(caps)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO busy_conversations (
 		        conversation_id, store_id, instance_id, generation, publication, provider,
 		        busy_send, recorded_at_ms, published_at_ms)
@@ -1199,10 +1324,13 @@ func backfillV21Conversations(ctx context.Context, tx *sql.Tx, storeID string, n
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO busy_send_launches (
 		        launch_id, store_id, instance_id, conversation_id, life_number, launch_token,
-		        provider, busy_send, kind, phase, recorded_at_ms)
-		    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		        provider, busy_send, kind, phase, recorded_at_ms, held_count_limit, held_bytes_limit)
+		    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			launchID.String(), storeID, r.instanceID, conversationID.String(), r.life, r.launchToken,
-			r.provider, string(coverage), string(BusySendLaunchMigrated), string(BusySendLaunchCurrent), nowMs); err != nil {
+			r.provider, string(coverage), string(BusySendLaunchMigrated), string(BusySendLaunchCurrent), nowMs, heldCount, heldBytes); err != nil {
+			return err
+		}
+		if err := insertBusySendLaunchCapabilities(ctx, tx, storeID, launchID.String(), caps); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE spawns SET busy_send = ?, busy_conversation_id = ? WHERE instance_id = ?`,

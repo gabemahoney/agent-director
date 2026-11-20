@@ -44,6 +44,7 @@ func TestMixedVersionStoreDriver(t *testing.T) {
 			Params struct {
 				Table, Reader, Key, ID string
 				Set                    map[string]any
+				Capabilities           *BusySendLaunchCapabilities
 			}
 		}
 		if err := in.Decode(&req); err == io.EOF {
@@ -59,13 +60,33 @@ func TestMixedVersionStoreDriver(t *testing.T) {
 			if err = s.InsertPending(Spawn{InstanceID: "rec", Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "ad-mixed-records", RelayMode: "off"}); err != nil {
 				break
 			}
-			mustExec(t, s.db, `DELETE FROM busy_send_launches WHERE instance_id='rec'`)
-			mustExec(t, s.db, `DELETE FROM busy_conversations WHERE instance_id='rec'`)
 			r := seedBusySendRecords(t, s.db, s.StoreID(), "rec")
-			mustExec(t, s.db, `UPDATE spawns SET busy_conversation_id=?,busy_send='covered',life_number=?,launch_token=? WHERE instance_id='rec'`, r.conversation, recLife, recToken)
 			value = map[string]string{"caller": r.callerUUID, "token": recToken}
 		case "record-read":
 			value, err = mixedVersionRecord(s, p.Reader, p.ID)
+		case "fixture-capabilities":
+			// ID is a Launch id; nil means uncovered. This operation is fixture
+			// creation, before any tested call. Set matching row/conversation
+			// coverage here too, so no subprocess commits a contradictory seed.
+			tx, e := s.db.Begin()
+			if e != nil {
+				err = e
+				break
+			}
+			seedV21Capabilities(t, tx, p.ID, p.Capabilities)
+			for _, q := range []string{
+				`UPDATE spawns SET busy_send=(SELECT busy_send FROM busy_send_launches WHERE launch_id=?) WHERE instance_id=(SELECT instance_id FROM busy_send_launches WHERE launch_id=?)`,
+				`UPDATE busy_conversations SET busy_send=(SELECT busy_send FROM busy_send_launches WHERE launch_id=?) WHERE conversation_id=(SELECT conversation_id FROM busy_send_launches WHERE launch_id=?)`,
+			} {
+				if _, err = tx.Exec(q, p.ID, p.ID); err != nil {
+					break
+				}
+			}
+			if err == nil {
+				err = tx.Commit()
+			}
+			_ = tx.Rollback()
+			value = p.ID
 		case "fixture-set":
 			for _, id := range []string{p.Table, p.Key} {
 				if !identifier.MatchString(id) {
@@ -87,11 +108,30 @@ func TestMixedVersionStoreDriver(t *testing.T) {
 				args = append(args, p.Set[k])
 			}
 			args = append(args, p.ID)
-			r, e := s.db.Exec("UPDATE "+p.Table+" SET "+strings.Join(fields, ",")+" WHERE "+p.Key+"=?", args...)
+			tx, e := s.db.Begin()
+			if e != nil {
+				err = e
+				break
+			}
+			if coverage, ok := p.Set["busy_send"]; ok && p.Table == "busy_send_launches" && p.Key == "launch_id" {
+				var c *BusySendLaunchCapabilities
+				if coverage == "covered" {
+					c = p.Capabilities
+					if c == nil {
+						c = v21ClaudeCapabilities() // existing enum catalogue's Claude seed
+					}
+				}
+				seedV21Capabilities(t, tx, p.ID, c)
+			}
+			r, e := tx.Exec("UPDATE "+p.Table+" SET "+strings.Join(fields, ",")+" WHERE "+p.Key+"=?", args...)
 			err = e
 			if err == nil {
 				value, err = r.RowsAffected()
 			}
+			if err == nil {
+				err = tx.Commit()
+			}
+			_ = tx.Rollback()
 		case "fixture-force-id":
 			// Public force lookup validates UUID syntax; the migration seed's
 			// descriptive private key is renamed only as fixture setup.
@@ -173,6 +213,8 @@ func mixedVersionRecord(s *Store, reader, id string) (any, error) {
 	}
 	defer conn.Close()
 	switch reader {
+	case "capabilities":
+		return readBusySendLaunchCapabilities(ctx, conn, s.StoreID(), id)
 	case "published":
 		r, err := readBusySendPublished(ctx, conn, "rec")
 		if errors.Is(err, sql.ErrNoRows) {

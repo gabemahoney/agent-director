@@ -22,6 +22,11 @@ import (
 func TestVersionAdminFacts(t *testing.T) {
 	home := t.TempDir()
 	core, digest := store.BusySendCoreContractIdentity()
+	// b.kii PM1 deliberately replaces the unreleased v21 declarations.
+	// Pin independently so runtime/admin agreeing on stale facts cannot pass.
+	if core != "busy-send-core-v1:" || digest != "48949be96b1ee5db31161ee71b9d2aa594003801298819194c64b05446612601" {
+		t.Fatalf("compiled core = %s/%s; want final capability contract", core, digest)
+	}
 	covered := store.BusySendCoveredAgents()
 	slices.Sort(covered)
 	want := installversion.Facts{FormatVersion: 1, Version: testVersion, Commit: testCommit,

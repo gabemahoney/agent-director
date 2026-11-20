@@ -57,6 +57,7 @@ type busySendPublishedRow struct {
 // busySendLaunchSQL is the locked transaction surface shared by lifecycle
 // writers using a Conn and the SessionStart writer using a Tx.
 type busySendLaunchSQL interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
@@ -136,6 +137,11 @@ func (s *Store) insertBusySendConversation(ctx context.Context, conn *sql.Conn, 
 // staged Agent Default overrides (busy_send_launches.override_*), empty for
 // every other Launch.
 func (s *Store) insertBusySendLaunch(ctx context.Context, conn *sql.Conn, instanceID, conversation, provider string, coverage BusySendCoverage, kind BusySendLaunchKind, phase BusySendLaunchPhase, overrides BusySendDefaultsChoice, at int64) error {
+	caps, err := newBusySendLaunchCapabilities(provider, coverage)
+	if err != nil {
+		return err
+	}
+	heldCount, heldBytes := heldLimitArgs(caps)
 	id, err := uuid.NewRandom()
 	if err != nil {
 		return err
@@ -152,10 +158,13 @@ func (s *Store) insertBusySendLaunch(ctx context.Context, conn *sql.Conn, instan
 	}
 	if err := busySendChange(ctx, conn, `INSERT INTO busy_send_launches
 	    (launch_id, store_id, instance_id, conversation_id, life_number, launch_token, provider, busy_send, kind, phase,
-	     override_send_mode, override_confirmed, override_confirm_from_transcripts, recorded_at_ms)
-	    SELECT ?, ?, instance_id, ?, life_number, `+busySendLaunchTokenSQL("launch_token")+`, ?, ?, ?, ?, ?, ?, ?, ?
+	     override_send_mode, override_confirmed, override_confirm_from_transcripts, recorded_at_ms, held_count_limit, held_bytes_limit)
+	    SELECT ?, ?, instance_id, ?, life_number, `+busySendLaunchTokenSQL("launch_token")+`, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 	    FROM spawns WHERE instance_id = ?`, id.String(), s.StoreID(), conversation, provider,
-		string(coverage), string(kind), string(phase), mode, confirmed, fromTranscripts, at, instanceID); err != nil {
+		string(coverage), string(kind), string(phase), mode, confirmed, fromTranscripts, at, heldCount, heldBytes, instanceID); err != nil {
+		return err
+	}
+	if err := insertBusySendLaunchCapabilities(ctx, conn, s.StoreID(), id.String(), caps); err != nil {
 		return err
 	}
 	return recordBusySendClaudeRoute(ctx, conn, s.StoreID(), id.String(), provider, coverage)

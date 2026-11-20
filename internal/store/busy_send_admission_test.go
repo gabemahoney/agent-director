@@ -41,13 +41,13 @@ import (
 // admissionAgent seeds a waiting Claude row whose published conversation and
 // current Launch are covered, and returns its id. A wake path, when given, is
 // recorded with a Claude route on the current Launch.
-func admissionAgent(t *testing.T, path, wake string) string {
+func admissionAgent(t *testing.T, path, wake string, capabilities ...*store.BusySendLaunchCapabilities) string {
 	t.Helper()
 	id, err := apitest.SeedSpawn(path, "", store.StateWaiting, t.TempDir(), "off", uuid.NewString(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := apitest.SeedBusySendCoverage(path, id, store.BusySendCovered, store.BusySendCovered); err != nil {
+	if err := apitest.SeedBusySendCoverage(path, id, store.BusySendCovered, store.BusySendCovered, capabilities...); err != nil {
 		t.Fatal(err)
 	}
 	if wake != "" {
@@ -393,7 +393,7 @@ func TestBusySendAdmissionArbitratesPairFirst(t *testing.T) {
 // overshoot (SR-1.6).
 func TestBusySendAdmissionRaces(t *testing.T) {
 	t.Parallel()
-	held := store.BusySendCapabilitiesFor(store.AgentClaude).HeldCount
+	held := int64(7)
 	pair := store.BusySendPair{CallerUUID: uuid.NewString(), DeliveryRequestID: "req-1"}
 	plain := func(text string) func(string) store.BusySendAdmissionRequest {
 		return func(id string) store.BusySendAdmissionRequest {
@@ -421,7 +421,7 @@ func TestBusySendAdmissionRaces(t *testing.T) {
 			t.Parallel()
 			s, path := storefix.OpenTempStore(t)
 			wake := filepath.Join(t.TempDir(), "wake")
-			id := admissionAgent(t, path, wake)
+			id := admissionAgent(t, path, wake, storefix.BusySendLaterCapabilities())
 			if tc.reserved > 0 {
 				if err := apitest.SeedBusySendReservation(path, id, tc.reserved, tc.reserved); err != nil {
 					t.Fatal(err)
@@ -614,6 +614,131 @@ func TestBusySendAdmissionCommitOutcome(t *testing.T) {
 			}
 			if counts := storefix.ReadBusySendCounts(t, path); counts != (storefix.BusySendCounts{Messages: 1, Pairs: 1}) {
 				t.Errorf("counts %+v; want one Message and one pair", counts)
+			}
+		})
+	}
+}
+
+// PM1: distinct stored limits apply even to a provider this binary knows.
+// The deliberately undersized prompt case tests only the defensive guard;
+// it is not a valid covering release's at-limit delivery envelope.
+func TestBusySendAdmissionStoredLimits(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, text                         string
+		mode                               store.BusySendMode
+		defaultMode, waitOnly, badEnvelope bool
+		count, bytes                       int64
+		reason                             store.BusySendRefusalReason
+		limit                              *store.BusySendLimit
+	}{
+		{name: "wait at UTF8 byte limit", mode: store.BusySendWaitTurn, text: strings.Repeat("é", 256)},
+		{name: "steer at limit", mode: store.BusySendSteerTurn, text: strings.Repeat("s", 256)},
+		{name: "stored default steer", mode: store.BusySendSteerTurn, defaultMode: true, text: "é\t\n<&"},
+		{name: "wait too long", mode: store.BusySendWaitTurn, text: strings.Repeat("é", 256) + "x", reason: store.BusySendRefuseTextBytes, limit: &store.BusySendLimit{Actual: 513, Allowed: 512}},
+		{name: "steer too long", mode: store.BusySendSteerTurn, text: strings.Repeat("s", 257), reason: store.BusySendRefuseTextBytes, limit: &store.BusySendLimit{Actual: 257, Allowed: 256}},
+		{name: "C0 control", mode: store.BusySendWaitTurn, text: "x\r", reason: store.BusySendRefuseTextKind},
+		{name: "wait-only explicit steer", mode: store.BusySendSteerTurn, waitOnly: true, text: "x", reason: store.BusySendRefuseSteerUnsupported},
+		{name: "wait-only default steer", mode: store.BusySendSteerTurn, waitOnly: true, defaultMode: true, text: "x", reason: store.BusySendRefuseSteerUnsupported},
+		{name: "last count slot", mode: store.BusySendWaitTurn, count: 6, text: "x"},
+		{name: "held count", mode: store.BusySendWaitTurn, count: 7, text: "x", reason: store.BusySendRefuseHeldCount, limit: &store.BusySendLimit{Actual: 8, Allowed: 7}},
+		{name: "last byte", mode: store.BusySendWaitTurn, count: 2, bytes: 1023, text: "x"},
+		{name: "held bytes", mode: store.BusySendWaitTurn, count: 2, bytes: 1024, text: "é", reason: store.BusySendRefuseHeldBytes, limit: &store.BusySendLimit{Actual: 1026, Allowed: 1024}},
+		// 33 separator + 2 raw text + 7 additive escape growth + 17 wrapper.
+		{name: "defensive prompt size", mode: store.BusySendWaitTurn, badEnvelope: true, text: "<&", reason: store.BusySendRefusePromptSize, limit: &store.BusySendLimit{Actual: 59, Allowed: 58}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			caps := storefix.BusySendLaterCapabilities()
+			caps.HeldBytes = 1024
+			if tc.waitOnly {
+				caps.Modes = caps.Modes[:1]
+			}
+			if tc.badEnvelope {
+				caps.Modes[0].PromptBytes = 58
+			}
+			in := newBusySendInboxWithCapabilities(t, caps)
+			if tc.defaultMode {
+				if err := apitest.SeedBusySendDefaults(in.path, in.id, store.BusySendAgentDefaults{SendMode: tc.mode}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := apitest.SeedBusySendReservation(in.path, in.id, tc.count, tc.bytes); err != nil {
+				t.Fatal(err)
+			}
+			before := readBusySendTables(t, in.path)
+			req := store.BusySendAdmissionRequest{InstanceID: in.id, Text: []byte(tc.text)}
+			if !tc.defaultMode {
+				req.SendMode = &tc.mode
+			}
+			got, err := in.s.AdmitBusySend(req)
+			if tc.reason != "" {
+				var refusal *store.BusySendRefusal
+				if !errors.As(err, &refusal) || refusal.Reason != tc.reason || !reflect.DeepEqual(refusal.Limit, tc.limit) || !reflect.DeepEqual(got, store.BusySendAdmission{}) {
+					t.Fatalf("admission %+v, %v; want %s with %+v", got, err, tc.reason, tc.limit)
+				}
+				if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
+					t.Fatal("refusal wrote facts")
+				}
+				return
+			}
+			if err != nil || got.Outcome != store.BusySendAdmitted || got.Result.SendMode != tc.mode {
+				t.Fatalf("admission %+v, %v", got, err)
+			}
+			messages := readStoredMessages(t, in.path, in.id)
+			if len(messages) != 1 || string(messages[0].text) != tc.text || messages[0].seq != 1 || messages[0].mode != string(tc.mode) {
+				t.Fatalf("stored Messages %+v", messages)
+			}
+		})
+	}
+}
+
+// PM1: damaged new-send facts cannot steal priority from malformed input or
+// a pair already owned by this store. Real SQL corruption makes reordering
+// snapshot validation fail rather than merely picking another refusal.
+func TestBusySendAdmissionPairBeforeDamagedSnapshot(t *testing.T) {
+	t.Parallel()
+	in := newBusySendInboxWithCapabilities(t, storefix.BusySendLaterCapabilities(), "owned")
+	setBusySendFact(t, in.path, `DELETE FROM busy_send_launch_escapes WHERE launch_id=? AND send_mode='wait_turn' AND escape_index=0`, in.dest.LaunchID)
+	owner, err := in.s.ReadBusySendResult(in.pair.CallerUUID, in.pair.DeliveryRequestID)
+	if err != nil || owner.Result == nil {
+		t.Fatalf("owner %+v, %v", owner, err)
+	}
+	for _, kind := range []string{"malformed", "replay", "conflict", "new"} {
+		t.Run(kind, func(t *testing.T) {
+			confirmed := true
+			req := store.BusySendAdmissionRequest{InstanceID: in.id, Text: []byte("owned"), CallerUUID: in.pair.CallerUUID, DeliveryRequestID: in.pair.DeliveryRequestID, Confirmed: &confirmed}
+			switch kind {
+			case "malformed":
+				req.Text = []byte("x\xff")
+			case "conflict":
+				req.Text = []byte("changed")
+			case "new":
+				req.DeliveryRequestID = "new"
+			}
+			before := readBusySendTables(t, in.path)
+			got, err := in.s.AdmitBusySend(req)
+			var refusal *store.BusySendRefusal
+			switch kind {
+			case "malformed":
+				if !errors.Is(err, store.ErrBusySendMalformed) {
+					t.Fatalf("malformed: %v", err)
+				}
+			case "replay":
+				if err != nil || got.Outcome != store.BusySendReplayed || got.WakePath != "" || !reflect.DeepEqual(got.Result, *owner.Result) {
+					t.Fatalf("replay %+v, %v", got, err)
+				}
+			case "conflict":
+				if !errors.As(err, &refusal) || refusal.Reason != store.BusySendRefuseIDConflict || !reflect.DeepEqual(refusal.Owner, owner.Result) {
+					t.Fatalf("conflict: %v", err)
+				}
+			case "new":
+				if err == nil || errors.As(err, &refusal) || errors.Is(err, store.ErrBusySendMalformed) {
+					t.Fatalf("new send must fail as a store error: %+v, %v", got, err)
+				}
+			}
+			if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
+				t.Fatal("arbitration changed facts")
 			}
 		})
 	}

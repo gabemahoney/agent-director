@@ -924,7 +924,7 @@ func TestBusySendWakeOrderEvidenceGuards(t *testing.T) {
 			{"connection", `UPDATE busy_send_launches SET connection_generation = 1 WHERE instance_id = ?`},
 			{"Launch token", `UPDATE busy_send_launches SET launch_token = 'rotated' WHERE instance_id = ?`},
 			{"Launch identity", `UPDATE busy_send_handovers SET launch_id = 'other-launch' WHERE instance_id = ?`},
-			{"coverage", `UPDATE busy_send_launches SET busy_send = 'not_covered' WHERE instance_id = ?`},
+			{"coverage", ""},
 			{"starting Launch", `UPDATE spawns SET state = 'pending' WHERE instance_id = ?`},
 			{"fenced prompt", `UPDATE busy_send_prompts SET fenced_at_ms = 1 WHERE handover_id IN
 			    (SELECT handover_id FROM busy_send_handovers WHERE instance_id = ?)`},
@@ -943,12 +943,17 @@ func TestBusySendWakeOrderEvidenceGuards(t *testing.T) {
 				} else {
 					in.complete(t, h, 0, revision, store.BusySendOutputComplete, "", true)
 				}
-				setBusySendFact(t, in.path, tc.query, in.id)
+				if tc.name == "coverage" {
+					// Hostile destination change between evidence writes, with
+					// coherent uncovered Launch facts and retained conversation coverage.
+					if err := apitest.SeedBusySendCoverage(in.path, in.id, store.BusySendNotCovered, store.BusySendCovered, nil); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					setBusySendFact(t, in.path, tc.query, in.id)
+				}
 				if tc.name == "provider" {
 					setBusySendFact(t, in.path, `UPDATE busy_send_launches SET provider = 'other' WHERE instance_id = ?`, in.id)
-				}
-				if tc.name == "coverage" {
-					setBusySendFact(t, in.path, `UPDATE spawns SET busy_send = 'not_covered' WHERE instance_id = ?`, in.id)
 				}
 				before := readBusySendCustody(t, in.path, in.id)
 				if second == "completion" {
@@ -1319,10 +1324,10 @@ func TestBusySendHelperSlotKeepsAnUnresolvedIssuer(t *testing.T) {
 // route identity, connection generation 0 and its own token's wake endpoint.
 // Until publication the route facts an owned callback reads stay the
 // published Launch's, so the candidate cannot redirect them; publication
-// makes its route current. A covered Codex resume (a conversation a later
-// release covered) records no route, and its published Launch reads as
-// uncovered by a route. (Every Claude Launch is covered: there is no
-// uncovered Claude resume.)
+// makes its route current. A covered Codex conversation requires a covering
+// author for its next Launch: this retained runtime refuses a direct local
+// resume without changing the published facts. (Every Claude Launch is
+// covered: there is no uncovered Claude resume.)
 func TestBusySendResumeRecordsItsOwnRoute(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1361,8 +1366,18 @@ func TestBusySendResumeRecordsItsOwnRoute(t *testing.T) {
 				t.Fatal(err)
 			}
 			const token = "1122334455667788"
+			before := readBusySendTables(t, path)
 			res, version, err := s.MoveToPendingWithExit(id, row.Snapshot, 2000, token, "", "", store.LaunchOwner{},
 				store.BusySendDefaultsChoice{}, exitEvidenceForTest(t, s, id))
+			if tc.agent == store.AgentCodex {
+				if err == nil || !strings.Contains(err.Error(), "no covering capability table row") || res == store.CondApplied {
+					t.Fatalf("local covered Codex resume = %v, %v; want no-author refusal", res, err)
+				}
+				if !reflect.DeepEqual(before, readBusySendTables(t, path)) {
+					t.Fatal("refused local resume changed the published route/core or created a candidate")
+				}
+				return
+			}
 			if err != nil || res != store.CondApplied {
 				t.Fatalf("MoveToPending = %v, %v; want applied", res, err)
 			}

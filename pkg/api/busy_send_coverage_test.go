@@ -1,11 +1,19 @@
 package api_test
 
 import (
+	"context"
+	"database/sql/driver"
+	"encoding/json"
+	"errors"
+	"reflect"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -176,17 +184,16 @@ const (
 		`{"state":"plan_dialog","outcome":"pending","reason":"dialog"},{"state":"compacting","outcome":"pending","reason":"compaction"},` +
 		`{"state":"not_started","outcome":"refused","reason":"agent_starting"},{"state":"ended","outcome":"refused","reason":"launch_ended"}]},` +
 		`"confirm_from_transcripts_capability":"not_needed","confirm_from_transcripts_reason":"hook_sighting_first"}`
-	// busyFallbackCapabilitiesJSON is a covered row of a provider this version
-	// has no capability row for (a later release's covered Codex row): Wait
-	// Turn's limits only, and no force route or transcript confirmation.
-	busyFallbackCapabilitiesJSON = `{"modes":[{"send_mode":"wait_turn","message_bytes":8000,"prompt_bytes":9600,"text_kind":"utf8_tab_lf"}],"held_count":1000,"held_bytes":8000000,` +
+	// busyWaitOnlyCapabilitiesJSON describes the explicit synthetic Wait-only
+	// snapshot, projected by a runtime with no force route for that provider.
+	busyWaitOnlyCapabilitiesJSON = `{"modes":[{"send_mode":"wait_turn","message_bytes":8000,"prompt_bytes":9600,"text_kind":"utf8_tab_lf"}],"held_count":1000,"held_bytes":8000000,` +
 		`"force":null,"confirm_from_transcripts_capability":"cannot_confirm","confirm_from_transcripts_reason":""}`
 )
 
 // assertBusyPublic checks get's busy-send projection of a row whose inbox is
 // empty: busy_send, and for a covered row only, agent_defaults, delivery and
 // delivery_capabilities; never the core's own columns.
-func assertBusyPublic(t *testing.T, out api.SpawnRow, want store.BusySendCoverage) {
+func assertBusyPublic(t *testing.T, out api.SpawnRow, want store.BusySendCoverage, snapshot ...*store.BusySendLaunchCapabilities) {
 	t.Helper()
 	if out.BusySend != want {
 		t.Errorf("get coverage=%s; want %s", out.BusySend, want)
@@ -195,7 +202,16 @@ func assertBusyPublic(t *testing.T, out api.SpawnRow, want store.BusySendCoverag
 	if !ok || string(raw) != `"`+string(want)+`"` {
 		t.Errorf("busy_send JSON=%s, present=%t", raw, ok)
 	}
-	assertBusyBlocks(t, out, out.InstanceID, want == store.BusySendCovered, "agent_defaults", "delivery", "delivery_capabilities")
+	if len(snapshot) == 0 || want != store.BusySendCovered {
+		assertBusyBlocks(t, out, out.InstanceID, want == store.BusySendCovered, "agent_defaults", "delivery", "delivery_capabilities")
+	} else {
+		assertStoredCapabilities(t, out, snapshot[0])
+		for key, block := range map[string]string{"agent_defaults": busyDefaultsJSON, "delivery": busyEmptyInboxJSON} {
+			if raw, ok := jsonField(t, out, key); !ok || string(raw) != block {
+				t.Errorf("%s = %s; want %s", key, raw, block)
+			}
+		}
+	}
 	for _, key := range []string{"default_send_mode", "default_confirmed", "confirm_from_transcripts", "turn_starts", "busy_conversation_id"} {
 		if raw, ok := jsonField(t, out, key); ok {
 			t.Errorf("unexpected top-level %s=%s", key, raw)
@@ -210,7 +226,7 @@ func assertBusyBlocks(t *testing.T, out any, id string, covered bool, shown ...s
 	t.Helper()
 	capabilities := busyCapabilitiesJSON
 	if raw, ok := jsonField(t, out, "agent"); ok && string(raw) != `"claude"` {
-		capabilities = busyFallbackCapabilitiesJSON
+		capabilities = busyWaitOnlyCapabilitiesJSON
 	}
 	for key, block := range map[string]string{"agent_defaults": busyDefaultsJSON, "delivery": busyEmptyInboxJSON, "delivery_capabilities": capabilities} {
 		raw, ok := jsonField(t, out, key)
@@ -226,52 +242,65 @@ func assertBusyBlocks(t *testing.T, out any, id string, covered bool, shown ...s
 // defaults, neither busy_send. An uncovered row shows none of them.
 func TestGetBusySendPersistedProjection(t *testing.T) {
 	t.Parallel()
-	for _, state := range []string{store.StatePending, store.StateEnded} {
-		for _, coverage := range []store.BusySendCoverage{store.BusySendNotCovered, store.BusySendCovered} {
-			t.Run(state+string(coverage), func(t *testing.T) {
-				e := newKillEnv(t)
-				// Codex rows, so each row's coverage is only what the case records
-				// (a covered one as a later release would record it).
-				e.rowAgent = "codex"
-				r := e.seedReusable(t, agentGone, reuseRowSpec{State: store.StateEnded})
-				// Pending is seeded independently rather than manufacturing a new launch.
-				id := r.ID
-				if state == store.StatePending {
-					var err error
-					id, err = apitest.SeedSpawn(e.dbPath, "", state, t.TempDir(), "off", "", false, apitest.WithAgent("codex"))
+	for _, snapshot := range []*store.BusySendLaunchCapabilities{storefix.BusySendWaitOnlyCapabilities(), storefix.BusySendLaterCapabilities()} {
+		for _, state := range []string{store.StatePending, store.StateEnded} {
+			for _, coverage := range []store.BusySendCoverage{store.BusySendNotCovered, store.BusySendCovered} {
+				t.Run(state+string(coverage)+"/"+string(snapshot.Modes[len(snapshot.Modes)-1].Mode), func(t *testing.T) {
+					e := newKillEnv(t)
+					// Codex rows, so each row's coverage is only what the case records
+					// (a covered one as a later release would record it).
+					e.rowAgent = "codex"
+					r := e.seedReusable(t, agentGone, reuseRowSpec{State: store.StateEnded})
+					// Pending is seeded independently rather than manufacturing a new launch.
+					id := r.ID
+					if state == store.StatePending {
+						var err error
+						id, err = apitest.SeedSpawn(e.dbPath, "", state, t.TempDir(), "off", "", false, apitest.WithAgent("codex"))
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					var caps *store.BusySendLaunchCapabilities
+					if coverage == store.BusySendCovered {
+						caps = snapshot
+					}
+					if err := apitest.SeedBusySendCoverage(e.dbPath, id, coverage, store.BusySendCovered, caps); err != nil {
+						t.Fatal(err)
+					}
+					out, err := api.Get(e.st, api.RelayView{}, id)
 					if err != nil {
 						t.Fatal(err)
 					}
-				}
-				if err := apitest.SeedBusySendCoverage(e.dbPath, id, coverage, store.BusySendCovered); err != nil {
-					t.Fatal(err)
-				}
-				out, err := api.Get(e.st, api.RelayView{}, id)
-				if err != nil {
-					t.Fatal(err)
-				}
-				assertBusyPublic(t, out, coverage)
-				c, _ := e.client(t)
-				status, err := c.Status(id)
-				if err != nil {
-					t.Fatal(err)
-				}
-				assertBusyBlocks(t, status, id, coverage == store.BusySendCovered, "agent_defaults", "delivery")
-				listed, err := c.List(api.ListParams{})
-				if err != nil {
-					t.Fatal(err)
-				}
-				for _, row := range listed.Spawns {
-					assertBusyBlocks(t, row, row.InstanceID, row.InstanceID == id && coverage == store.BusySendCovered, "agent_defaults")
-				}
-				for _, v := range []any{status, listed.Spawns[0]} {
-					if raw, ok := jsonField(t, v, "busy_send"); ok {
-						t.Errorf("status or list gained busy_send=%s", raw)
+					assertBusyPublic(t, out, coverage, snapshot)
+					cMany, _ := e.client(t)
+					many, err := cMany.GetMany([]string{id})
+					if err != nil || len(many.Spawns) != 1 {
+						t.Fatalf("get-many: %+v / %v", many, err)
 					}
-				}
-			})
+					assertBusyPublic(t, many.Spawns[0], coverage, snapshot)
+					c, _ := e.client(t)
+					status, err := c.Status(id)
+					if err != nil {
+						t.Fatal(err)
+					}
+					assertBusyBlocks(t, status, id, coverage == store.BusySendCovered, "agent_defaults", "delivery")
+					listed, err := c.List(api.ListParams{})
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, row := range listed.Spawns {
+						assertBusyBlocks(t, row, row.InstanceID, row.InstanceID == id && coverage == store.BusySendCovered, "agent_defaults")
+					}
+					for _, v := range []any{status, listed.Spawns[0]} {
+						if raw, ok := jsonField(t, v, "busy_send"); ok {
+							t.Errorf("status or list gained busy_send=%s", raw)
+						}
+					}
+				})
+			}
 		}
 	}
+
 }
 
 // CR2: the same permitted Gone preflight has three different process facts.
@@ -352,6 +381,214 @@ func TestBusySendCandidateReplacementProcessEvidence(t *testing.T) {
 			}
 			if !found {
 				t.Fatal("replacement deleted uncertain Launch history")
+			}
+		})
+	}
+}
+
+// assertStoredCapabilities uses fixture data only for admission limits; route
+// metadata is pinned independently, including Claude's unchanged force table.
+func assertStoredCapabilities(t *testing.T, row api.SpawnRow, snapshot *store.BusySendLaunchCapabilities) {
+	t.Helper()
+	want := api.DeliveryCapabilities{Modes: []api.DeliveryModeLimits{}, HeldCount: snapshot.HeldCount, HeldBytes: snapshot.HeldBytes,
+		ConfirmFromTranscriptsCapability: "cannot_confirm"}
+	if row.Agent == "claude" {
+		if err := json.Unmarshal([]byte(busyCapabilitiesJSON), &want); err != nil {
+			t.Fatal(err)
+		}
+		want.Modes = nil
+		want.HeldCount, want.HeldBytes = snapshot.HeldCount, snapshot.HeldBytes
+	}
+	for _, m := range snapshot.Modes {
+		want.Modes = append(want.Modes, api.DeliveryModeLimits{SendMode: string(m.Mode), MessageBytes: m.MessageBytes,
+			PromptBytes: m.PromptBytes, TextKind: string(m.TextKind)})
+	}
+	if row.DeliveryCapabilities == nil || !reflect.DeepEqual(*row.DeliveryCapabilities, want) {
+		t.Fatalf("capabilities %+v; want %+v", row.DeliveryCapabilities, want)
+	}
+}
+
+// PM1: publication may commit between the row SELECT and its capability read.
+// Each get/get-many row keeps its own published defaults, inbox and limits.
+func TestBusySendCapabilityProjectionPublication(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{"get", "get-many"} {
+		t.Run(method, func(t *testing.T) {
+			e := newKillEnv(t)
+			c, _ := e.client(t)
+			oldCaps := storefix.BusySendLaterCapabilities()
+			ids := []string{}
+			tokens := []string{"1234567812345678", "2234567812345678"}
+			versions := []int64{}
+			for i, token := range tokens {
+				r := e.seedReusable(t, agentGone, reuseRowSpec{State: store.StateEnded})
+				id := r.ID
+				ids = append(ids, id)
+				if err := apitest.SeedBusySendCoverage(e.dbPath, id, store.BusySendCovered, store.BusySendCovered, oldCaps); err != nil {
+					t.Fatal(err)
+				}
+				if err := apitest.SeedBusySendDefaults(e.dbPath, id, store.BusySendAgentDefaults{SendMode: store.BusySendSteerTurn}); err != nil {
+					t.Fatal(err)
+				}
+				busyAdmit(t, c, api.SendKeysParams{InstanceID: id, Text: "held"})
+				before, _, err := e.st.ReadForReuse(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fresh := store.Spawn{Agent: "claude", CWD: r.CWD, TmuxSessionName: r.Name, RelayMode: "off", StartedAt: e.clock.Now(),
+					LaunchStartedAtMillis: e.clock.Now().UnixMilli(), Identity: store.LaunchIdentity{Token: token}}
+				res, _, version, err := e.st.ResetForReuse(id, before.Snapshot, before.Agent, storefix.WithExit(t, e.st, id, fresh))
+				if err != nil || res != store.CondApplied {
+					t.Fatalf("stage %d: %v / %v", i, res, err)
+				}
+				versions = append(versions, version)
+			}
+			staged, err := c.GetMany(ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range staged.Spawns {
+				assertStoredCapabilities(t, row, oldCaps)
+				if row.AgentDefaults.SendMode != "steer_turn" || row.Delivery.HeldCount != 1 {
+					t.Fatalf("candidate leaked before publication: %+v", row)
+				}
+			}
+			var begun atomic.Bool
+			var selected atomic.Int32
+			published := 0
+			stop, err := api.ObserveClientSQLiteForTest(c, func(d driver.Driver) driver.Driver {
+				return sqliteobserve.Wrap(d, sqliteobserve.Hooks{Before: func(_ context.Context, q string) error {
+					if q == "BEGIN" {
+						begun.Store(true)
+						selected.Store(0)
+					}
+					if begun.Load() && strings.HasPrefix(q, "SELECT") && selected.Add(1) == 2 && published < len(ids) {
+						i := published
+						published++
+						if res, err := e.st.RecordLaunchIdentity(ids[i], versions[i], tokens[i], store.LaunchIdentity{}); err != nil || res != store.CondApplied {
+							t.Errorf("publish %d: %v / %v", i, res, err)
+						}
+					}
+					return nil
+				}})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var rows []api.SpawnRow
+			if method == "get" {
+				for _, id := range ids {
+					row, err := c.Get(id)
+					if err != nil {
+						t.Fatal(err)
+					}
+					rows = append(rows, row)
+				}
+			} else {
+				many, err := c.GetMany(ids)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rows = many.Spawns
+			}
+			if err := stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if published != len(ids) || len(rows) != len(ids) {
+				t.Fatalf("publication/read count: %d / %d", published, len(rows))
+			}
+			for i, row := range rows {
+				if row.InstanceID != ids[i] || row.AgentDefaults == nil || row.Delivery == nil || row.DeliveryCapabilities == nil {
+					t.Fatalf("incomplete projection: %+v", row)
+				}
+				// Active Check may retry when publication invalidates its row.
+				// Either complete snapshot is valid; a mixture never is.
+				if row.DeliveryCapabilities.HeldCount == oldCaps.HeldCount {
+					assertStoredCapabilities(t, row, oldCaps)
+					if row.AgentDefaults.SendMode != "steer_turn" || row.Delivery.HeldCount != 1 || row.Delivery.HeldBytes != 4 {
+						t.Fatalf("old limits mixed with new defaults/custody: %+v", row)
+					}
+				} else {
+					raw, _ := jsonField(t, row, "delivery_capabilities")
+					if string(raw) != busyCapabilitiesJSON || row.AgentDefaults.SendMode != "wait_turn" || row.Delivery.HeldCount != 0 {
+						t.Fatalf("new limits mixed with old defaults/custody: %+v", row)
+					}
+				}
+			}
+			fresh, err := c.GetMany(ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range fresh.Spawns {
+				if raw, ok := jsonField(t, row, "delivery_capabilities"); !ok || string(raw) != busyCapabilitiesJSON {
+					t.Fatalf("new capabilities: %s", raw)
+				}
+				if row.AgentDefaults.SendMode != "wait_turn" || row.Delivery.HeldCount != 0 {
+					t.Fatalf("old facts after publication: %+v", row)
+				}
+			}
+		})
+	}
+}
+
+// A covered snapshot read failure must surface through both public readers and
+// admission. It must not become omitted capabilities or steer_unsupported.
+
+func TestBusySendCapabilityReadFailure(t *testing.T) {
+	t.Parallel()
+	for _, malformed := range []bool{false, true} {
+		name := "read-failed"
+		if malformed {
+			name = "missing-modes"
+		}
+		t.Run(name, func(t *testing.T) {
+			e := newKillEnv(t)
+			c, _ := e.client(t)
+			r := e.seedRow(t, killRowSpec{})
+			seedBusyCovered(t, e, r.ID)
+			failure := errors.New("capability read unavailable")
+			if malformed {
+				// Deliberately damaged covered data: typed held limits remain,
+				// but a covered Launch has no required Wait Turn mode.
+				caps := storefix.BusySendLaterCapabilities()
+				caps.Modes = nil
+				if err := apitest.SeedBusySendCoverage(e.dbPath, r.ID, store.BusySendCovered, store.BusySendCovered, caps); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				stop, err := api.ObserveClientSQLiteForTest(c, func(d driver.Driver) driver.Driver {
+					return sqliteobserve.Wrap(d, sqliteobserve.Hooks{Before: func(_ context.Context, q string) error {
+						if strings.Contains(q, "FROM busy_send_launch_modes") {
+							return failure
+						}
+						return nil
+					}})
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer stop(context.Background())
+			}
+			before := busyFacts(t, e.dbPath, r.ID)
+			for _, read := range []func() error{
+				func() error { _, err := c.Get(r.ID); return err },
+				func() error { _, err := c.GetMany([]string{r.ID}); return err },
+				func() error {
+					_, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "held", SendMode: ptr("steer_turn")})
+					return err
+				},
+			} {
+				err := read()
+				if malformed {
+					if err == nil || !strings.Contains(err.Error(), "invalid busy-send Launch capabilities") || api.ErrDetails(err) != nil {
+						t.Fatalf("damaged snapshot became a capability/refusal: %v / %+v", err, api.ErrDetails(err))
+					}
+				} else if !errors.Is(err, failure) {
+					t.Fatalf("read/admission swallowed capability error: %v", err)
+				}
+			}
+			if after := busyFacts(t, e.dbPath, r.ID); !reflect.DeepEqual(after, before) {
+				t.Fatal("failed read changed custody")
 			}
 		})
 	}

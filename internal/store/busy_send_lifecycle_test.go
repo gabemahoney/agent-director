@@ -1004,3 +1004,115 @@ func TestBusySendWakeOrderAcrossEnd(t *testing.T) {
 		}
 	}
 }
+
+// PM1 option 1: lower new admission limits do not re-admit carried custody.
+// 8,001 bytes (even worst-case escaped tags) still fit the destination's
+// 9,600-byte delivery envelope. Both original modes can cross a Wait boundary.
+func TestBusySendResumeDifferentCapabilities(t *testing.T) {
+	t.Parallel()
+	for _, boundary := range []string{"turn_end", "force"} {
+		for _, mode := range []store.BusySendMode{store.BusySendWaitTurn, store.BusySendSteerTurn} {
+			t.Run(boundary+"/"+string(mode), func(t *testing.T) {
+				t.Parallel()
+				local := store.BusySendCapabilitiesFor(store.AgentClaude)
+				old := &store.BusySendLaunchCapabilities{HeldCount: 7, HeldBytes: 16384, Modes: local.Modes}
+				for i := range old.Modes {
+					old.Modes[i].MessageBytes = 8001
+				}
+				in := newBusySendInboxWithCapabilities(t, old)
+				text := strings.Repeat("x", 8001)
+				confirmed := true
+				_, err := in.s.AdmitBusySend(store.BusySendAdmissionRequest{InstanceID: in.id, Text: []byte(text), SendMode: &mode,
+					Confirmed: &confirmed, CallerUUID: in.pair.CallerUUID, DeliveryRequestID: in.pair.DeliveryRequestID})
+				if err != nil {
+					t.Fatal(err)
+				}
+				in.admit(t, store.BusySendWaitTurn, "tail")
+				accepted := readBusySendAccepted(t, in.path, in.id)
+				oldID := in.dest.LaunchID
+				if a := storefix.ApplyAgentHook(t, in.s, in.id, "SessionEnd", in.dest.SessionID); !a.Applied {
+					t.Fatalf("End: %+v", a)
+				}
+				const token = "1122334455667788"
+				res, v, err := in.s.MoveToPendingWithExit(in.id, in.row(t).Snapshot, 2000, token, "", "", store.LaunchOwner{},
+					store.BusySendDefaultsChoice{}, exitEvidenceForTest(t, in.s, in.id))
+				if err != nil || res != store.CondApplied {
+					t.Fatalf("resume %v, %v", res, err)
+				}
+				if res, err := in.s.RecordLaunchIdentity(in.id, v, token, store.LaunchIdentity{PaneID: "%42", PanePID: 4243, PaneStarttime: "101"}); err != nil || res != store.CondApplied {
+					t.Fatalf("publish %v, %v", res, err)
+				}
+				pub, err := in.s.GetBusySendPublishedLaunch(in.id)
+				if err != nil || pub.LaunchID == oldID {
+					t.Fatalf("new Launch %+v, %v", pub, err)
+				}
+				in.dest.LaunchID, in.dest.LaunchToken = pub.LaunchID, pub.LaunchToken
+				// Report-in and a repeated report/reconnect must not reauthor either snapshot.
+				for i := 0; i < 2; i++ {
+					if a := storefix.ApplyAgentHook(t, in.s, in.id, "SessionStart", in.dest.SessionID); !a.Applied {
+						t.Fatalf("SessionStart: %+v", a)
+					}
+				}
+				route, err := in.s.ReadBusySendRouteFacts(context.Background(), in.id, store.HookGate{Event: "Stop", ParentPID: 4243, ParentStart: "101"})
+				if err != nil || !route.GateHolds || !route.Covered {
+					t.Fatalf("resumed route %+v, %v", route, err)
+				}
+				in.dest = route.Destination
+
+				facts, err := apitest.ReadBusySendFacts(in.path, in.id)
+				if err != nil || len(facts.Launches) != 2 {
+					t.Fatalf("Launches %+v, %v", facts.Launches, err)
+				}
+				current := store.BusySendCapabilitiesFor(store.AgentClaude)
+				wantCurrent := &store.BusySendLaunchCapabilities{HeldCount: current.HeldCount, HeldBytes: current.HeldBytes, Modes: current.Modes}
+				for _, l := range facts.Launches {
+					want := wantCurrent
+					if l.ID == oldID {
+						want = old
+					}
+					if !reflect.DeepEqual(l.Capabilities, want) {
+						t.Fatalf("Launch %s snapshot %+v; want %+v", l.ID, l.Capabilities, want)
+					}
+				}
+				before := readBusySendTables(t, in.path)
+				_, err = in.s.AdmitBusySend(store.BusySendAdmissionRequest{InstanceID: in.id, Text: []byte(text), SendMode: &mode})
+				var refusal *store.BusySendRefusal
+				if !errors.As(err, &refusal) || refusal.Reason != store.BusySendRefuseTextBytes || !reflect.DeepEqual(refusal.Limit, &store.BusySendLimit{Actual: 8001, Allowed: 8000}) {
+					t.Fatalf("new admission: %v", err)
+				}
+				if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
+					t.Fatal("refusal changed carried Messages")
+				}
+				var h *store.BusySendHandover
+				if boundary == "force" {
+					h = in.forceClaim(t, time.Time{}).Handover
+				} else {
+					h = in.claim(t, time.Time{}, false)
+				}
+				if len(h.Prompts) != 1 || string(h.Prompts[0].Body) != busySendBody(text, "tail") || h.Prompts[0].RenderedBytes != 8242 {
+					t.Fatalf("carried prompt %+v; want both whole Messages in 8,242 Wait bytes", h.Prompts)
+				}
+				if !slices.Equal(h.Prompts[0].MessageIDs, []string{accepted[0][0].(string), accepted[1][0].(string)}) {
+					t.Fatal("carried identity/order changed")
+				}
+				in.issue(t, h, 0, h.Revision)
+				issued, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID)
+				if err != nil || !reflect.DeepEqual(issued.Prompts[0].Body, h.Prompts[0].Body) {
+					t.Fatalf("issued bytes differ: %v", err)
+				}
+				if got := readBusySendAccepted(t, in.path, in.id); !reflect.DeepEqual(got, accepted) {
+					t.Fatal("delivery rewrote accepted facts")
+				}
+				after, err := apitest.ReadBusySendFacts(in.path, in.id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i, l := range after.Launches {
+					if !reflect.DeepEqual(l.Capabilities, facts.Launches[i].Capabilities) {
+						t.Fatal("delivery rewrote snapshots")
+					}
+				}
+			})
+		}
+	}
+}

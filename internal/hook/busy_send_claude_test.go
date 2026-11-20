@@ -84,9 +84,6 @@ func newWakeEnv(t *testing.T, state string, opts ...apitest.SpawnOption) *wakeEn
 	t.Helper()
 	id := "wake-" + strings.ReplaceAll(t.Name(), "/", "-")
 	st, db := ssgSeed(t, id, state, wakeSession, opts...)
-	if err := apitest.SeedBusySendCoverage(db, id, store.BusySendCovered, store.BusySendCovered); err != nil {
-		t.Fatal(err)
-	}
 	l, err := st.GetBusySendPublishedLaunch(id)
 	if err != nil {
 		t.Fatal(err)
@@ -565,7 +562,7 @@ func TestClaudeWakeDeliversHeldPrompts(t *testing.T) {
 // "record" (RecordBusySendTurnEnd), each with the step's request (the zero one
 // for "write"); turnEnd, when set, runs first, and an error it returns replaces
 // the store's call (errNotApplied: a write that did not apply). commits keeps
-// each issue commit's error, nil for a committed one.
+// each issue commit's error; issued records refs only for successful commits.
 type failRouteFacts struct {
 	*store.Store
 	n       int
@@ -576,11 +573,15 @@ type failRouteFacts struct {
 	steps   []string
 	turnEnd func(step string, te store.BusySendTurnEnd) error
 	commits []error
+	issued  []store.BusySendPromptRef
 }
 
 func (s *failRouteFacts) CommitBusySendIssue(ctx context.Context, req store.BusySendIssueRequest) (store.BusySendIssue, error) {
 	out, err := s.Store.CommitBusySendIssue(ctx, req)
 	s.commits = append(s.commits, err)
+	if err == nil {
+		s.issued = append(s.issued, req.Ref)
+	}
 	return out, err
 }
 
@@ -1216,6 +1217,91 @@ func TestClaudeWakeMeasuresEscaping(t *testing.T) {
 	}
 }
 
+// Regression b.kii / PM1: the real coordinator and hook must agree on the
+// captured Launch's measure, including overlapping literal outputs counted
+// only against the original body. These synthetic snapshots qualify no provider.
+func TestClaudeStoredPromptMeasure(t *testing.T) {
+	for _, boundary := range []string{"wait", "steer", "force"} {
+		t.Run(boundary, func(t *testing.T) {
+			caps := storefix.BusySendLaterCapabilities()
+			caps.Modes[0].MessageBytes, caps.Modes[0].PromptBytes = 20, 160
+			caps.Modes[1].MessageBytes, caps.Modes[1].PromptBytes = 20, 90
+			e := newWakeEnv(t, store.StateWaiting, apitest.WithBusySendCapabilities(caps))
+			seam := &failRouteFacts{Store: e.st}
+			e.seam = seam
+			mode := store.BusySendWaitTurn
+			if boundary != "wait" {
+				e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": "existing turn"}))
+			}
+			if boundary == "steer" {
+				mode = store.BusySendSteerTurn
+			}
+			text := strings.Repeat("<&", 8)
+			e.admitAs(t, "first", text, mode, true)
+			e.admitAs(t, "tail", "tail", mode, true)
+			var force store.BusySendForceClaim
+			if boundary == "force" {
+				force = e.force(t)
+			}
+			output := e.wake
+			if boundary == "steer" {
+				output = e.steer
+			}
+			const header = "[agent-director: message 1 of 1]\n"
+			body := header + text
+			if got := output(t); got != body {
+				t.Fatalf("stored %s output = %q; want exactly one whole prompt %q", boundary, got, body)
+			}
+			if len(seam.issued) != 1 {
+				t.Fatalf("issue commits = %d; want one", len(seam.issued))
+			}
+			h, err := e.st.ReadBusySendHandover(context.Background(), seam.issued[0].HandoverID)
+			if err != nil || len(h.Prompts) != 2 {
+				t.Fatalf("stored partition = %+v, %v; want two frozen whole prompts", h, err)
+			}
+			// Literal expected rendering: '<' produces '&lt;', whose '&'
+			// is not escaped again. The budget mode adds exactly 32 bytes.
+			rendered := int64(len("[later]\n" + header + strings.Repeat("&lt;&amp;", 8) + "\n[/later]"))
+			tailBytes := int64(len("[later]\n" + header + "tail\n[/later]"))
+			if boundary == "steer" {
+				rendered, tailBytes = int64(len(body))+32, int64(len(header+"tail"))+32
+			}
+			for i, want := range []struct {
+				body  string
+				bytes int64
+			}{{body, rendered}, {header + "tail", tailBytes}} {
+				if p := h.Prompts[i]; string(p.Body) != want.body || p.RenderedBytes != want.bytes {
+					t.Errorf("frozen prompt %d = %q, %d bytes; want %q, %d bytes", i, p.Body, p.RenderedBytes, want.body, want.bytes)
+				}
+			}
+			facts, err := apitest.ReadBusySendFacts(e.db, e.id)
+			if err != nil || len(facts.Messages) != 2 {
+				t.Fatalf("Message facts = %+v, %v", facts, err)
+			}
+			wantPlace := "held"
+			if boundary == "force" {
+				wantPlace = "claimed"
+			}
+			if tail := facts.Messages[1]; tail.Place != wantPlace || !tail.Reserved || string(tail.Text) != "tail" || tail.Seq != 2 ||
+				tail.SendMode != string(mode) || string(facts.Messages[0].Text) != text {
+				t.Errorf("Message custody = %+v; want original text/mode and reserved tail %s at sequence 2", facts.Messages, wantPlace)
+			}
+			if boundary == "steer" {
+				if got := output(t); got != header+"tail" {
+					t.Fatalf("next tool boundary wrote %q; want the whole tail", got)
+				}
+			} else if got := output(t); got != "" {
+				t.Fatalf("unsighted wake repeated %q; want no output", got)
+			}
+			if boundary == "force" {
+				if ended := e.endCall(t, force); ended.Outcome != store.BusySendForcePending {
+					t.Errorf("force ended %+v; want pending under Claude's local sighting policy", ended)
+				}
+			}
+		})
+	}
+}
+
 // TestClaudeForcedWake (SR-3.4, SR-4.2, SR-3.9; M2 P-C4.3): while a force's
 // call runs, the agent's own FileChanged is that force's forced wake in any
 // turn or Dialog state, with every Held Message already claimed by
@@ -1518,53 +1604,74 @@ func TestClaudeForceSightingAfterCallReturn(t *testing.T) {
 // literal escaped-form cases are TestClaudeWakeSightingNeedsExactText's; a
 // stale session, Launch or connection the store's TestBusySendSightingRefusals.
 func TestClaudeForceSightingNeedsExactText(t *testing.T) {
-	e := newWakeEnv(t, store.StateWorking)
-	e.admit(t, "m1", "naïve café")
-	c := e.force(t)
-	body := e.wake(t)
-	if body != "[agent-director: message 1 of 1]\nnaïve café" {
-		t.Fatalf("forced wake wrote %q", body)
-	}
-	sight := func(name string, p hookParent, fields map[string]any, admitted bool) {
-		t.Helper()
-		if out, err := e.handle(context.Background(), p, e.payload(t, "user-prompt-submit.json", fields), nil); err != nil || out != "" {
-			t.Fatalf("%s: Handle = %q, %v", name, out, err)
-		}
-		if o := e.observe(t); (o.AwaitingTurnStart == 0) != admitted {
-			t.Errorf("%s: awaiting %d; want admitted %t", name, o.AwaitingTurnStart, admitted)
-		}
-	}
 	for _, tc := range []struct {
-		name   string
-		prompt string
-		parent func() hookParent
+		name         string
+		caps         *store.BusySendLaunchCapabilities
+		wrap         func(string) string
+		raw, escaped string
 	}{
-		{name: "a changed wrapping", prompt: strings.Replace(claudeWake(body), "Stop hook feedback", "FileChanged hook feedback", 1)},
-		{name: "a trailing newline", prompt: claudeWake(body + "\n")},
-		{name: "another Unicode normalization", prompt: claudeWake(strings.ReplaceAll(body, "é", "e\u0301"))},
-		{name: "a prefix of the text", prompt: claudeWake(body[:len(body)-1])},
-		{name: "another process's prompt", prompt: claudeWake(body), parent: func() hookParent { return foreignParent(t, e.st, e.id) }},
+		{name: "current snapshot", wrap: claudeWake, raw: "</task-notification>", escaped: `<\/task-notification>`},
+		{name: "stored snapshot", caps: storefix.BusySendLaterCapabilities(),
+			wrap: func(body string) string { return "[later]\n" + body + "\n[/later]" }, raw: "<", escaped: "&lt;"},
 	} {
-		p := e.parent
-		if tc.parent != nil {
-			p = tc.parent()
-		}
-		sight(tc.name, p, map[string]any{"prompt": tc.prompt}, false)
-	}
-	sight("the exact text", e.parent, map[string]any{"prompt": claudeWake(body)}, true)
-	if f := e.endCall(t, c); f.Outcome != store.BusySendForceHandedOver {
-		t.Fatalf("first force ended %s %s; want handed_over", f.Outcome, f.Reason)
-	}
-	// The sighted, completed wake is ordered: a separate force needs no Stop.
+		t.Run(tc.name, func(t *testing.T) {
+			var opts []apitest.SpawnOption
+			if tc.caps != nil {
+				opts = append(opts, apitest.WithBusySendCapabilities(tc.caps))
+			}
+			e := newWakeEnv(t, store.StateWorking, opts...)
+			e.admit(t, "m1", "naïve café")
+			c := e.force(t)
+			body := e.wake(t)
+			if body != "[agent-director: message 1 of 1]\nnaïve café" {
+				t.Fatalf("forced wake wrote %q", body)
+			}
+			sight := func(name string, p hookParent, fields map[string]any, admitted bool) {
+				t.Helper()
+				if out, err := e.handle(context.Background(), p, e.payload(t, "user-prompt-submit.json", fields), nil); err != nil || out != "" {
+					t.Fatalf("%s: Handle = %q, %v", name, out, err)
+				}
+				if o := e.observe(t); (o.AwaitingTurnStart == 0) != admitted {
+					t.Errorf("%s: awaiting %d; want admitted %t", name, o.AwaitingTurnStart, admitted)
+				}
+			}
+			for _, rejection := range []struct {
+				name   string
+				prompt string
+				parent func() hookParent
+			}{
+				{name: "a changed wrapping", prompt: "changed" + tc.wrap(body)},
+				{name: "a trailing newline", prompt: tc.wrap(body + "\n")},
+				{name: "another Unicode normalization", prompt: tc.wrap(strings.ReplaceAll(body, "é", "e\u0301"))},
+				{name: "a prefix of the text", prompt: tc.wrap(body[:len(body)-1])},
+				{name: "another process's prompt", prompt: tc.wrap(body), parent: func() hookParent { return foreignParent(t, e.st, e.id) }},
+			} {
+				p := e.parent
+				if rejection.parent != nil {
+					p = rejection.parent()
+				}
+				sight(rejection.name, p, map[string]any{"prompt": rejection.prompt}, false)
+			}
+			if tc.caps != nil {
+				sight("the current-table wrapper", e.parent, map[string]any{"prompt": claudeWake(body)}, false)
+			}
+			sight("a contradictory payload session", e.parent, map[string]any{"prompt": tc.wrap(body), "session_id": "other-session"}, false)
+			sight("the exact text", e.parent, map[string]any{"prompt": tc.wrap(body)}, true)
+			if f := e.endCall(t, c); f.Outcome != store.BusySendForceHandedOver {
+				t.Fatalf("first force ended %s %s; want handed_over", f.Outcome, f.Reason)
+			}
+			// The sighted, completed wake is ordered: a separate force needs no Stop.
 
-	e.admit(t, "m2", "stop </task-notification> here")
-	e.force(t)
-	body = e.wake(t)
-	if body != "[agent-director: message 1 of 1]\nstop </task-notification> here" {
-		t.Fatalf("forced wake wrote %q", body)
+			e.admit(t, "m2", "stop "+tc.raw+" here")
+			e.force(t)
+			body = e.wake(t)
+			if body != "[agent-director: message 1 of 1]\nstop "+tc.raw+" here" {
+				t.Fatalf("forced wake wrote %q", body)
+			}
+			sight("the escaped rendering", e.parent, map[string]any{"prompt": tc.wrap(strings.ReplaceAll(body, tc.raw, tc.escaped))}, false)
+			sight("the raw text", e.parent, map[string]any{"prompt": tc.wrap(body)}, false)
+		})
 	}
-	sight("the escaped rendering", e.parent, map[string]any{"prompt": claudeWake(strings.ReplaceAll(body, "</task-notification>", `<\/task-notification>`))}, false)
-	sight("the raw text", e.parent, map[string]any{"prompt": claudeWake(body)}, false)
 }
 
 // TestClaudeTurnEndResignals (SR-3.1, SR-3.4; decision 10; repair round 1
@@ -2400,7 +2507,9 @@ func TestClaudeSteerKeepsItsBinding(t *testing.T) {
 		{name: "a Dialog opened before the last look", at: 3, dialog: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newWakeEnv(t, store.StateWorking)
+			// The replacement Launch uses today's table; the captured route
+			// must not adopt its destination or its different measure.
+			e := newWakeEnv(t, store.StateWorking, apitest.WithBusySendCapabilities(storefix.BusySendLaterCapabilities()))
 			e.admitAs(t, "m1", "hello", store.BusySendSteerTurn, true)
 			callback, token := e.parent, e.token
 			seam := &failRouteFacts{Store: e.st, n: tc.at}

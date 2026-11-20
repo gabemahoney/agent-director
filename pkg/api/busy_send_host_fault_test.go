@@ -231,13 +231,16 @@ func TestBusySendOldRuntimeAndHostFault(t *testing.T) {
 				e.rowAgent = "codex"
 				r := e.seedRow(t, killRowSpec{})
 				seedBusyCovered(t, e, r.ID)
+				if err := apitest.SeedBusySendCoverage(e.dbPath, r.ID, store.BusySendCovered, store.BusySendCovered, storefix.BusySendLaterCapabilities()); err != nil {
+					t.Fatal(err)
+				}
 				wake, touched := busyWake(t, e, r.ID)
 				if err := apitest.SeedBusySendRoute(e.dbPath, r.ID, "codex_app_server", wake); err != nil {
 					t.Fatal(err)
 				}
 				home, trap, marker := busyRuntimeHome(t)
 				before := delegateFiles(t, home)
-				args := []string{"send-keys", "--instance-id", r.ID, "--text", "from old runtime", "--confirmed-delivery", "--caller-uuid", busyCaller, "--delivery-request-id", "old-request"}
+				args := []string{"send-keys", "--instance-id", r.ID, "--text", "from old runtime", "--send-mode", "steer_turn", "--confirmed-delivery", "--caller-uuid", busyCaller, "--delivery-request-id", "old-request"}
 				var ended chan error
 				if force {
 					args = append(args, "--force")
@@ -341,6 +344,10 @@ func TestBusySendOldRuntimeAndHostFault(t *testing.T) {
 					t.Fatal("repeat/conflict/readback notified the route")
 				}
 				counts := storefix.ReadBusySendCounts(t, e.dbPath)
+				facts := busyFacts(t, e.dbPath, r.ID)
+				if len(facts.Messages) != 1 || string(facts.Messages[0].Text) != "from old runtime" || facts.Messages[0].SendMode != "steer_turn" {
+					t.Fatalf("retained runtime changed accepted bytes/mode: %+v", facts.Messages)
+				}
 				if counts.Messages != 1 || counts.Pairs != 1 || counts.InputAttempts != 0 {
 					t.Fatalf("old runtime counts: %+v", counts)
 				}
