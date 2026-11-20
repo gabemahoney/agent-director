@@ -186,6 +186,10 @@ type Resolved struct {
 	DroidRules   []byte
 	DroidProgram string
 
+	// droidGuard is set only by ResolveDroidGuard after both self-checks pass.
+	// Its entries and command cannot come from a request or template.
+	droidGuard *checkedDroidGuard
+
 	// DropResumeArgs is set only from a successful finished reuse snapshot
 	// whose raw stored agent differs exactly from the resolved agent.
 	DropResumeArgs bool

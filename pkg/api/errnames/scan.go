@@ -82,7 +82,7 @@ func ScanHandlerSentinels(srcDir string) ([]string, error) {
 // ManifestErrorNames flattens every verb's ErrorNames slice from the provided
 // VerbDef slice into a deduplicated, sorted list. Callers decide which verbs
 // to pass: the five-way coherence test passes manifest.CallableVerbs() to
-// exclude non-callable verbs (help, serve, hook) from the gate.
+// exclude non-callable verbs from the gate.
 //
 // The function itself is filter-agnostic; it returns ErrorNames for whatever
 // slice the caller supplies.

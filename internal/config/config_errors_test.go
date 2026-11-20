@@ -250,6 +250,8 @@ func TestLoadRefusesCaseVariantKeys(t *testing.T) {
 		{"two_table_spellings", dbPathTwice, caseVariantText("[Store] db_path and [store] db_path")},
 		{"rules_two_spellings", "[launch]\ndroid_rules_path = \"/a\"\nDROID_RULES_PATH = \"/b\"\n",
 			caseVariantText("[launch] droid_rules_path and [launch] DROID_RULES_PATH")},
+		{"secret_paths_two_spellings", "[launch]\ndroid_secret_paths_file = \"/a\"\nDROID_SECRET_PATHS_FILE = \"/b\"\n",
+			caseVariantText("[launch] droid_secret_paths_file and [launch] DROID_SECRET_PATHS_FILE")},
 		{"two_key_spellings", "[store]\nDB_PATH = \"/upper.db\"\ndb_path = \"/lower.db\"\n",
 			caseVariantText("[store] DB_PATH and [store] db_path")},
 		{"long_s_table_quoted", "[\"ſtore\"]\ndb_path = \"/upper.db\"\n\n[store]\ndb_path = \"/lower.db\"\n",
@@ -526,6 +528,11 @@ func TestLoadRefusesLaunchValue(t *testing.T) {
 		{"rules_blank", "[launch]\ndroid_rules_path = \" \"\n", clause("droid_rules_path", " ")},
 		{"rules_dash", "[launch]\ndroid_rules_path = \"-bad\"\n", clause("droid_rules_path", "-bad")},
 	}
+	for _, value := range []string{"paths.txt", "./paths.txt", "lists/paths.txt", "~", "~user/paths.txt", " \t", "-bad"} {
+		cases = append(cases, struct{ name, content, want string }{
+			"secret_paths/" + value, "[launch]\ndroid_secret_paths_file = " + quoted(value) + "\n", clause("droid_secret_paths_file", value),
+		})
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			desc := loadConfigError(t, makeConfigFile(t, tc.content)).Err.Error()
@@ -539,6 +546,9 @@ func TestLoadRefusesLaunchValue(t *testing.T) {
 		{"rules_integer", "[launch]\ndroid_rules_path = 5\n", "droid_rules_path"},
 		{"rules_boolean", "[launch]\ndroid_rules_path = false\n", "droid_rules_path"},
 		{"rules_array", "[launch]\ndroid_rules_path = []\n", "droid_rules_path"},
+		{"secret_paths_integer", "[launch]\ndroid_secret_paths_file = 5\n", "droid_secret_paths_file"},
+		{"secret_paths_boolean", "[launch]\ndroid_secret_paths_file = false\n", "droid_secret_paths_file"},
+		{"secret_paths_array", "[launch]\ndroid_secret_paths_file = []\n", "droid_secret_paths_file"},
 		{"claude_integer", "[launch]\nclaude_path = 5\n", "claude_path"},
 		{"codex_boolean", "[launch]\ncodex_path = true\n", "codex_path"},
 		{"claude_array", "[launch]\nclaude_path = [\"/a/claude\"]\n", "claude_path"},
@@ -562,7 +572,7 @@ func TestLoadRefusesLaunchTildeWithoutHome(t *testing.T) {
 		unset bool
 	}{{"home_empty", false}, {"home_unset", true}} {
 		t.Run(home.name, func(t *testing.T) {
-			path := makeConfigFile(t, "[launch]\nclaude_path = \"~/bin/claude\"\ndroid_rules_path = \"~/rules.json\"\ncodex_path = \"/b/codex\"\n")
+			path := makeConfigFile(t, "[launch]\nclaude_path = \"~/bin/claude\"\ndroid_rules_path = \"~/rules.json\"\ndroid_secret_paths_file = \"~/paths.txt\"\ncodex_path = \"/b/codex\"\n")
 			t.Setenv("HOME", "")
 			if home.unset {
 				if err := os.Unsetenv("HOME"); err != nil {
@@ -576,13 +586,17 @@ func TestLoadRefusesLaunchTildeWithoutHome(t *testing.T) {
 			want := `refused [launch] values: claude_path = "~/bin/claude", which must be an absolute path or start with "~/", ` +
 				`but HOME is unset or empty so "~/" cannot be resolved; use an absolute path; ` +
 				`droid_rules_path = "~/rules.json", which must be an absolute path or start with "~/", ` +
+				`but HOME is unset or empty so "~/" cannot be resolved; use an absolute path; ` +
+				`droid_secret_paths_file = "~/paths.txt", which must be an absolute path or start with "~/", ` +
 				`but HOME is unset or empty so "~/" cannot be resolved; use an absolute path` + ". An empty value counts as unset."
 			if !errors.As(err, &ce) || ce.Err.Error() != want {
 				t.Fatalf("Load error = %v; want a ConfigError describing %q", err, want)
 			}
-			cfg, err := config.Load(makeConfigFile(t, "[launch]\nclaude_path = \"\"\ncodex_path = \"/b/codex\"\n"))
-			if err != nil || cfg.Launch != (config.Launch{CodexPath: "/b/codex"}) {
-				t.Errorf("absolute and empty values without HOME: Load = %+v, %v; want them to load", cfg.Launch, err)
+			for _, value := range []string{"", "/lists/paths.txt"} {
+				cfg, err := config.Load(makeConfigFile(t, "[launch]\nclaude_path = \"\"\ncodex_path = \"/b/codex\"\ndroid_secret_paths_file = "+quoted(value)+"\n"))
+				if err != nil || cfg.Launch != (config.Launch{CodexPath: "/b/codex", DroidSecretPathsFile: value}) {
+					t.Errorf("absolute and empty values without HOME: Load = %+v, %v; want them to load", cfg.Launch, err)
+				}
 			}
 		})
 	}

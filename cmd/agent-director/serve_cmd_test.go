@@ -32,7 +32,7 @@ func TestNewSignalCtxCancels(t *testing.T) {
 	}
 }
 
-// TestMCPClientOptions: serve's MCP Client opens with run()'s --store-path and
+// TestMCPClientOptions: serve's MCP Client opens with runOrdinary()'s --store-path and
 // --tmux-command overrides, creates a missing store unless --create-if-missing
 // false (b.78b) and has no logger (b.wb7, Pin H4).
 func TestMCPClientOptions(t *testing.T) {

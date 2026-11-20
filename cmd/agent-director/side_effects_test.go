@@ -13,7 +13,7 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// dbFreeShapes are the argv shapes run() dispatches before setupClient: none
+// dbFreeShapes are the argv shapes runOrdinary() dispatches before setupClient: none
 // may load the config or open or create the store (SR-4.1/4.2, b.8dr). One
 // alias per verb, -h and -v (b.fv2); TestVerbAliases ties every alias to its verb.
 var dbFreeShapes = []struct {

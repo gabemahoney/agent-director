@@ -197,14 +197,23 @@ func ResolveProgram(program string, env map[string]string) (string, error) {
 type ProbeOutput struct {
 	Limit int
 	buf   bytes.Buffer
+	err   error
 }
 
 func (b *ProbeOutput) Write(p []byte) (int, error) {
+	if b.err != nil {
+		return 0, b.err
+	}
 	if len(p) > b.Limit-b.buf.Len() {
-		return 0, fmt.Errorf("probe output exceeds limit")
+		b.err = fmt.Errorf("probe output exceeds limit")
+		return 0, b.err
 	}
 	return b.buf.Write(p)
 }
+
+// Err reports an output-bound failure even when exec.Cmd.Wait prioritizes a
+// nonzero exit over its output-copy error. Read it after RunProbe returns.
+func (b *ProbeOutput) Err() error { return b.err }
 
 // String returns the output kept so far.
 func (b *ProbeOutput) String() string { return b.buf.String() }

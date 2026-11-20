@@ -66,7 +66,8 @@
 # timeout to 50 ms, both from the PROMPT_COMMAND function below, so the
 # Escape does nothing and the line typed next is read as typed.
 #
-# Every launch argument is ignored. --noprofile --norc: nothing from the
+# Launch arguments are ignored except in the opt-in Droid modes below.
+# --noprofile --norc: nothing from the
 # image's dotfiles runs; -i: the shell reads commands from the pane's
 # terminal.
 #
@@ -96,6 +97,22 @@ if [[ -n "${AD_DROID_RULES_RECORD_DIR:-}" ]]; then
     fi
     [[ $# == 2 && "$1" == --settings ]] || exit 98
     cp "$2" "$AD_DROID_RULES_RECORD_DIR/pane-settings"
+fi
+
+# Opt-in Guard fixture: run the command from the actual launch overlay, using
+# the caller's blocked.json and allowed.json payloads. Record byte-exact output
+# and status before the shared recorder/shell, so a shell FIFO receipt proves
+# both calls finished. With this variable unset, ordinary lanes are unchanged.
+if [[ -n "${AD_DROID_GUARD_RECORD_DIR:-}" ]]; then
+    [[ $# == 2 && "$1" == --settings ]] || exit 99
+    rec="$AD_DROID_GUARD_RECORD_DIR"
+    cp "$2" "$rec/pane-settings" || exit 99
+    command=$(jq -er '.hooks.PreToolUse[0].hooks[0].command' "$2") || exit 99
+    printf '%s\n' "$command" >"$rec/command"
+    for verdict in blocked allowed; do
+        sh -c "$command" <"$rec/$verdict.json" >"$rec/$verdict.out" 2>"$rec/$verdict.err"
+        printf '%s\n' "$?" >"$rec/$verdict.exit"
+    done
 fi
 
 # >>> shared with test/realtmux/codex_standin_test.go

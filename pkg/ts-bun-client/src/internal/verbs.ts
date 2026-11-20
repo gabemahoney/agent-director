@@ -3,8 +3,8 @@
  * that needs to iterate, type-check, or map verb names.
  *
  * This list is hand-authored from `manifest.CallableVerbs()` in
- * pkg/api/manifest/manifest.go. It includes every verb where `Callable: true`
- * and excludes the three non-callable verbs (help, serve, hook).
+ * pkg/api/manifest/manifest.go. It includes exactly the verbs where
+ * `Callable: true`.
  *
  * Currently 22 callable verbs: spawn, status, get, get-many, send-keys,
  * force-delivery, get-force, get-delivery, read-pane, kill, decide,

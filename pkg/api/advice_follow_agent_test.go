@@ -44,7 +44,7 @@ func TestAdviceFollow_A27_EnablePaneOnlyAgent(t *testing.T) {
 					return err
 				}
 				adviceAssertAdvice(t, call(e.c), api.ErrExperimentalAgentDisabled, "enable that flag before creating its launch or template")
-				c := agentClientWithConfig(t, e, "[experimental]\n"+agent+" = true\n")
+				c := agentClientWithConfig(t, e, droidRulesConfig(t, "", "", agent))
 				if err := call(c); err != nil {
 					t.Fatal(err)
 				}
@@ -84,7 +84,7 @@ func TestAdviceFollow_A28_PaneOnlyModelAdvice(t *testing.T) {
 			t.Run(agent+"/"+tc.name, func(t *testing.T) {
 				e := newSpawnEnv(t)
 				t.Setenv("OPENROUTER_API_KEY", "synthetic-advice-key")
-				c := agentClientWithConfig(t, e, "[experimental]\n"+agent+" = true\n")
+				c := agentClientWithConfig(t, e, droidRulesConfig(t, "", "", agent))
 				p := api.SpawnParams{Agent: agent, CWD: t.TempDir(), AgentArgs: tc.args}
 				err := e.checkCreationWrites(t, func() error {
 					_, err := c.Spawn(p)
@@ -104,26 +104,33 @@ func TestAdviceFollow_A28_PaneOnlyModelAdvice(t *testing.T) {
 func TestAdviceFollow_A29_PaneOnlySettings(t *testing.T) {
 	// Serial: it sets HOME for launch files.
 	for _, agent := range []string{"droid", "opencode"} {
-		key := "FACTORY_API_KEY"
+		key := "FACTORY_RUNTIME_SETTINGS_PATH"
 		if agent == "opencode" {
 			key = "OPENCODE_PERMISSION"
 		}
-		for _, tc := range []struct {
+		type settingsCase struct {
 			name, advice string
 			want         error
 			set, follow  func(*api.SpawnParams)
-		}{
+		}
+		cases := []settingsCase{
 			{"relay", "omit this capability and supervise the owned pane", api.ErrAgentCapabilityUnsupported, func(p *api.SpawnParams) { p.RelayMode = "on" }, func(p *api.SpawnParams) { p.RelayMode = "" }},
 			{"permissions", "remove those entries and handle native permission prompts through the pane", api.ErrPermissionsUnsupported, func(p *api.SpawnParams) { p.Permissions = &api.Permissions{Allow: []string{"Bash"}} }, func(p *api.SpawnParams) { p.Permissions = nil }},
 			{"environment", "remove that key from extra_env", spawn.ErrReservedEnvKey, func(p *api.SpawnParams) { p.ExtraEnv = map[string]string{key: "sentinel"} }, func(p *api.SpawnParams) { delete(p.ExtraEnv, key) }},
 			{"HOME", "remove that entry and keep the invoking HOME", spawn.ErrReservedEnvKey, func(p *api.SpawnParams) {
 				p.ExtraEnv = map[string]string{"HOME": filepath.Join(p.CWD, "wrong-home"), "CALLER_TAG": "kept"}
 			}, func(p *api.SpawnParams) { delete(p.ExtraEnv, "HOME") }},
-		} {
+		}
+		if agent == "droid" {
+			cases = append(cases,
+				settingsCase{"PATH", "remove that key from extra_env", spawn.ErrReservedEnvKey, func(p *api.SpawnParams) { p.ExtraEnv = map[string]string{"PATH": ""} }, func(p *api.SpawnParams) { delete(p.ExtraEnv, "PATH") }},
+				settingsCase{"loader", "remove that entry from extra_env", spawn.ErrReservedEnvKey, func(p *api.SpawnParams) { p.ExtraEnv = map[string]string{"LD_GUARD_TEST": ""} }, func(p *api.SpawnParams) { delete(p.ExtraEnv, "LD_GUARD_TEST") }})
+		}
+		for _, tc := range cases {
 			t.Run(agent+"/"+tc.name, func(t *testing.T) {
 				e := newSpawnEnv(t)
 				t.Setenv("OPENROUTER_API_KEY", "synthetic-advice-key")
-				c := agentClientWithConfig(t, e, "[experimental]\n"+agent+" = true\n")
+				c := agentClientWithConfig(t, e, droidRulesConfig(t, "", "", agent))
 				p := api.SpawnParams{Agent: agent, CWD: t.TempDir(), AgentArgs: paneOnlyArgs(agent, "model")}
 				tc.set(&p)
 				err := e.checkCreationWrites(t, func() error {
@@ -247,7 +254,7 @@ func TestAdviceFollow_A16_AgentMissingPassAgent(t *testing.T) {
 				want := agentMissingText
 				if config.IsPaneOnly(f.agent) {
 					t.Setenv("OPENROUTER_API_KEY", "synthetic-advice-key")
-					env.c = agentClientWithConfig(t, env, "[experimental]\n"+f.agent+" = true\n")
+					env.c = agentClientWithConfig(t, env, droidRulesConfig(t, "", "", f.agent))
 					p.AgentArgs, p.RelayMode = paneOnlyArgs(f.agent, "model"), "off"
 					want = strings.Replace(want, "claude, codex or cursor", "claude, codex, cursor or "+f.agent, 1)
 				}
@@ -285,7 +292,7 @@ func TestAdviceFollow_A17_AgentInvalidNameClaudeOrCodex(t *testing.T) {
 				want := fmt.Sprintf(agentInvalidTextFmt, bad)
 				if config.IsPaneOnly(f.agent) {
 					t.Setenv("OPENROUTER_API_KEY", "synthetic-advice-key")
-					env.c = agentClientWithConfig(t, env, "[experimental]\n"+f.agent+" = true\n")
+					env.c = agentClientWithConfig(t, env, droidRulesConfig(t, "", "", f.agent))
 					p.AgentArgs = paneOnlyArgs(f.agent, "model")
 					want = strings.Replace(want, "claude, codex or cursor", "claude, codex, cursor or "+f.agent, 1)
 				}
@@ -365,7 +372,7 @@ func TestAdviceFollow_A19_TemplateAgentMissingAddAgentOrDropArgs(t *testing.T) {
 			p := api.SpawnParams{Agent: fix.agent, CWD: t.TempDir(), Template: "t", NoPreTrust: true}
 			if config.IsPaneOnly(fix.agent) {
 				t.Setenv("OPENROUTER_API_KEY", "synthetic-template-advice-key")
-				env.c = agentClientWithConfig(t, env, "[experimental]\n"+fix.agent+" = true\n")
+				env.c = agentClientWithConfig(t, env, droidRulesConfig(t, "", "", fix.agent))
 			}
 
 			_, refused := env.c.Spawn(p)
@@ -595,7 +602,7 @@ func TestAdviceFollow_A32_DroidRulesOperatorFix(t *testing.T) {
 			if err := os.WriteFile(rules, []byte(content), 0600); err != nil {
 				t.Fatal(err)
 			}
-			c := agentClientWithConfig(t, e, droidRulesConfig(rules, fake.Path, "droid"))
+			c := agentClientWithConfig(t, e, droidRulesConfig(t, rules, fake.Path, "droid"))
 			p := api.SpawnParams{Agent: "droid", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("droid", "model")}
 			var first string
 			for try := range 2 {
@@ -645,7 +652,7 @@ func TestAdviceFollow_A33_DroidRulesLeftCopy(t *testing.T) {
 	if err := os.WriteFile(rules, []byte(droidfix.RuleSet("tail")), 0600); err != nil {
 		t.Fatal(err)
 	}
-	c := agentClientWithConfig(t, e, droidRulesConfig(rules, fake.Path, "droid"))
+	c := agentClientWithConfig(t, e, droidRulesConfig(t, rules, fake.Path, "droid"))
 	p := api.SpawnParams{Agent: "droid", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("droid", "model")}
 	err := e.checkCreationWrites(t, func() error {
 		_, err := c.Spawn(p)
@@ -671,5 +678,59 @@ func TestAdviceFollow_A33_DroidRulesLeftCopy(t *testing.T) {
 	advRulesLaunched(t, e, res, fake.Path)
 	if entries, err := os.ReadDir(tmp); err != nil || len(entries) != 0 {
 		t.Fatalf("temporary directory holds %v, %v; want nothing", entries, err)
+	}
+}
+
+// A34: "an operator must fix the Path List File named by [launch]
+// droid_secret_paths_file or the Guard installation and environment".
+func TestAdviceFollow_A34_DroidGuardOperatorFix(t *testing.T) {
+	// Serial: it owns HOME and replaces the Guard program selector.
+	for _, fix := range []string{"Path List File", "Guard program", "PATH"} {
+		t.Run(fix, func(t *testing.T) {
+			e := newSpawnEnv(t)
+			if err := os.MkdirAll(filepath.Dir(e.socket), 0700); err != nil {
+				t.Fatal(err)
+			}
+			g := passingDroidGuard(t)
+			validPath := os.Getenv("PATH")
+			if fix == "Path List File" {
+				if err := os.WriteFile(g.List, []byte("PRIVATE_ENTRY\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if fix == "Guard program" {
+				if err := g.Set(droidfix.Pass); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				t.Setenv("PATH", ".:"+validPath)
+			}
+			c := agentClientWithConfig(t, e, "[experimental]\ndroid = true\n[launch]\n"+g.ConfigLine())
+			p := api.SpawnParams{Agent: "droid", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("droid", "model")}
+			var previous string
+			for i := 0; i < 2; i++ {
+				err := e.checkCreationWrites(t, func() error { _, err := c.Spawn(p); return err })
+				adviceAssertAdvice(t, err, api.ErrLaunchGuardRefused, "an operator must fix the Path List File named by [launch] droid_secret_paths_file or the Guard installation and environment (see docs/experimental.md#droid-secret-paths)")
+				if i > 0 && errText(err) != previous {
+					t.Fatal("unchanged condition changed refusal")
+				}
+				previous = errText(err)
+			}
+			if fix == "Path List File" {
+				if err := os.WriteFile(g.List, []byte("/invented/fixed-vault\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if fix == "Guard program" {
+				if err := g.Set(droidfix.GuardPass); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				t.Setenv("PATH", validPath)
+			}
+			res, err := c.Spawn(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			advRulesLaunched(t, e, res, "droid")
+		})
 	}
 }

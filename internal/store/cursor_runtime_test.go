@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -10,6 +11,176 @@ import (
 	"testing"
 	"time"
 )
+
+// b.o7x: Cursor never gains the marked Claude/Codex child's epoch exception.
+// Only an existing, unconsumed claim survives another request's proof.
+func TestCursorEpochResponseAuthority(t *testing.T) {
+	for _, operation := range []string{"decide", "ack", "timeout", "native", "claimed relay", "claimed native"} {
+		losses := []string{"unknown origin", "marked child"}
+		committed := operation == "claimed relay" || operation == "claimed native"
+		if committed {
+			losses = []string{"none", "launch", "life", "session", "connection", "terminated", "closed", "tool proof", "turn ended", "expired"}
+		}
+		for _, loss := range losses {
+			t.Run(operation+"/"+loss, func(t *testing.T) {
+				f, row, b := cursorRowBinding(t)
+				if ok, err := f.s.SetCursorRuntimeSession(b, "epoch-session"); err != nil || !ok {
+					t.Fatalf("bind: %v %v", ok, err)
+				}
+				b.SessionID = "epoch-session"
+				gate := store.HookGate{Event: "SessionStart", ParentPID: b.GatewayPID, ParentStart: b.GatewayStart, SessionID: b.SessionID, Cursor: &b}
+				if a, err := f.s.ApplyHookTransition(row.InstanceID, gate, store.StateWaiting, false, gate.Event, "", false); err != nil || !a.Applied {
+					t.Fatalf("start: %+v %v", a, err)
+				}
+				until := time.UnixMilli(time.Now().Add(time.Hour).UnixMilli())
+				check := func(store.Spawn) error { return nil } // persisted-store boundary; kernel evidence is cursorhost's
+				req := store.RelayRequest{RequestToken: "epoch-request", ToolName: "Bash", ToolInput: "{}", ToolUseID: "target-tool", SettledAt: until}
+				if err := f.s.InsertCursorRequest(b, req, 0, until, store.DefaultLockWait, check); err != nil {
+					t.Fatal(err)
+				}
+				read := func(s *store.Store) store.PermissionRow {
+					t.Helper()
+					pr, err := s.GetPermissionRequest(row.InstanceID, req.RequestToken)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return pr
+				}
+				exec := func(q string) {
+					t.Helper()
+					db, err := sql.Open("sqlite", f.path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer db.Close()
+					if _, err := db.Exec(q); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if loss == "marked child" {
+					// ACP admission deliberately has unknown origin; fabricate the
+					// strongest child marker to check that agent type remains decisive.
+					exec("UPDATE permission_requests SET agent_id='cursor-child'")
+				}
+				if operation == "ack" || operation == "claimed relay" {
+					if ok, err := f.s.DecideRelayRequest(row.InstanceID, req.RequestToken, "allow", "", store.WriterProcessDecide, time.Time{}, store.DefaultLockWait); err != nil || !ok {
+						t.Fatalf("verdict setup: %v %v", ok, err)
+					}
+				}
+				if committed {
+					var ok bool
+					var err error
+					if operation == "claimed relay" {
+						_, ok, err = f.s.AckCursorDecision(b, req.RequestToken, false, until, until, store.DefaultLockWait, check)
+					} else {
+						ok, err = f.s.ClaimCursorPaneAnswer(b, req.RequestToken, "allow", until, store.DefaultLockWait, check)
+					}
+					if err != nil || !ok {
+						t.Fatalf("claim setup: %v %v", ok, err)
+					}
+					other := req
+					other.RequestToken, other.ToolUseID = "independent-request", "independent-tool"
+					if err := f.s.InsertCursorRequest(b, other, 0, until, store.DefaultLockWait, check); err != nil {
+						t.Fatal(err)
+					}
+					if err := f.s.ProveCursorToolRan(b, other.RequestToken, other.ToolUseID, true, check); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					// An unanswered Cursor request holds Stop; ask_user is a
+					// permitted raw-state change while this request stays open.
+					gate.Event = "PreToolUse"
+					if a, err := f.s.ApplyHookTransition(row.InstanceID, gate, store.StateAskUser, false, gate.Event, "", false); err != nil || !a.Applied {
+						t.Fatalf("bump: %+v %v", a, err)
+					}
+				}
+				before := read(f.s)
+				current, err := f.s.GetSpawn(row.InstanceID)
+				if err != nil || current.PermissionEpoch <= before.OwnerPermissionEpoch || before.ProvenGone() || before.Closed() {
+					t.Fatalf("epoch fixture: row=%+v request=%+v err=%v", current, before, err)
+				}
+				if !committed {
+					var ok bool
+					var err error
+					switch operation {
+					case "decide":
+						ok, err = f.s.DecideRelayRequest(row.InstanceID, req.RequestToken, "allow", "", store.WriterProcessDecide, time.Time{}, store.DefaultLockWait)
+					case "ack", "timeout":
+						var d string
+						d, ok, err = f.s.AckCursorDecision(b, req.RequestToken, operation == "timeout", until, until, store.DefaultLockWait, check)
+						if d != "" {
+							t.Fatalf("refused acquisition returned %q", d)
+						}
+					case "native":
+						ok, err = f.s.ClaimCursorPaneAnswer(b, req.RequestToken, "allow", until, store.DefaultLockWait, check)
+					}
+					if err != nil || ok || !reflect.DeepEqual(before, read(f.s)) {
+						t.Fatalf("fresh Cursor acquisition crossed epoch: %v %v", ok, err)
+					}
+					return
+				}
+				// Explicit persisted replacement adversaries, after the proof bump.
+				switch loss {
+				case "launch":
+					exec("UPDATE spawns SET launch_token='2222222222222222'")
+				case "life":
+					exec("UPDATE spawns SET life_number=life_number+1")
+				case "session":
+					exec("UPDATE spawns SET session_id='replacement'")
+				case "connection":
+					exec("UPDATE cursor_runtimes SET bound_connection_id='replacement'")
+				case "terminated":
+					if ok, err := f.s.MarkCursorRuntimeGone(b); err != nil || !ok {
+						t.Fatalf("termination: %v %v", ok, err)
+					}
+				case "closed":
+					exec("UPDATE permission_requests SET closed_at=1 WHERE request_token='epoch-request'")
+				case "tool proof":
+					if err := f.s.ProveCursorToolRan(b, req.RequestToken, req.ToolUseID, true, check); err != nil {
+						t.Fatal(err)
+					}
+				case "turn ended":
+					if err := f.s.ProveCursorTurnEnded(b, []string{req.RequestToken}, until, check); err != nil {
+						t.Fatal(err)
+					}
+				case "expired":
+					until = time.Now().Add(-time.Second)
+				}
+				other, err := store.Open(f.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer other.Close()
+				before = read(other)
+				for _, issue := range []bool{false, true} {
+					err := other.CheckCursorAnswer(b, req.RequestToken, operation == "claimed relay", until, check)
+					if issue {
+						err = other.IssueCursorAnswer(b, req.RequestToken, operation == "claimed relay", until, check)
+					}
+					if (err == nil) != (loss == "none") || errors.Is(err, store.ErrCursorAnswerTurnEnded) != (loss == "turn ended") {
+						t.Fatalf("claimed response authority issue=%v: %v", issue, err)
+					}
+				}
+				if loss != "none" {
+					if !reflect.DeepEqual(before, read(other)) {
+						t.Fatal("refused issue changed claim")
+					}
+					return
+				}
+				want := store.ResponseNativeIssued
+				if operation == "claimed relay" {
+					want = store.ResponseRelayIssued
+				}
+				if pr := read(other); pr.ResponseState != want || pr.OwnerPermissionEpoch != before.OwnerPermissionEpoch || pr.ProvenGone() {
+					t.Fatalf("issue changed owner/proof or lost consumption: %+v", pr)
+				}
+				if err := f.s.IssueCursorAnswer(b, req.RequestToken, operation == "claimed relay", until, check); err == nil {
+					t.Fatal("issued claim replayed across connections")
+				}
+			})
+		}
+	}
+}
 
 func TestCursorClaimAndIssueSQLiteBoundary(t *testing.T) {
 	for _, mode := range []string{"relay", "native"} {

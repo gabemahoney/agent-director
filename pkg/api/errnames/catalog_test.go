@@ -35,11 +35,17 @@ func TestClassifyKnown(t *testing.T) {
 			if entry.Name == "ErrPermissionRulesRefused" && !strings.Contains(entry.Description, "A configuration error: retrying without an operator change gives the same result.") {
 				t.Errorf("catalog lost the operator configuration refusal: %q", entry.Description)
 			}
+			if entry.Name == "ErrLaunchGuardRefused" {
+				const want = "The required launch guard could not be checked; the description names the problem kind and, where known, a source line number, never file content, paths or child output. A configuration error: retrying without an operator change gives the same result. No row, session, trust entry or launch file was written and nothing launched."
+				if entry.Description != want {
+					t.Errorf("catalog launch guard contract = %q; want %q", entry.Description, want)
+				}
+			}
 		})
 	}
 }
 
-// TestClassifyAgentErrors: the five agent errors pkg/api re-exports classify
+// TestClassifyAgentErrors: the agent errors pkg/api re-exports classify
 // under their own names, wrapped as callers meet them (SR-1.6).
 func TestClassifyAgentErrors(t *testing.T) {
 	for name, sentinel := range map[string]error{
@@ -50,6 +56,7 @@ func TestClassifyAgentErrors(t *testing.T) {
 		"ErrTemplateAgentMissing":   api.ErrTemplateAgentMissing,
 		"ErrHostCredentialMissing":  api.ErrHostCredentialMissing,
 		"ErrPermissionRulesRefused": api.ErrPermissionRulesRefused,
+		"ErrLaunchGuardRefused":     api.ErrLaunchGuardRefused,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got, _ := errnames.Classify(fmt.Errorf("%w: context", sentinel)); got != name {

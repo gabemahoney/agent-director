@@ -23,7 +23,7 @@ import {
 } from "../internal/helper.js";
 import {
   ErrSpawnDeniedFlag, ErrCwdMissing, ErrInvalidFlags, ErrInstanceIdCollision, ErrAgentMissing, ErrAgentInvalid, AgentDirectorError,
-  ErrPermissionRulesRefused, ErrPermissionsUnsupported, ErrTemplateMalformed,
+  ErrLaunchGuardRefused, ErrPermissionRulesRefused, ErrPermissionsUnsupported, ErrTemplateMalformed, ErrReservedEnvKey,
   type SpawnParams,
 } from "../../src/index.js";
 
@@ -37,11 +37,39 @@ const operatorRules = {
 function configureDroidRules(home: string, rules = operatorRules): string {
   const dir = path.dirname(homeStore(home));
   fs.mkdirSync(dir, { recursive: true });
+  const guard = runHelper("seed-droid-guard", { root: path.join(home, "guard-fixture") });
   const file = path.join(dir, "rules.json");
   fs.writeFileSync(file, JSON.stringify(rules));
-  fs.writeFileSync(path.join(dir, "config.toml"), `[experimental]\ndroid = true\n[launch]\ndroid_rules_path = ${JSON.stringify(file)}\n`);
+  fs.writeFileSync(path.join(dir, "config.toml"), `[experimental]\ndroid = true\n[launch]\ndroid_rules_path = ${JSON.stringify(file)}\n${guard.config}`);
   return file;
 }
+
+test.each([false, true])("spawn: configured Guard give a sanitized typed refusal (reuse=%s)", async (reuse) => {
+  await withTempHome(async (home) => {
+    configureDroidRules(home);
+    fs.writeFileSync(path.join(home, "guard-fixture", "secret-paths.txt"), "# comment\n\nPRIVATE_GUARD_ENTRY\n");
+    const store = homeStore(home);
+    const id = `droid-rules-${crypto.randomUUID().slice(0, 8)}`;
+    runHelper("seed-spawn", { store, id, agent: "droid", state: "ended", "create-store": true, socket: privateTmuxSocket(home) });
+    using client = await openClient(store);
+    const before = await client.get({ instance_id: id });
+    const log = path.join(home, "fake-tmux.log");
+    await withProcessEnv({ FAKE_TMUX_LOG: log }, async () => {
+      const params = { agent: "droid", cwd: home, agent_args: ["--model", "model"],
+        ...(reuse ? { instance_id: id, reuse_finished: true } : {}) };
+      const err = await rejection(client.spawn(params)) as AgentDirectorError;
+      expect(err).toBeInstanceOf(ErrLaunchGuardRefused);
+      expect(err.errName).toBe("ErrLaunchGuardRefused");
+      expect(err.errDescription).toBe("Droid launch Guard refused: line 3: the entry is not an absolute or ~/ path; an operator must fix the Path List File named by [launch] droid_secret_paths_file or the Guard installation and environment (see docs/experimental.md#droid-secret-paths); no row, session, trust entry or launch file was written and nothing was launched");
+      for (const secret of ["PRIVATE_GUARD_ENTRY"]) expect(err.message).not.toContain(secret);
+      expect(await client.get({ instance_id: id })).toEqual(before);
+      expect((await client.list({})).spawns.map((row) => row.instance_id)).toEqual([id]);
+      expect(newSessionCount(log)).toBe(0);
+      expect(fs.existsSync(path.join(path.dirname(store), "launch"))).toBe(false);
+
+    });
+  });
+}, 20_000);
 
 test.each([false, true])("spawn: configured rules give a sanitized typed refusal (reuse=%s)", async (reuse) => {
   await withTempHome(async (home) => {
@@ -72,7 +100,7 @@ test.each([false, true])("spawn: configured rules give a sanitized typed refusal
         const changed = await rejection(client.spawn(params)) as AgentDirectorError;
         expect(changed).toBeInstanceOf(ErrPermissionRulesRefused);
         expect(changed.errDescription).toContain("the file is not a rules object:");
-        fs.writeFileSync(path.join(path.dirname(store), "config.toml"), `[experimental]\ndroid = true\n[launch]\ndroid_rules_path = ${JSON.stringify(path.join(home, "absent.json"))}\n`);
+        fs.writeFileSync(path.join(path.dirname(store), "config.toml"), `[experimental]\ndroid = true\n[launch]\ndroid_rules_path = ${JSON.stringify(path.join(home, "absent.json"))}\ndroid_secret_paths_file = ${JSON.stringify(path.join(home, "guard-fixture", "secret-paths.txt"))}\n`);
         const moved = await rejection(client.spawn(params)) as AgentDirectorError;
         expect(moved).toBeInstanceOf(ErrPermissionRulesRefused);
         expect(moved.errDescription).toContain("the file is not a readable regular file of at most 1 MiB");
@@ -81,7 +109,9 @@ test.each([false, true])("spawn: configured rules give a sanitized typed refusal
   });
 }, 20_000);
 
-const droidCallerCases: { name: string; params: Partial<SpawnParams>; error: typeof AgentDirectorError }[] = [
+const droidCallerCases: {
+  name: string; params: Partial<SpawnParams>; error: typeof AgentDirectorError; description?: string;
+}[] = [
   ...(["allow", "deny", "ask"] as const).map((key) => ({ name: key, params: { [key]: ["Bash"] }, error: ErrPermissionsUnsupported })),
   ...[
     ["settings", ["--settings", "/caller/settings.json"]],
@@ -89,10 +119,23 @@ const droidCallerCases: { name: string; params: Partial<SpawnParams>; error: typ
     ["duplicate model", ["--model", "model", "--model", "other"]],
     ["positional", ["prompt"]],
   ].map(([name, args]) => ({ name: name as string, params: { agent_args: args as string[] }, error: ErrSpawnDeniedFlag })),
+  // Independent SR-4 inventory; LD_PRIVATE_SENTINEL is deliberately not a standard loader key.
+  ...[
+    "FACTORY_RUNTIME_SETTINGS_PATH", "FACTORY_RUNTIME_SETTINGS_SOURCE",
+    "FACTORY_RUNTIME_SETTINGS_SHA256", "FACTORY_RUNTIME_SETTINGS_ORIGIN",
+    "FACTORY_ORG_MANAGED_SETTINGS_LOCAL_PATH", "FACTORY_ORG_MANAGED_SETTINGS_URL",
+    "PATH", "LD_PRIVATE_SENTINEL",
+  ].flatMap((key) => ["", "PRIVATE_ENV_VALUE"].map((value) => ({
+    name: `${key}/${value === "" ? "empty" : "sentinel"}`,
+    params: { extra_env: { [key]: value } }, error: ErrReservedEnvKey,
+    description: key.startsWith("LD_") ?
+      "agent droid refuses extra_env keys starting with LD_; remove that entry from extra_env" :
+      `agent droid refuses extra_env key ${key}; remove that key from extra_env`,
+  }))),
 ];
 
 for (const mode of ["spawn", "reuse", "make-template"] as const) {
-  test.each(droidCallerCases)(`${mode}: operator rules cannot enable caller $name`, async ({ params, error }) => {
+  test.each(droidCallerCases)(`${mode}: operator rules cannot enable caller $name`, async ({ params, error, description }) => {
     await withTempHome(async (home) => {
       configureDroidRules(home);
       const store = homeStore(home);
@@ -105,7 +148,12 @@ for (const mode of ["spawn", "reuse", "make-template"] as const) {
         const p = { agent: "droid", cwd: home, agent_args: ["--model", "model"], ...params };
         const call = mode === "make-template" ? client.makeTemplate({ ...p, name: "refused" }) :
           client.spawn({ ...p, ...(mode === "reuse" ? { instance_id: id, reuse_finished: true } : {}) });
-        await expect(call).rejects.toBeInstanceOf(error);
+        const err = await rejection(call) as AgentDirectorError;
+        expect(err).toBeInstanceOf(error);
+        expect(err.errName).toBe(error.name);
+        if (description) expect(err.errDescription).toBe(description);
+        expect(err.message).toBe(`${err.errName}: ${err.errDescription}`);
+        expect(err.message).not.toContain("PRIVATE_ENV_VALUE");
         expect(await client.get({ instance_id: id })).toEqual(before);
         expect((await client.list({})).spawns.map((row) => row.instance_id)).toEqual([id]);
         expect(newSessionCount(log)).toBe(0);
@@ -116,31 +164,47 @@ for (const mode of ["spawn", "reuse", "make-template"] as const) {
 }
 
 test.each([
-  ["settings", ErrSpawnDeniedFlag], ["permissions", ErrPermissionsUnsupported], ["rule field", ErrTemplateMalformed],
-] as const)("spawn: hand-edited template %s stays refused with operator rules", async (kind, error) => {
+  ...droidCallerCases.filter(({ name, params }) => name === "settings" || name === "ask" ||
+    ["FACTORY_ORG_MANAGED_SETTINGS_URL", "PATH", "LD_PRIVATE_SENTINEL"].some((key) => key in (params.extra_env ?? {}))),
+  { name: "rule field", params: {} as Partial<SpawnParams>, error: ErrTemplateMalformed, description: undefined },
+])("spawn: hand-edited template $name stays refused with operator rules", async ({ name, params, error, description }) => {
   await withTempHome(async (home) => {
     configureDroidRules(home);
     const store = homeStore(home);
     const id = `droid-template-${crypto.randomUUID().slice(0, 8)}`;
     runHelper("seed-spawn", { store, id, agent: "droid", state: "ended", "create-store": true, socket: privateTmuxSocket(home) });
     using client = await openClient(store);
-    const { path: template } = await client.makeTemplate({ name: "caller", agent: "droid", agent_args: ["--model", "model"] });
+    // Loader inheritance also exercises a generic template with a caller-selected agent.
+    const generic = "LD_PRIVATE_SENTINEL" in (params.extra_env ?? {});
+    const { path: template } = await client.makeTemplate({ name: "caller",
+      ...(generic ? {} : { agent: "droid", agent_args: ["--model", "model"] }) });
     let body = fs.readFileSync(template, "utf8");
-    if (kind === "settings") {
+    if (name === "settings") {
       expect(body).toMatch(/agent_args = \[[^\]]*\]/);
       body = body.replace(/agent_args = \[[^\]]*\]/, 'agent_args = ["--settings", "/caller/settings.json"]');
-    } else if (kind === "permissions") body += '\n[permissions]\nask = ["Bash"]\n';
-    else body = 'droid_rules_path = "/caller/rules.json"\n' + body;
+    } else if (name === "ask") body += '\n[permissions]\nask = ["Bash"]\n';
+    else if (params.extra_env) {
+      const [[key, value]] = Object.entries(params.extra_env);
+      body += `\n[extra_env]\n${key} = ${JSON.stringify(value)}\n`;
+    } else body = 'droid_rules_path = "/caller/rules.json"\n' + body;
     fs.writeFileSync(template, body);
     const before = await client.get({ instance_id: id });
     const log = path.join(home, "fake-tmux.log");
     await withProcessEnv({ FAKE_TMUX_LOG: log }, async () => {
       for (const reuse of [false, true]) {
-        await expect(client.spawn({ cwd: home, template: "caller", ...(reuse ? { instance_id: id, reuse_finished: true } : {}) })).rejects.toBeInstanceOf(error);
+        const err = await rejection(client.spawn({ cwd: home, template: "caller",
+          ...(generic ? { agent: "droid", agent_args: ["--model", "model"] } : {}),
+          ...(reuse ? { instance_id: id, reuse_finished: true } : {}) })) as AgentDirectorError;
+        expect(err).toBeInstanceOf(error);
+        expect(err.errName).toBe(error.name);
+        if (description) expect(err.errDescription).toBe(description);
+        expect(err.message).toBe(`${err.errName}: ${err.errDescription}`);
+        expect(err.message).not.toContain("PRIVATE_ENV_VALUE");
         expect(await client.get({ instance_id: id })).toEqual(before);
         expect((await client.list({})).spawns.map((row) => row.instance_id)).toEqual([id]);
         expect(fs.readFileSync(template, "utf8")).toBe(body);
         expect(newSessionCount(log)).toBe(0);
+        expect(fs.existsSync(path.join(path.dirname(store), "launch"))).toBe(false);
       }
     });
   });

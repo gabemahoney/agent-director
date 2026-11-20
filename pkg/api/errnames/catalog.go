@@ -63,6 +63,7 @@ var Catalog = []Entry{
 	{Name: "ErrModelMissing", Err: spawn.ErrModelMissing},
 	{Name: "ErrHostCredentialMissing", Err: spawn.ErrHostCredentialMissing, Description: "A required host credential is unset or empty in agent-director's own environment; the launch refuses before mutation."},
 	{Name: "ErrPermissionRulesRefused", Err: spawn.ErrPermissionRulesRefused, Description: "The operator's configured permission rules for this launch were refused; the description names the problem kind and, where known, the rule's position, never the rules. A configuration error: retrying without an operator change gives the same result. Refusal writes none of agent-director's launch resources: no row, session, trust entry or launch file."},
+	{Name: "ErrLaunchGuardRefused", Err: spawn.ErrLaunchGuardRefused, Description: "The required launch guard could not be checked; the description names the problem kind and, where known, a source line number, never file content, paths or child output. A configuration error: retrying without an operator change gives the same result. No row, session, trust entry or launch file was written and nothing launched."},
 	{Name: "ErrAgentMissing", Err: spawn.ErrAgentMissing},
 	{Name: "ErrAgentInvalid", Err: spawn.ErrAgentInvalid},
 	{Name: "ErrAgentArgsMismatch", Err: spawn.ErrAgentArgsMismatch},

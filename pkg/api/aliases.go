@@ -337,3 +337,9 @@ var ErrHostCredentialMissing = spawn.ErrHostCredentialMissing
 // operator change gives the same result. Refusal writes none of agent-director's
 // launch resources: no row, session, trust entry or launch file.
 var ErrPermissionRulesRefused = spawn.ErrPermissionRulesRefused
+
+// ErrLaunchGuardRefused means the launch's required guard could not be checked.
+// It is a configuration error: retrying without an operator change gives the
+// same result. No row, session, trust entry or launch file was written and
+// nothing launched.
+var ErrLaunchGuardRefused = spawn.ErrLaunchGuardRefused

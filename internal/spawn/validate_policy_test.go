@@ -2,6 +2,7 @@ package spawn
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -56,8 +57,11 @@ func TestValidatePaneOnlyPolicy(t *testing.T) {
 		keys         []string
 		models       []policyCase
 	}{
-		{"droid", value, []string{"FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE"}, []policyCase{
+		{"droid", value, []string{"FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE",
+			"FACTORY_RUNTIME_SETTINGS_PATH", "FACTORY_RUNTIME_SETTINGS_SOURCE", "FACTORY_RUNTIME_SETTINGS_SHA256", "FACTORY_RUNTIME_SETTINGS_ORIGIN",
+			"FACTORY_ORG_MANAGED_SETTINGS_LOCAL_PATH", "FACTORY_ORG_MANAGED_SETTINGS_URL", "PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_NONSTANDARD_GUARD_TEST"}, []policyCase{
 			{name: "custom selector", args: []string{"--model", "custom:" + value}, want: ErrSpawnDeniedFlag},
+			{name: "ordinary environment", args: []string{"--model", "model"}, env: map[string]string{"CALLER_TAG": "kept", "XLD_NONSTANDARD": "ordinary"}},
 		}},
 		{"opencode", "openrouter/" + value, []string{"OPENROUTER_API_KEY", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "OPENCODE_AUTH_CONTENT", "OPENCODE_PERMISSION"}, []policyCase{
 			{name: "nested model ID", args: []string{"--model", "openrouter/provider/" + value}},
@@ -97,6 +101,7 @@ func TestValidatePaneOnlyPolicy(t *testing.T) {
 			}
 			for _, tc := range cases {
 				t.Run(tc.name, func(t *testing.T) {
+					before := maps.Clone(tc.env)
 					r := Resolved{SpawnParams: SpawnParams{Agent: lane.agent, CWD: t.TempDir(), AgentArgs: tc.args, RelayMode: tc.relay, Permissions: tc.permissions, ExtraEnv: tc.env}, Experimental: config.Experimental{Droid: true, OpenCode: true}}
 					err := Validate(&r)
 					if !errors.Is(err, tc.want) {
@@ -105,7 +110,40 @@ func TestValidatePaneOnlyPolicy(t *testing.T) {
 					if err != nil && strings.Contains(err.Error(), value) {
 						t.Fatalf("refusal leaked rejected value: %v", err)
 					}
+					if !maps.Equal(tc.env, before) || !maps.Equal(r.ExtraEnv, before) {
+						t.Fatal("validation changed caller environment")
+					}
 				})
+			}
+		})
+	}
+}
+
+// Malformed names still select a stable, sanitized refusal before generic syntax checks.
+func TestValidateDroidEnvironmentDiagnostics(t *testing.T) {
+	const private = "PRIVATE_ENV_TEXT"
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"selector spelling", map[string]string{"FACTORY_RUNTIME_SETTINGS_PATH=" + private: private}, "extra_env key FACTORY_RUNTIME_SETTINGS_PATH; remove that key from extra_env"},
+		{"PATH spelling", map[string]string{"PATH=" + private: private}, "extra_env key PATH; remove that key from extra_env"},
+		{"loader spelling", map[string]string{"LD_" + private + "\x00=" + private: private}, "extra_env keys starting with LD_; remove that entry from extra_env"},
+		{"first selector", map[string]string{"PATH": private, "LD_NONSTANDARD": private, "FACTORY_RUNTIME_SETTINGS_SOURCE": private, "FACTORY_ORG_MANAGED_SETTINGS_URL": private}, "extra_env key FACTORY_ORG_MANAGED_SETTINGS_URL; remove that key from extra_env"},
+		{"loader before PATH", map[string]string{"PATH": private, "LD_NONSTANDARD": ""}, "extra_env keys starting with LD_; remove that entry from extra_env"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Resolved{SpawnParams: SpawnParams{Agent: "droid", CWD: t.TempDir(), AgentArgs: []string{"--model", "model"}, ExtraEnv: tc.env}, Experimental: config.Experimental{Droid: true}}
+			before := maps.Clone(tc.env)
+			for i := 0; i < 10; i++ {
+				err := Validate(&r)
+				if !errors.Is(err, ErrReservedEnvKey) || err.Error() != "ErrReservedEnvKey: agent droid refuses "+tc.want {
+					t.Fatalf("diagnostic=%v; want %s", err, tc.want)
+				}
+			}
+			if !maps.Equal(tc.env, before) {
+				t.Fatal("refusal changed caller environment")
 			}
 		})
 	}

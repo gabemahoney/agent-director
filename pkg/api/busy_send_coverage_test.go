@@ -102,7 +102,7 @@ func TestBusySendPublicSpawnAllAgents(t *testing.T) {
 	for _, agent := range []string{"claude", "codex", "cursor", "droid", "opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			e := newSpawnEnv(t)
-			e.c = agentClientWithConfig(t, e, "[experimental]\ndroid = true\nopencode = true\n")
+			e.c = agentClientWithConfig(t, e, droidRulesConfig(t, "", "", "droid", "opencode"))
 			params := api.SpawnParams{Agent: agent, CWD: t.TempDir(), NoPreTrust: true}
 			if agent == "droid" || agent == "opencode" {
 				params.AgentArgs = paneOnlyArgs(agent, "model")

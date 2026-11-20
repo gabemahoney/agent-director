@@ -71,7 +71,7 @@ Layout (the bee folder's relative layout)
   suite.tsv               run, model, expected verdict, budgets, what it shows
 
 Pins (sha256sum format, paths relative to spec/tla/codex/)
-45fc204eeed1d2697c773575358d05bab9188ddcac4d2737f708fbf0bf5193a5  README.md
+7667705e21269fb0966d4ac2b25dfd445d71e34ed2be11c1088c28779a70d7b9  README.md
 2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f  src/B146R5Cx.tla
 1e7e9eb804db872fe3f0c97b9f4626d15e70f3bee624cc0c3e8fa801d85e6109  src/Hold36hCx.tla
 87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  src/Phase5HookCx.tla

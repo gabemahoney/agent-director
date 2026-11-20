@@ -88,9 +88,11 @@ type mcpReply struct {
 		} `json:"content"`
 	} `json:"result"`
 	Error *struct {
+		Code    int    `json:"code"`
 		Message string `json:"message"`
 		Data    struct {
-			ErrName string `json:"err_name"`
+			ErrName        string `json:"err_name"`
+			ErrDescription string `json:"err_description"`
 		} `json:"data"`
 	} `json:"error"`
 }

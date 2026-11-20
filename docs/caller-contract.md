@@ -945,7 +945,7 @@ Use `get` or `get-many`'s `agent` field to identify recording support;
 | `agent` | `failure_reason` |
 | --- | --- |
 | `cursor` | Recorded reason, or explicit `null` when no applicable reason is recorded. |
-| `claude`, `codex`, `droid`, `opencode` | Always `null`, regardless of outcome. |
+| All other agents | Always `null`, regardless of outcome. |
 
 Legacy rows and failures without a recorded reason also return `null`; it
 does not prove success. The reason follows state settling, including the
@@ -2393,6 +2393,15 @@ or a binary that cannot run, gives no relay answer and leaves the agent's
 native prompt. For an uncovered agent, a prompt with no recorded request holds no input,
 so a plain `send-keys` can answer it. For Claude, inspect and use direct tmux.
 Claude shows its native dialog while the relay hook runs; that dialog is not evidence that the hook died.
+
+A request identified as a Claude or Codex subagent's remains eligible for
+`decide` after the main turn ends, the row moves to `waiting` or `ask_user`,
+or a later main turn starts. It must remain open and unproven under the same
+launch, life and session, with a live relay hook and its original time limit.
+A verdict recorded before the state change can still be acknowledged afterward;
+an unanswered request can still receive the hook's timeout deny. Follow its
+token with `get-permission`. Presence in `unproven_requests`, a delivery value
+or `hook_alive` alone does not establish response eligibility.
 
 Every Cursor relay reply, including timeout denial, requires its own durable
 acknowledgement. Failed or missing acknowledgement means no relay answer is

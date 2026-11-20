@@ -207,7 +207,8 @@ at most that deadline minus one second. Without it, store waits use
 `[store] busy_timeout_ms`.
 
 `decide` waits at most one second for acknowledgement and returns the
-[delivery fields](#delivery). For polling and all refusals, follow
+[delivery fields](#delivery). For polling, subagent requests across main-turn
+changes and all refusals, follow
 [Permission relay](caller-contract.md#permission-relay).
 
 For Claude and Codex, only the row's own agent is relayed, not a nested

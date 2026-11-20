@@ -1,19 +1,32 @@
 package mcp_test
 
 import (
-	"github.com/gabemahoney/agent-director/internal/mcp"
+	"strings"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/mcp"
 )
 
-func TestCursorHostCannotBeDiscoveredOrDispatched(t *testing.T) {
-	if mcp.ExposedVerb("cursor-host") {
-		t.Fatal("internal cursor-host exposed")
-	}
-	d := mcp.NewLiveDispatcher(nil)
-	for _, name := range []string{"cursor_host", "cursor-host"} {
-		resp := callTool(t, d, name, `{"runtime":"must-not-run"}`)
-		if resp == nil || resp.Error == nil {
-			t.Fatalf("internal gateway dispatched: %+v", resp)
-		}
+func TestInternalVerbsCannotBeDispatched(t *testing.T) {
+	for _, verb := range []string{"cursor-host", "tool-guard"} {
+		t.Run(verb, func(t *testing.T) {
+			if mcp.ExposedVerb(verb) {
+				t.Fatalf("internal verb %s exposed", verb)
+			}
+			// No client is available: internal routes must refuse before execution.
+			d := mcp.NewLiveDispatcher(nil)
+			for _, name := range []string{verb, strings.ReplaceAll(verb, "-", "_")} {
+				t.Run(name, func(t *testing.T) {
+					resp := callTool(t, d, name, `{}`)
+					data := toolErrorData(t, resp)
+					want := "ErrUnknownTool: " + name
+					if resp.Error.Code != -32000 || resp.Error.Message != want ||
+						data.ErrName != "ErrUnknownTool" || data.ErrDescription != want ||
+						data.ErrDetails != nil || resp.Result != nil {
+						t.Errorf("internal verb response = %+v, data=%+v; want only unknown-tool refusal %q", resp, data, want)
+					}
+				})
+			}
+		})
 	}
 }

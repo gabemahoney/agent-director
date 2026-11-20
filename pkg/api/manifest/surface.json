@@ -3,7 +3,7 @@
   "verbs": [
     {
       "name": "help",
-      "description": "JSON verbs for SessionStart and SessionEnd reason=compact hooks. CLI aliases: --help, -h.",
+      "description": "JSON verbs for SessionStart/SessionEnd reason=compact hooks. Aliases: --help, -h.",
       "callable": false,
       "handle_free": false,
       "params": [],
@@ -240,6 +240,7 @@
         "ErrModelMissing",
         "ErrHostCredentialMissing",
         "ErrPermissionRulesRefused",
+        "ErrLaunchGuardRefused",
         "ErrAgentMissing",
         "ErrAgentInvalid",
         "ErrAgentArgsMismatch",
@@ -265,7 +266,7 @@
     },
     {
       "name": "status",
-      "description": "Check this row; report state: pending/waiting/working/ask_user/check_permission/ended/missing; displayed_state idle_screen: working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook yet; may be loading or at a startup prompt; resumed keeps session id/history.",
+      "description": "Check row; state: pending/waiting/working/ask_user/check_permission/ended/missing; displayed_state idle_screen: working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook yet; may be loading or at a startup prompt; resumed keeps session id/history.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -447,7 +448,7 @@
     },
     {
       "name": "get",
-      "description": "Check this row; return identity, state, session and tmux socket.",
+      "description": "Check identity, state, session, tmux socket.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -860,7 +861,7 @@
     },
     {
       "name": "send-keys",
-      "description": "Covered agent: Held, not typed. Else strip CR, keep LF, add Enter (empty text: Enter only); native (exact proof) or pane input. ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else hook-derived get/status, escalate if unknown. See caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
+      "description": "Covered: Held, not typed. Else strip CR, keep LF, add Enter (empty text: Enter only); native exact proof or pane. ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else hook-derived get/status, escalate if unknown. See caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -1119,7 +1120,7 @@
     },
     {
       "name": "get-force",
-      "description": "Read a force_result by force_id. Durable facts only; starts no work.",
+      "description": "Read force_result by force_id. Durable facts only; starts no work.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -1162,7 +1163,7 @@
     },
     {
       "name": "get-delivery",
-      "description": "Read a confirmed Message's Result. Durable facts only; starts no work.",
+      "description": "Get confirmed Message Result. Durable facts only; starts no work.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -1214,7 +1215,7 @@
     },
     {
       "name": "read-pane",
-      "description": "Capture the last N lines of the agent's own pane; ANSI stripped unless `ansi=true`. tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
+      "description": "Capture this agent's last N pane lines (default 25, uncapped). ANSI escapes stripped, unicode glyphs kept, unless `ansi=true` (raw bytes). tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -1505,7 +1506,7 @@
     },
     {
       "name": "get-permission",
-      "description": "Get by request_token. Cursor retains raw permission/plan params. Undecided: decision/decided_at null. Decided may stay open until acked. Delivery and proof are distinct; a verdict or closeout grants no response authority.",
+      "description": "Get by request_token. Cursor keeps raw permission/plan params. Undecided: decision/decided_at null. Decided may stay open until acked. Delivery isn't proof; verdict/closeout has no response authority.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -1719,7 +1720,7 @@
     },
     {
       "name": "record-pane-answer",
-      "description": "Record an outside answer to a fallen-back request; no typing, response authority or proof. Needs read-pane's pane_sha256; too soon: ErrClaimTooSoon.",
+      "description": "Record outside answer to fallen-back request; no typing, response authority or proof. Needs read-pane's pane_sha256; early: ErrClaimTooSoon.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -1971,7 +1972,7 @@
     },
     {
       "name": "find-missing",
-      "description": "Compatibility alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety.",
+      "description": "Alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety.",
       "callable": true,
       "handle_free": false,
       "params": [],
@@ -2076,7 +2077,7 @@
     },
     {
       "name": "make-template",
-      "description": "Save a preset as ~/.config/agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.",
+      "description": "Save preset ~/.config/agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -2321,7 +2322,7 @@
     },
     {
       "name": "list-subagents",
-      "description": "Agent's subagent records with tracked status.",
+      "description": "Agent's subagent records; tracked status.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -2400,7 +2401,7 @@
     },
     {
       "name": "serve",
-      "description": "MCP server (JSON-RPC stdio): CLI verbs except `hook`, `serve`, `trail-emit` and `cursor-host` as tools.",
+      "description": "MCP (JSON-RPC stdio): CLI verbs except `hook`, `serve`, `trail-emit`, `cursor-host`, `tool-guard`.",
       "callable": false,
       "handle_free": false,
       "params": [
@@ -2453,7 +2454,7 @@
     },
     {
       "name": "trail-emit",
-      "description": "Emit an ad.* trail event (sub-verb relay-attempt) without opening state.db.",
+      "description": "Emit ad.* trail event (relay-attempt sub-verb), without state.db.",
       "callable": false,
       "handle_free": false,
       "params": [
@@ -2578,6 +2579,34 @@
           "type": "string",
           "description": "Validated startup session mode to confirm before prompt admission (internal).",
           "required": false,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        }
+      ],
+      "result_fields": [],
+      "error_names": []
+    },
+    {
+      "name": "tool-guard",
+      "description": "Internal CLI-only PreToolUse guard.",
+      "callable": false,
+      "handle_free": false,
+      "params": [
+        {
+          "name": "path_entries",
+          "type": "[]string",
+          "description": "One or more absolute paths after the required -- separator; tool-guard must be the first argument. Stable across executable upgrades.",
+          "required": true,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "stdin",
+          "type": "json",
+          "description": "One PreToolUse object. Silent exit 0 means no decision; exit 2 blocks with one fixed stderr line. Never stdout or a JSON decision.",
+          "required": true,
           "nullable": false,
           "allow_empty": false,
           "allowed_values": null

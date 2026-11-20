@@ -4,7 +4,7 @@
 
 ## help
 
-JSON verbs for SessionStart and SessionEnd reason=compact hooks. CLI aliases: --help, -h.
+JSON verbs for SessionStart/SessionEnd reason=compact hooks. Aliases: --help, -h.
 
 ### Parameters
 
@@ -60,6 +60,7 @@ Launch a tracked agent in tmux. Returns the instance_id and pre_trust (ok, skipp
 - `ErrModelMissing`
 - `ErrHostCredentialMissing`
 - `ErrPermissionRulesRefused`
+- `ErrLaunchGuardRefused`
 - `ErrAgentMissing`
 - `ErrAgentInvalid`
 - `ErrAgentArgsMismatch`
@@ -84,7 +85,7 @@ Launch a tracked agent in tmux. Returns the instance_id and pre_trust (ok, skipp
 
 ## status
 
-Check this row; report state: pending/waiting/working/ask_user/check_permission/ended/missing; displayed_state idle_screen: working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook yet; may be loading or at a startup prompt; resumed keeps session id/history.
+Check row; state: pending/waiting/working/ask_user/check_permission/ended/missing; displayed_state idle_screen: working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook yet; may be loading or at a startup prompt; resumed keeps session id/history.
 
 ### Parameters
 
@@ -117,7 +118,7 @@ Check this row; report state: pending/waiting/working/ask_user/check_permission/
 
 ## get
 
-Check this row; return identity, state, session and tmux socket.
+Check identity, state, session, tmux socket.
 
 ### Parameters
 
@@ -191,7 +192,7 @@ Return get's full row for each given id, in order; ids with no row are listed in
 
 ## send-keys
 
-Covered agent: Held, not typed. Else strip CR, keep LF, add Enter (empty text: Enter only); native (exact proof) or pane input. ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else hook-derived get/status, escalate if unknown. See caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Covered: Held, not typed. Else strip CR, keep LF, add Enter (empty text: Enter only); native exact proof or pane. ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else hook-derived get/status, escalate if unknown. See caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Parameters
 
@@ -262,7 +263,7 @@ Force Held Messages. Agents not covered: success, force_result refused, agent_no
 
 ## get-force
 
-Read a force_result by force_id. Durable facts only; starts no work.
+Read force_result by force_id. Durable facts only; starts no work.
 
 ### Parameters
 
@@ -280,7 +281,7 @@ Read a force_result by force_id. Durable facts only; starts no work.
 
 ## get-delivery
 
-Read a confirmed Message's Result. Durable facts only; starts no work.
+Get confirmed Message Result. Durable facts only; starts no work.
 
 ### Parameters
 
@@ -299,7 +300,7 @@ Read a confirmed Message's Result. Durable facts only; starts no work.
 
 ## read-pane
 
-Capture the last N lines of the agent's own pane; ANSI stripped unless `ansi=true`. tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Capture this agent's last N pane lines (default 25, uncapped). ANSI escapes stripped, unicode glyphs kept, unless `ansi=true` (raw bytes). tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Parameters
 
@@ -385,7 +386,7 @@ Caller's allow/deny on open PermissionRequest (relay_mode=on only): first wins (
 
 ## get-permission
 
-Get by request_token. Cursor retains raw permission/plan params. Undecided: decision/decided_at null. Decided may stay open until acked. Delivery and proof are distinct; a verdict or closeout grants no response authority.
+Get by request_token. Cursor keeps raw permission/plan params. Undecided: decision/decided_at null. Decided may stay open until acked. Delivery isn't proof; verdict/closeout has no response authority.
 
 ### Parameters
 
@@ -420,7 +421,7 @@ Get by request_token. Cursor retains raw permission/plan params. Undecided: deci
 
 ## record-pane-answer
 
-Record an outside answer to a fallen-back request; no typing, response authority or proof. Needs read-pane's pane_sha256; too soon: ErrClaimTooSoon.
+Record outside answer to fallen-back request; no typing, response authority or proof. Needs read-pane's pane_sha256; early: ErrClaimTooSoon.
 
 ### Parameters
 
@@ -511,7 +512,7 @@ _None._
 
 ## find-missing
 
-Compatibility alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety.
+Alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety.
 
 ### Parameters
 
@@ -551,7 +552,7 @@ _None._
 
 ## make-template
 
-Save a preset as ~/.config/agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.
+Save preset ~/.config/agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.
 
 ### Parameters
 
@@ -612,7 +613,7 @@ Select rows (filters AND, then limit); check fixed IDs. Unordered.
 
 ## list-subagents
 
-Agent's subagent records with tracked status.
+Agent's subagent records; tracked status.
 
 ### Parameters
 
@@ -657,7 +658,7 @@ _None._
 
 ## serve
 
-MCP server (JSON-RPC stdio): CLI verbs except `hook`, `serve`, `trail-emit` and `cursor-host` as tools.
+MCP (JSON-RPC stdio): CLI verbs except `hook`, `serve`, `trail-emit`, `cursor-host`, `tool-guard`.
 
 ### Parameters
 
@@ -691,7 +692,7 @@ _None._
 
 ## trail-emit
 
-Emit an ad.* trail event (sub-verb relay-attempt) without opening state.db.
+Emit ad.* trail event (relay-attempt sub-verb), without state.db.
 
 ### Parameters
 
@@ -723,6 +724,23 @@ Internal CLI-only Cursor ACP pane gateway.
 - `initial_prompt` (string, optional): Fresh initial prompt (internal).
 - `load_session` (string, optional): Latest saved conversation to load, checked against the owned row (internal).
 - `requested_mode` (string, optional): Validated startup session mode to confirm before prompt admission (internal).
+
+### Result
+
+_None._
+
+### Errors
+
+_None._
+
+## tool-guard
+
+Internal CLI-only PreToolUse guard.
+
+### Parameters
+
+- `path_entries` ([]string, required): One or more absolute paths after the required -- separator; tool-guard must be the first argument. Stable across executable upgrades.
+- `stdin` (json, required): One PreToolUse object. Silent exit 0 means no decision; exit 2 blocks with one fixed stderr line. Never stdout or a JSON decision.
 
 ### Result
 

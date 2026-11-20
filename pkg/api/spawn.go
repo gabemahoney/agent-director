@@ -315,6 +315,11 @@ func hasControlChar(id string) bool {
 //     and, where known, the rule's position, never the rules. Only an
 //     operator change fixes it. Refusal writes none of agent-director's launch
 //     resources: no row, session, trust entry or launch file.
+//   - ErrLaunchGuardRefused: the required launch guard could not be checked;
+//     the description names the problem kind and, where known, a source line
+//     number, never file content, paths or child output. Only an operator change
+//     fixes it. No row, session, trust entry or launch file was written and
+//     nothing launched.
 //   - ErrAgentCapabilityUnsupported: a pane-only launch requests RelayMode
 //     "on"; omit that capability and supervise the owned pane.
 //   - ErrAgentArgsMismatch: the template's agent_args are for another agent

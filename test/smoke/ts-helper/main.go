@@ -60,6 +60,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/contextfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/droidfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -69,6 +70,7 @@ func main() {
 
 // availableSubcmds is the ordered list used for error messages and json-schema.
 var availableSubcmds = []string{
+	"seed-droid-guard",
 	"seed-spawn",
 	"seed-parent-child",
 	"seed-permission-request",
@@ -99,6 +101,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "seed-droid-guard":
+		return cmdSeedDroidGuard(args[1:], stdout, stderr)
 	case "seed-spawn":
 		return cmdSeedSpawn(args[1:], stdout, stderr)
 	case "seed-parent-child":
@@ -584,6 +588,7 @@ func cmdSeedEmptyStore(args []string, stdout, stderr io.Writer) int {
 // result fields and their JSON types.  This is intentionally a simple
 // observability aid rather than a full JSON Schema document.
 var resultSchemas = map[string]map[string]string{
+	"seed-droid-guard":      {"list": "string", "config": "string"},
 	"install-write-failure": {"handle": "string"},
 	"remove-write-failure":  {"handle": "string"},
 	"fake-pane-owner":       {"pid": "number", "start": "string"},
@@ -630,6 +635,29 @@ var resultSchemas = map[string]map[string]string{
 func cmdJSONSchema(_ []string, stdout, stderr io.Writer) int {
 	if err := printResult(stdout, resultSchemas); err != nil {
 		printError(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+// cmdSeedDroidGuard reuses the Go launch fixture for real-CLI smoke calls.
+func cmdSeedDroidGuard(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("seed-droid-guard", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	root := fs.String("root", "", "fixture directory in the test home")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	if *root == "" {
+		printError(stderr, errors.New("--root is required"))
+		return 1
+	}
+	g, err := droidfix.CreateGuard(*root)
+	if err != nil {
+		printError(stderr, err)
+		return 1
+	}
+	if err := printResult(stdout, map[string]string{"list": g.List, "config": g.ConfigLine()}); err != nil {
 		return 1
 	}
 	return 0
