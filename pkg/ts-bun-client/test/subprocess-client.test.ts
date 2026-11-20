@@ -44,7 +44,7 @@ esac
 `, { mode: 0o700 });
   using client = await openClient(path.join(dir, "state.db"), { _cliPath: cli });
   const call = client.resume({ instance_id: "delegated", confirmed_delivery: false, confirm_from_transcripts: false });
-  if (ctor) {
+  if ("err_name" in payload) {
     const err = await rejection(call);
     expect(err).toBeInstanceOf(ctor);
     expect(err).toMatchObject({ verb: "resume", errName: payload.err_name, errDescription: payload.err_description,

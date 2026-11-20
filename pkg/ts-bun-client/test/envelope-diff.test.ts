@@ -1910,9 +1910,9 @@ describe("pause", () => {
       `error path: only_if_waiting on a covered agent → ErrSpawnNotPausable, ${shape}`,
       async () => {
         const id = `id-pause-${shape}`;
-        let details: unknown;
+        let details: ErrSpawnNotPausable["errDetails"] = null;
         const { homeA, storeB, cleanup } = prepareStores((store) => {
-          details = runHelper("seed-pause-surface", { store, id, shape }).err_details;
+          details = runHelper("seed-pause-surface", { store, id, shape }).err_details as ErrSpawnNotPausable["errDetails"];
         });
         try {
           const cli = runCli(["pause", "--instance-id", id, "--only-if-waiting"], cliEnv(homeA));
