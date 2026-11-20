@@ -89,6 +89,7 @@ var Catalog = []Entry{
 	{Name: "ErrPauseTimeout", Err: api.ErrPauseTimeout},
 	{Name: "ErrSubmissionUnconfirmed", Err: api.ErrSubmissionUnconfirmed},
 	{Name: "ErrCantSend", Err: api.ErrCantSend},
+	{Name: "ErrSendAcceptedForceFailed", Err: api.ErrSendAcceptedForceFailed},
 	{Name: "ErrListInvalidLabel", Err: api.ErrListInvalidLabel},
 	{Name: "ErrTemplateNameUnsafe", Err: config.ErrTemplateNameUnsafe},
 	{Name: "ErrTemplateNotFound", Err: config.ErrTemplateNotFound},

@@ -149,7 +149,7 @@ func (r *sendKeysRun) sendCovered(row *Spawn, params SendKeysParams, callerUUID 
 	if params.Force != nil && *params.Force {
 		force, err := r.forceAfterSend(row, req, adm)
 		if err != nil {
-			return forceAfterSendError(params.InstanceID, req, err)
+			return forceAfterSendError(params.InstanceID, result, err)
 		}
 		forced := forceResultOf(force)
 		r.deliveryResult.Force = &forced
@@ -249,15 +249,18 @@ func (r *sendKeysRun) forceAfterSend(row *Spawn, req store.BusySendAdmissionRequ
 }
 
 // forceAfterSendError is a send's force that failed after its Message was
-// accepted or repeated: an unnamed error, never an admission refusal,
-// ErrStoreBusy or a sign that the send may go again as new, since the
-// Message is durably accepted. A confirmed send's pair reads its Result.
-func forceAfterSendError(id string, req store.BusySendAdmissionRequest, err error) error {
-	if req.CallerUUID != "" {
-		return fmt.Errorf("send-keys %s: the Message was accepted (caller_uuid %s, delivery_request_id %q), but its force could not be made: %v; do not send it as new: repeat it with the same pair to force again, or read its Result with get-delivery",
-			id, req.CallerUUID, req.DeliveryRequestID, err)
+// accepted or repeated. It carries that exact accepted Result, even when a
+// real force was stored before the failure; its recovery remains intact.
+// The cause stays diagnostic text so its name cannot hide known acceptance.
+func forceAfterSendError(id string, result DeliveryResult, err error) error {
+	var description error
+	if result.CallerUUID != "" {
+		description = fmt.Errorf("%w: send-keys %s: the Message was accepted (caller_uuid %s, delivery_request_id %q), but its force failed: %v; do not send it as new: repeat it with the same pair to force again, or read its Result with get-delivery",
+			ErrSendAcceptedForceFailed, id, result.CallerUUID, result.RequestID, err)
+	} else {
+		description = fmt.Errorf("%w: send-keys %s: the Message was accepted, but its force failed: %v; do not send it again: call force-delivery to force the agent's Held Messages", ErrSendAcceptedForceFailed, id, err)
 	}
-	return fmt.Errorf("send-keys %s: the Message was accepted, but its force could not be made: %v; do not send it again: call force-delivery to force the agent's Held Messages", id, err)
+	return &DetailedError{Err: description, Details: SendAcceptedForceFailedDetails{Result: result}}
 }
 
 // admissionUncertain is a covered send whose admission COMMIT outcome is

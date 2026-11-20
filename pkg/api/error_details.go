@@ -14,9 +14,10 @@ import (
 // and its text is the description. Details is the err_details object, one of
 // RelayFallenBackDetails, PaneAnswerInProgressDetails, ClaimTooSoonDetails,
 // PaneChangedDetails, PaneKeySentDetails, DialogMaybeOpenDetails,
-// PauseTimeoutDetails, TooManyIdsDetails, CantSendDetails and
-// NotPausableDetails or NotResumableDetails. A delegated resume retains the
-// recipient's raw details, including unknown fields and explicit null.
+// PauseTimeoutDetails, TooManyIdsDetails, CantSendDetails,
+// SendAcceptedForceFailedDetails, NotPausableDetails or NotResumableDetails.
+// A delegated resume retains the recipient's raw details, including unknown
+// fields and explicit null.
 //
 // The CLI writes Details as the error envelope's err_details key, the MCP
 // server as its error data's err_details, and the TypeScript client exposes
@@ -86,6 +87,13 @@ type CantSendDetails struct {
 	Limit *CantSendLimit `json:"limit,omitempty"`
 	// Result is the owner's Result of a conflicting pair.
 	Result *DeliveryResult `json:"result,omitempty"`
+}
+
+// SendAcceptedForceFailedDetails is ErrSendAcceptedForceFailed's err_details:
+// the exact accepted Message Result, without a force outcome. Any force
+// stored before the failure retains its own authority and recovery.
+type SendAcceptedForceFailedDetails struct {
+	Result DeliveryResult `json:"result"`
 }
 
 // CantSendLimit is a refused send's exceeded limit (SR-1.6).

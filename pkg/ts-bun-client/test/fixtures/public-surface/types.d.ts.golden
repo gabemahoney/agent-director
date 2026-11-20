@@ -1167,6 +1167,14 @@ export interface CantSendDetails {
     result?: DeliveryResult;
 }
 /**
+ * `ErrSendAcceptedForceFailed`'s `errDetails`: the exact accepted Message Result,
+ * with its confirmed pair when present. No force outcome is reported; a force
+ * stored before the failure retains its authority and recovery.
+ */
+export interface SendAcceptedForceFailedDetails {
+    result: DeliveryResult;
+}
+/**
  * `ErrSpawnNotPausable`'s `errDetails`: its cause. `agent_not_covered` when pause refuses
  * `only_if_waiting` for an agent busy send does not cover; on a Covered Agent `only_if_waiting`
  * refuses `not_waiting` (with `observed_state`, the raw state) or `turn_pending`, changing

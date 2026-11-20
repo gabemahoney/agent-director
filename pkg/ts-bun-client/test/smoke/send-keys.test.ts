@@ -15,10 +15,11 @@
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as path from "path";
+import { statSync, utimesSync, writeFileSync } from "fs";
 import { withTempHome } from "../internal/tempHome.js";
 import { runHelper, privateTmuxSocket, seedFallenBackRelayRow, fakeTmuxCalls, paneSends, withProcessEnv, homeStore, openClient,
   rejection } from "../internal/helper.js";
-import { ErrInvalidFlags, ErrDialogMaybeOpen, ErrInternal, ErrSpawnNotFound, type AgentDirectorError, type DialogMaybeOpenDetails,
+import { ErrSendAcceptedForceFailed, type SendAcceptedForceFailedDetails, ErrInvalidFlags, ErrDialogMaybeOpen, ErrInternal, ErrSpawnNotFound, type AgentDirectorError, type DialogMaybeOpenDetails,
   type PaneKeySentDetails } from "../../src/index.js";
 
 test.each(["claude", "droid"])("send-keys: happy path — a %s row's text", async (agent) => {
@@ -143,5 +144,44 @@ test("send-keys: negative n_lines rejects before reading or sending, leaving the
     expect(Date.parse(probed(after).checked_at!)).toBeGreaterThanOrEqual(Date.parse(probed(before).checked_at!));
     const withoutProbe = (r: typeof before) => ({ ...r, confirmations: { ...r.confirmations, process_liveness: { ...probed(r), confirmed_at: null, checked_at: null } } });
     expect(withoutProbe(after)).toEqual(withoutProbe(before));
+  });
+}, 10_000);
+
+// PM2(b), t3.xis.ec.9e.du: real CLI admission with confirmation off loses no
+// Result when its subsequent force INSERT fails; no identity may be invented.
+test("send-keys: accepted force failure preserves the unconfirmed Result", async () => {
+  await withTempHome(async (homeDir) => {
+    const store = homeStore(homeDir);
+    const id = "smoke-accepted-force-failed";
+    const wake = path.join(homeDir, "wake");
+    writeFileSync(wake, "");
+    utimesSync(wake, 1, 1);
+    const logPath = path.join(homeDir, "fake-tmux.log");
+    runHelper("seed-spawn", { store, id, state: "waiting", agent: "claude", "create-store": true,
+      socket: privateTmuxSocket(homeDir), "busy-send-wake": wake });
+    const { handle } = runHelper("install-write-failure", { store, id, kind: "busy-send-force-insert" });
+    try {
+      const err = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
+        using client = await openClient(store);
+        return await rejection(client.sendKeys({ instance_id: id, text: "private message", force: true, confirmed_delivery: false }));
+      });
+      expect(err).toBeInstanceOf(ErrSendAcceptedForceFailed);
+      const db = new Database(store, { readonly: true });
+      try {
+        const row = db.query("SELECT accepted_at_ms, confirmed FROM busy_send_messages WHERE instance_id = ?").get(id) as { accepted_at_ms: number; confirmed: number };
+        expect(row.confirmed).toBe(0);
+        const want = { result: { class: "held", final: false, reason: "readiness_unknown", resend_safe: false, retry_with: "none",
+          wait: { reason: "readiness_unknown", since: new Date(row.accepted_at_ms).toISOString().replace(/\.000Z$/, "Z").replace(/(\.\d*?[1-9])0+Z$/, "$1Z") },
+          forced: false, instance_id: id, launch_token: null, evidence_kind: null, outcome: "not_started" } } satisfies SendAcceptedForceFailedDetails;
+        expect((err as AgentDirectorError).errDetails).toEqual(want);
+        expect(db.query(`SELECT (SELECT count(*) FROM busy_send_messages) AS messages,
+          (SELECT count(*) FROM busy_send_results) AS pairs, (SELECT count(*) FROM busy_send_forces) AS forces,
+          (SELECT count(*) FROM input_attempts) AS inputs`).get()).toEqual({ messages: 1, pairs: 0, forces: 0, inputs: 0 });
+      } finally { db.close(); }
+      expect(statSync(wake).mtimeMs).toBeGreaterThan(1000);
+      expect(fakeTmuxCalls(logPath)).toEqual([]);
+    } finally {
+      runHelper("remove-write-failure", { store, handle: handle as string });
+    }
   });
 }, 10_000);

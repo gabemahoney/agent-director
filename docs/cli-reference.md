@@ -209,7 +209,7 @@ Covered: Held, not typed. Else strip CR, keep LF, add Enter (empty text: Enter o
 - `send_mode` (string, optional): This Message's Send Mode: wait_turn or steer_turn; omitted, the Agent Default. One the agent is not offered: ErrCantSend, reason steer_unsupported. Covered Agents only: naming it (wait_turn included) for any other agent is refused with ErrCantSend, reason agent_not_covered; nothing is sent.
 - `confirmed_delivery` (bool, optional): This Message's Confirmed Delivery; omitted, the Agent Default. Confirmed needs caller_uuid; unconfirmed takes neither caller_uuid nor delivery_request_id (else ErrInvalidFlags). Covered Agents only: naming it (false included) for any other agent is refused with ErrCantSend, reason agent_not_covered; nothing is sent.
 - `caller_uuid` (string, optional): Caller UUID: hyphenated hexadecimal, either case. With delivery_request_id it names the Message store-wide: the same text to the same target returns its current Result; anything else, ErrCantSend, reason id_conflict, with the owner's Result. Covered Agents only: naming it for any other agent is refused with ErrCantSend, reason agent_not_covered; nothing is sent.
-- `force` (bool, optional): true: once the Message is accepted, or its pair repeated, also force the agent's Held Messages, as force-delivery does, adding force_result; each repeat forces again, and a refused send forces nothing. Covered Agents only: naming it (false included) for any other agent is refused with ErrCantSend, reason agent_not_covered; nothing is sent.
+- `force` (bool, optional): true: once the Message is accepted, or its pair repeated, also force the agent's Held Messages, as force-delivery does, adding force_result; each repeat forces again, and a refused send forces nothing. A force error is ErrSendAcceptedForceFailed: err_details.result holds the accepted Message Result; do not send it as new. Any force already stored keeps its recovery. Covered Agents only: naming it (false included) for any other agent is refused with ErrCantSend, reason agent_not_covered; nothing is sent.
 
 ### Result
 
@@ -228,6 +228,7 @@ Covered: Held, not typed. Else strip CR, keep LF, add Enter (empty text: Enter o
 - `ErrInvalidFlags`
 - `ErrSpawnNotFound`
 - `ErrCantSend`
+- `ErrSendAcceptedForceFailed`
 - `ErrSpawnNotInteractive`
 - `ErrSubmissionUnconfirmed`
 - `ErrSendKeysWhileRelayed`

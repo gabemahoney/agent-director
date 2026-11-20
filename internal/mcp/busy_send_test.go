@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -20,7 +22,10 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/mcp"
+	"github.com/google/uuid"
+
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -497,5 +502,99 @@ func TestBusySendMCPReaderPayloadsForwardUnchanged(t *testing.T) {
 				t.Errorf("%s text =\n %s\nwant\n %s", tc.tool, got, tc.want)
 			}
 		})
+	}
+}
+
+// t3.xis.ec.9e.du: the live dispatcher must retain an AD-generated pair in
+// structured error data, with no invented force or leaked Message text.
+func TestBusySendMCPAcceptedForceFailed(t *testing.T) {
+	const id = "mcp-accepted-force-failed"
+	e := newEnv(t)
+	e.seed(t, id, store.StateWaiting)
+	wake := filepath.Join(t.TempDir(), "wake")
+	if err := os.WriteFile(wake, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(wake, time.Unix(1, 0), time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := apitest.SeedBusySendRoute(e.storePath, id, "claude_hooks", wake); err != nil {
+		t.Fatal(err)
+	}
+	remove := storefix.InjectWriteFailure(t, e.storePath, storefix.WriteFailBusySendForceInsert, id)
+	data := toolErrorData(t, callTool(t, e.d, "send_keys", paramJSON(t, map[string]any{
+		"instance_id": id, "text": "private message", "force": true, "confirmed_delivery": true, "caller_uuid": paramToken,
+	})))
+	if data.ErrName != "ErrSendAcceptedForceFailed" {
+		t.Fatalf("err_name = %s: %s", data.ErrName, data.ErrDescription)
+	}
+	details, ok := data.ErrDetails.(map[string]any)
+	if !ok {
+		t.Fatalf("err_details is not an object: %#v", data.ErrDetails)
+	}
+	result, ok := details["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing accepted Result: %#v", data.ErrDetails)
+	}
+	request, _ := result["request_id"].(string)
+	if parsed, err := uuid.Parse(request); err != nil || parsed.String() != request {
+		t.Fatalf("generated Message ID = %q", request)
+	}
+	lookup := callToolText(t, e.d, "get_delivery", paramJSON(t, map[string]any{"caller_uuid": paramToken, "delivery_request_id": request}))
+	if string(lookup["lookup"]) != `"found"` {
+		t.Fatalf("lookup = %s", lookup["lookup"])
+	}
+	var retained map[string]any
+	if err := json.Unmarshal(lookup["result"], &retained); err != nil {
+		t.Fatal(err)
+	}
+	wait, ok := retained["wait"].(map[string]any)
+	if !ok {
+		t.Fatalf("retained wait = %#v", retained)
+	}
+	want := map[string]any{"caller_uuid": paramToken, "request_id": request, "class": "held", "final": false,
+		"reason": "readiness_unknown", "resend_safe": false, "retry_with": "none",
+		"wait": map[string]any{"reason": "readiness_unknown", "since": wait["since"]}, "forced": false,
+		"instance_id": id, "launch_token": nil, "evidence_kind": nil, "outcome": "not_started"}
+	if !reflect.DeepEqual(data.ErrDetails, map[string]any{"result": want}) || !reflect.DeepEqual(retained, want) {
+		t.Errorf("error details = %#v; retained = %#v; want %#v", data.ErrDetails, retained, want)
+	}
+	facts, err := apitest.ReadBusySendFacts(e.storePath, id)
+	if err != nil || len(facts.Messages) != 1 || facts.Messages[0].RequestID.String != request || facts.Messages[0].CallerUUID.String != paramToken {
+		t.Errorf("accepted facts = %+v, %v", facts, err)
+	}
+	if got := storefix.ReadBusySendCounts(t, e.storePath); got != (storefix.BusySendCounts{Messages: 1, Pairs: 1}) {
+		t.Errorf("records = %+v", got)
+	}
+	if info, err := os.Stat(wake); err != nil || !info.ModTime().After(time.Unix(1, 0)) {
+		t.Errorf("ordinary wake was not touched: %v", err)
+	}
+	if len(e.rec.Calls())+len(e.rec.SocketCalls()) != 0 {
+		t.Error("accepted force failure performed tmux input/probes")
+	}
+	// The cut also catches the distinct refused-attempt INSERT when no route
+	// exists. This stays an unnamed standalone-force error, not an accepted send.
+	e.seed(t, "mcp-no-route", store.StateWaiting)
+	removeNoRoute := storefix.InjectWriteFailure(t, e.storePath, storefix.WriteFailBusySendForceInsert, "mcp-no-route")
+	noRoute := toolErrorData(t, callTool(t, e.d, "force_delivery", `{"instance_id":"mcp-no-route"}`))
+	if noRoute.ErrName != "ErrInternal" || noRoute.ErrDetails != nil || !strings.Contains(noRoute.ErrDescription, "injected write failure: busy-send force insert") {
+		t.Errorf("route-unavailable force INSERT = %+v", noRoute)
+	}
+	removeNoRoute()
+	// The same real writer proves instance scoping and the fixture remover:
+	// another instance works while installed, and this instance works after it.
+	e.seed(t, "mcp-other-force", store.StateWaiting)
+	for _, target := range []string{"mcp-other-force", id} {
+		if target == id {
+			remove()
+			if err := apitest.SeedBusySendRoute(e.storePath, id, "claude_hooks", ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got := callToolText(t, e.d, "force_delivery", paramJSON(t, map[string]any{"instance_id": target}))
+		var force api.ForceResult
+		if err := json.Unmarshal(got["force_result"], &force); err != nil || force.Outcome != "refused" || force.Reason != "route_unavailable" {
+			t.Errorf("force after scoped cut on %s = %+v, %v", target, force, err)
+		}
 	}
 }

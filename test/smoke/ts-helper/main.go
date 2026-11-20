@@ -164,6 +164,7 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		noPreTrust         = fs.Bool("no-pre-trust", false, "record the pre-trust opt-out on the row (apitest.WithNoPreTrust); default records pre-trust allowed")
 		agent              = fs.String("agent", "", "the row's agent (claude|codex|cursor|droid); empty keeps SeedSpawn's claude (apitest.WithAgent)")
 		noSubagentTracking = fs.Bool("no-subagent-tracking", false, "disable subagent tracking on the row (apitest.WithNoSubagentTracking); default keeps tracking enabled")
+		wakePath           = fs.String("busy-send-wake", "", "seed a Claude hook route and wake endpoint for busy-send tests")
 		noIdentity         = fs.Bool("no-launch-identity", false, "seed a row from before the release: no launch token, socket or identity (apitest.WithNoLaunchToken); not with --socket")
 	)
 
@@ -266,6 +267,12 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		printError(stderr, err)
 		return 1
+	}
+	if *wakePath != "" {
+		if err := apitest.SeedBusySendRoute(*storePath, instanceID, "claude_hooks", *wakePath); err != nil {
+			printError(stderr, err)
+			return 1
+		}
 	}
 	if startupSession != "" {
 		if err := apitest.AdmitContextStartup(*storePath, instanceID, startupSession, startupPath, *contextWriterPID); err != nil {

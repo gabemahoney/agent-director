@@ -401,9 +401,9 @@ returns `ErrCantSend` (see [Errors](#errors)) and sends nothing. See
 With `Force: &force` (`force := true`), an accepted send also forces the
 agent's Held Messages, as [ForceDelivery](#forcedelivery) does, and blocks for
 up to about 15 seconds: `SendKeysResult.Force` is that attempt's
-`*ForceResult`, nil for any other send, and its JSON is `force_result`. Such
-a send can fail after its Message was accepted; see
-[Stored force attempts](../../docs/caller-contract.md#stored-force-attempts).
+`*ForceResult`, nil for any other send, and its JSON is `force_result`. A
+force-step error returns `ErrSendAcceptedForceFailed` with the accepted
+result; see [Errors](#errors).
 
 `SendKeysContext(ctx, params)` uses the caller's context; `SendKeys` uses a
 background context. A cleanup error can accompany a confirmed result;
@@ -696,6 +696,13 @@ For local `ErrCantSend`, `errors.Is` matches and `api.ErrDetails(err)` returns a
 `Limit` describes a capacity refusal; `Result` carries the owner of a
 conflicting pair. Both are nil for `"agent_not_covered"`. Meanings are in
 [Busy-send refusals](../../docs/caller-contract.md#busy-send-refusals).
+
+For local `ErrSendAcceptedForceFailed`, use `errors.Is(err,
+api.ErrSendAcceptedForceFailed)`; `api.ErrDetails(err)` returns
+`api.SendAcceptedForceFailedDetails`, whose required `Result` is the accepted
+`DeliveryResult`. `SendKeys` also returns its populated `SendKeysResult`
+beside the error. Never send the Message as new; recovery and stored-force
+deadlines are in [Stored force attempts](../../docs/caller-contract.md#stored-force-attempts).
 
 ```go
 res, err := c.SendKeys(api.SendKeysParams{

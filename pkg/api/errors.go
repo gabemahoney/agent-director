@@ -76,6 +76,13 @@ var ErrSubmissionUnconfirmed = errors.New("ErrSubmissionUnconfirmed")
 // precedes every other cant_send reason.
 var ErrCantSend = errors.New("ErrCantSend")
 
+// ErrSendAcceptedForceFailed means a covered send's Message was accepted or
+// its pair repeated, but its separate force step failed. Its err_details
+// (SendAcceptedForceFailedDetails) carry the accepted Result. Do not send the
+// Message as new. This error says nothing about whether a force was stored;
+// a real force stored before the failure keeps its deadline and recovery.
+var ErrSendAcceptedForceFailed = errors.New("ErrSendAcceptedForceFailed")
+
 // ErrSpawnNotPausable is returned by the pause verb when the target
 // Spawn's state is not pausable (SRD §9). With only_if_waiting false (the
 // default), pausable means `waiting`; `pending` / `working` / `ask_user` /

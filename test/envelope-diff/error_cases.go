@@ -73,6 +73,9 @@ type errorCase struct {
 	// (as JSON decodes it): a refusal's machine fields, such as ErrCantSend's,
 	// whose loss on both sides the structural diff alone would pass.
 	details map[string]any
+
+	// detailsFor checks per-call state and builds an exact oracle for dynamic fields.
+	detailsFor func(t *testing.T, dbPath string, ctx map[string]any) map[string]any
 }
 
 // zeroPaneHash is a well-formed expect_pane_sha256 (64 hex digits) no pane has.

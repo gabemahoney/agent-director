@@ -137,6 +137,8 @@ func errorName(err error) string {
 		return "ErrSubmissionUnconfirmed"
 	case errors.Is(err, ErrCantSend):
 		return "ErrCantSend"
+	case errors.Is(err, ErrSendAcceptedForceFailed):
+		return "ErrSendAcceptedForceFailed"
 	case errors.Is(err, ErrSendKeysWhileRelayed):
 		return "ErrSendKeysWhileRelayed"
 	case errors.Is(err, ErrSpawnNotResumable):

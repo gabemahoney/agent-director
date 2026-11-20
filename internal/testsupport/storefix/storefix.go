@@ -373,6 +373,7 @@ const (
 	WriteFailInputCurrent            = writefailfix.InputCurrent
 	WriteFailInputAuthority          = writefailfix.InputAuthority
 	WriteFailPermissionResponseIssue = writefailfix.PermissionResponseIssue
+	WriteFailBusySendForceInsert     = writefailfix.BusySendForceInsert
 )
 
 // InjectWriteFailure makes one kind of write to instanceID's rows fail with a

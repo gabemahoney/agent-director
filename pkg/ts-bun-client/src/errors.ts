@@ -488,6 +488,13 @@ export class ErrSendKeysWhileRelayed extends AgentDirectorError {}
  */
 export class ErrCantSend extends AgentDirectorError {}
 /**
+ * Mirrors ErrSendAcceptedForceFailed (package: api): the Message was accepted or its pair
+ * repeated, but its separate force step failed. `errDetails` is a
+ * `SendAcceptedForceFailedDetails` holding the accepted Result. Do not send the Message as new;
+ * any force stored before the failure keeps its recovery.
+ */
+export class ErrSendAcceptedForceFailed extends AgentDirectorError {}
+/**
  * Mirrors ErrSpawnNotPausable (package: api). With `only_if_waiting` false (the default), the row
  * is not waiting, or, for a Covered Agent paused keylessly, its resumable shutdown was not
  * established: `errDetails` is a `NotPausableDetails` with its cause and `signal_sent`
@@ -684,6 +691,7 @@ const ERROR_TABLE = {
   ErrSpawnNotInteractive,
   ErrSubmissionUnconfirmed,
   ErrCantSend,
+  ErrSendAcceptedForceFailed,
   ErrSendKeysWhileRelayed,
   ErrSpawnNotPausable,
   ErrPauseTimeout,

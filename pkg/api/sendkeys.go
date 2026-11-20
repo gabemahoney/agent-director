@@ -1255,6 +1255,10 @@ func isInteractiveState(state string) bool {
 //     or Force and busy send does not cover the row's current Launch: reason
 //     agent_not_covered, resend_safe true, retry_with new_send
 //     ([CantSendDetails]); nothing was stored, sent or typed.
+//   - [ErrSendAcceptedForceFailed]: a covered Message was accepted or its pair
+//     repeated, but its separate force step failed. Its err_details
+//     ([SendAcceptedForceFailedDetails]) carry the accepted Result; do not
+//     send it as new. Any force already stored keeps its deadline and recovery.
 //   - [ErrSpawnNotInteractive]: new input's row is finished or otherwise not in a
 //     live interactive state, or pending without AllowPending, or pending
 //     with no launch start or launch token recorded, or pending and the
@@ -1373,9 +1377,13 @@ func isInteractiveState(state string) bool {
 // target's record was deleted gets a stored refused force, reason
 // record_deleted. The newly accepted Message's ordinary wake waits until the
 // force has had its turn. A force that fails after the Message was accepted
-// is an unnamed error, never a refusal or ErrStoreBusy: the Message stays
-// accepted. Any other accepted send or repeat to a Covered Agent also
-// finishes the agent's force whose call never reached its end.
+// or its pair repeated returns [ErrSendAcceptedForceFailed], never a refusal
+// or ErrStoreBusy. The populated SendKeysResult is returned beside the error;
+// [ErrDetails] returns [SendAcceptedForceFailedDetails] with that accepted
+// Result. Never send the Message as new to recover this error. A force already
+// stored keeps its ownership, deadline and recovery. Any other accepted send
+// or repeat to a Covered Agent also finishes the agent's force whose call
+// never reached its end.
 //
 // Nondeterminism: the relay guard depends on the clock and on whether each
 // relay hook, and a pane answer's sender, runs; pending Claude fallback on

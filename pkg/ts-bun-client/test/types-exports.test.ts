@@ -8,7 +8,7 @@ import { test, expect } from "bun:test";
 import * as ad from "../src/index.js";
 import type { VersionResult, SpawnParams, MakeTemplateParams, StatusResult, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
 import type { SweepParams, SweepResult, SweepCheck, FindMissingParams, FindMissingResult, DialogMaybeOpenDetails, ProvenGoneHow, IdleScreenAvailability } from "../src/index.js";
-import type { SendKeysResult, ResumeParams, PauseParams, GetForceResult, GetDeliveryResult, ForceResult, ForceOutcome, ForceReason, DeliveryResult, CantSendDetails } from "../src/index.js";
+import type { SendKeysResult, ResumeParams, PauseParams, GetForceResult, GetDeliveryResult, ForceResult, ForceOutcome, ForceReason, DeliveryResult, CantSendDetails, SendAcceptedForceFailedDetails } from "../src/index.js";
 import type { AgentDefaults, DeliveryFacts, DeliveryCapabilities, DeliveryModeLimits, ForceCapability, ForceStateCapability, ConfirmFromTranscriptsCapability } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
@@ -246,3 +246,14 @@ function _assertSweepAliases(client: ad.Client, result: SweepResult): void {
  void missing;
 }
 void _assertSweepAliases;
+
+// PM2(b), t3.xis.ec.9e.du: the root-exported details require the full Result.
+function _assertAcceptedForceFailedDetails(details: SendAcceptedForceFailedDetails): void {
+  const result: DeliveryResult = details.result;
+  // @ts-expect-error — accepted Result is required, never optional
+  const missing: SendAcceptedForceFailedDetails = {};
+  // @ts-expect-error — a partial Result cannot preserve acceptance
+  const partial: SendAcceptedForceFailedDetails = { result: { class: "held" } };
+  void [result, missing, partial];
+}
+void _assertAcceptedForceFailedDetails;

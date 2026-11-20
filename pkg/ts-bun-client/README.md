@@ -248,8 +248,8 @@ ordinary Message byte for byte. CR is refused; empty text and raw-key
 parameters are malformed. `allow_pending` changes nothing. Permission and
 dialog boundaries hold accepted Messages; they never become pane answers.
 An accepted send resolves with its Result, never `ErrSubmissionUnconfirmed`,
-except that one with `force` can reject after its Message was accepted; see
-[Stored force attempts](../../docs/caller-contract.md#stored-force-attempts).
+except that a force-step error rejects with `ErrSendAcceptedForceFailed`;
+the accepted Result is in `errDetails` (see [Errors](#errors)).
 
 `SendKeysParams.delivery_request_id` supplies the Message ID, and
 `SendKeysResult` extends `Partial<DeliveryResult>`. For a confirmed Wait Turn
@@ -296,7 +296,9 @@ with `ErrCantSend` and sends nothing. See [Busy-send options](../../docs/caller-
 With `force: true`, an accepted send also forces the agent's Held Messages,
 as [forceDelivery](#forcedelivery-getforce-and-getdelivery) does, taking up to
 about 15 seconds; its result adds that attempt as `force_result`, which is
-absent for any other send.
+absent for any other send. On `ErrSendAcceptedForceFailed`, follow
+[Stored force attempts](../../docs/caller-contract.md#stored-force-attempts)
+without resending the Message as new.
 
 ### readPane
 
@@ -632,6 +634,11 @@ Local structured types include: `ErrRelayFallenBack`
 (`NotPausableDetails`, for keyless pause and `only_if_waiting`) and
 `ErrSubmissionUnconfirmed`
 (`SubmissionUnconfirmedDetails`, for failed fallback hook observation).
+For `ErrSendAcceptedForceFailed`, the exported `SendAcceptedForceFailedDetails`
+interface describes required `result: DeliveryResult`, the accepted Result.
+It is carried in the base error's generic `errDetails` record; the subclass
+adds no typed property. Recovery is in
+[Stored force attempts](../../docs/caller-contract.md#stored-force-attempts).
 Native Codex, Codex paste and Cursor gateway facts remain available through the generic `errDetails` record. So does the
 `ErrInternal` of a pane answer whose key was sent but not recorded
 (`PaneKeySentDetails`: `key_sent` `true` and `request_token`). Read facts from
@@ -721,6 +728,7 @@ and [Settings](../../docs/settings.md). Request handling is in
 | `ErrSpawnNotInteractive` | The row cannot accept input under the current launch guards. |
 | `ErrSubmissionUnconfirmed` | Submission is unconfirmed; inspect `errDetails` as described under [sendKeys](#sendkeys). |
 | `ErrCantSend` | Busy-send admission or options refused (`agent_not_covered`, identity conflict, unsupported mode, text or capacity limits); nothing stored, sent or typed. Carries `CantSendDetails`; see [Busy-send refusals](../../docs/caller-contract.md#busy-send-refusals). |
+| `ErrSendAcceptedForceFailed` | The Message was accepted or its pair repeated, but its force step failed. Carries the accepted Result in `errDetails`; see [Stored force attempts](../../docs/caller-contract.md#stored-force-attempts). |
 | `ErrSpawnNotPausable` | Pause refused; keyless causes and `only_if_waiting` refusals carry `NotPausableDetails`. See [keyless pause](../../docs/caller-contract.md#keyless-pause-of-a-covered-agent). |
 | `ErrPauseTimeout` | Exit input was sent but `ended` was not observed; carries `PauseTimeoutDetails`. |
 | `ErrSpawnNotResumable` | The row is live, including `pending`, or changed during resume. |

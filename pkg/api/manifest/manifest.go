@@ -880,7 +880,7 @@ var Verbs = []VerbDef{
 			{Name: "send_mode", Type: "string", Description: "This Message's Send Mode: wait_turn or steer_turn; omitted, the Agent Default. One the agent is not offered: ErrCantSend, reason steer_unsupported. " + coveredOnlySend("wait_turn"), Nullable: false, AllowEmpty: false, AllowedValues: []string{"wait_turn", "steer_turn"}},
 			{Name: "confirmed_delivery", Type: "bool", Description: "This Message's Confirmed Delivery; omitted, the Agent Default. Confirmed needs caller_uuid; unconfirmed takes neither caller_uuid nor delivery_request_id (else ErrInvalidFlags). " + coveredOnlySend("false"), Nullable: false, AllowEmpty: false},
 			{Name: "caller_uuid", Type: "string", Description: "Caller UUID: hyphenated hexadecimal, either case. With delivery_request_id it names the Message store-wide: the same text to the same target returns its current Result; anything else, ErrCantSend, reason id_conflict, with the owner's Result. " + coveredOnlySend(""), Nullable: false, AllowEmpty: false},
-			{Name: "force", Type: "bool", Description: "true: once the Message is accepted, or its pair repeated, also force the agent's Held Messages, as force-delivery does, adding force_result; each repeat forces again, and a refused send forces nothing. " + coveredOnlySend("false"), Nullable: false, AllowEmpty: false},
+			{Name: "force", Type: "bool", Description: "true: once the Message is accepted, or its pair repeated, also force the agent's Held Messages, as force-delivery does, adding force_result; each repeat forces again, and a refused send forces nothing. A force error is ErrSendAcceptedForceFailed: err_details.result holds the accepted Message Result; do not send it as new. Any force already stored keeps its recovery. " + coveredOnlySend("false"), Nullable: false, AllowEmpty: false},
 		},
 		ResultFields: []FieldDef{
 			{Name: "caller_uuid", Type: "string", Description: "A Covered Agent's confirmed send: its Caller UUID, lowercase; omitted otherwise.", AllowEmpty: true},
@@ -897,6 +897,7 @@ var Verbs = []VerbDef{
 			"ErrInvalidFlags",
 			"ErrSpawnNotFound",
 			"ErrCantSend",
+			"ErrSendAcceptedForceFailed",
 			"ErrSpawnNotInteractive",
 			"ErrSubmissionUnconfirmed",
 			"ErrSendKeysWhileRelayed",

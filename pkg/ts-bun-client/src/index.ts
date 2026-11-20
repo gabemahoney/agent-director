@@ -67,6 +67,7 @@ export {
   ErrSpawnNotInteractive,
   ErrSubmissionUnconfirmed,
   ErrCantSend,
+  ErrSendAcceptedForceFailed,
   ErrSendKeysWhileRelayed,
   ErrSpawnNotPausable,
   ErrPauseTimeout,
@@ -144,6 +145,7 @@ export type {
   SubmissionUnconfirmedDetails,
   DialogMaybeOpenDetails,
   CantSendDetails,
+  SendAcceptedForceFailedDetails,
   NotPausableDetails,
   NotResumableDetails,
 } from "./types.js";

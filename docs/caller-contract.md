@@ -36,6 +36,9 @@ error:
   `send-keys`, follow [Manual input ownership](#manual-input-ownership).
 - `ErrCantSend`: nothing was stored, sent or typed; act on its `reason`
   ([Busy-send refusals](#busy-send-refusals)).
+- `ErrSendAcceptedForceFailed`: the Message was accepted or its pair repeated,
+  but its force step failed. Never send it as new; follow
+  [Stored force attempts](#stored-force-attempts).
 - `ErrStoreBusy` before admission stored nothing; retry within the existing
   call allowances. A migrator suspended or stalled by the host while holding
   SQLite's writer lock beyond a caller's finite allowance returns this ordinary
@@ -388,9 +391,10 @@ bytes and 9,600 prompt bytes of
 ### Message Results
 
 Every accepted send succeeds and returns its Message's Result, never
-`ErrSubmissionUnconfirmed`, except that a send with `force` can fail after
-its Message was accepted ([Stored force attempts](#stored-force-attempts)). A found `get-delivery` and an `id_conflict`
-refusal carry the same shape. Decide from `class` and `final`:
+`ErrSubmissionUnconfirmed`, except for
+[`ErrSendAcceptedForceFailed`](#stored-force-attempts). Its accepted Result,
+a found `get-delivery` and an `id_conflict` refusal carry the same shape.
+Decide from `class` and `final`:
 
 | `class` | `final` | Meaning | Next step |
 |---|---|---|---|
@@ -559,10 +563,28 @@ send returns its Message's [Result](#message-results) and a separate
 `force_result`. A successful repeat of the pair with `force` makes a new attempt
 and never accepts the Message again; after the target's deletion, it returns
 the retained Result with a `refused` force, reason `record_deleted`. A force
-that fails after acceptance is an unnamed error: the Message stays accepted,
-so never send it again as a new Message; repeat the pair, or call
-`force-delivery`. Its force may still be stored and running, as above.
-`force: false` is an ordinary send.
+step that errors after acceptance or a matching-pair repeat returns
+`ErrSendAcceptedForceFailed`, even when the cause is store busy; it is neither
+`ErrStoreBusy` nor an admission refusal, uncertain admission COMMIT or
+`ErrSubmissionUnconfirmed`. Its details contain only required
+`err_details.result`: exactly the accepted [Message Result](#message-results)
+already built by that call, with the same fields, nulls and omissions.
+
+Never send this Message as new to recover the force error. For a confirmed
+Message, use `result.caller_uuid` and `result.request_id`, including an
+agent-director-generated ID, for `get-delivery`. To force again, repeat that
+pair with the original target, exact text and `force: true`; the send's ID
+parameter is `delivery_request_id`. This accepts no second Message and keeps
+the [repeat guards](#covered-sends). An unconfirmed Result omits both pair
+fields and has no lookup: use explicit `force-delivery` for the agent's Held
+Messages without resending. Every force guard still applies.
+
+A failure before force storage leaves no attempt. An end-recording failure
+after a committed claim can leave a real force running; this error's details
+report no force outcome or ID. Inspect `get`/`status` `delivery.force` and
+`get-force`, and follow the finite-deadline recovery under **A call that never
+ends**, below. This error is separate from a successful response whose
+`force_result.outcome` is `failed`. `force: false` is an ordinary send.
 
 **`force_result`** has `force_id`, `outcome`, `reason`, `started_at`,
 `ended_at` (null while `pending` or `running`) and two arrays, `[]` when

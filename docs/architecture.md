@@ -24387,6 +24387,11 @@ kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) include:
   that forces a Cursor missing-row save to be deferred by its own deadline
   installs this kind.
 
+`WriteFailBusySendForceInsert` (`writefailfix.BusySendForceInsert`, kind 15)
+fails the target instance's force INSERT, including route-unavailable refused
+attempts, while allowing Message admission and existing-force updates. CLI,
+MCP and TypeScript accepted-error tests reuse this cut; install after seeding.
+
 Native input additionally uses `WriteFailInputAttempt` (attempt INSERT,
 including UPSERT), `WriteFailInputTextIntent` (positive-byte attempt INSERT),
 `WriteFailInputCurrent` (launch/current UPDATE), and `WriteFailInputAuthority`

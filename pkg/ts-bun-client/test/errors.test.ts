@@ -27,6 +27,7 @@ import {
   ErrAgentInvalid,
   ErrAgentMissing,
   ErrCantSend,
+  ErrSendAcceptedForceFailed,
   ErrOldLayout,
   ErrPermissionsUnsupported,
   ErrSpawnNotPausable,
@@ -35,6 +36,7 @@ import {
   ErrSubmissionUnconfirmed,
   ErrTemplateAgentMissing,
   type CantSendDetails,
+  type SendAcceptedForceFailedDetails,
   type NotPausableDetails,
   type SubmissionUnconfirmedDetails,
 } from "../src/index.js";
@@ -76,6 +78,7 @@ test.each([
   ["ErrOldLayout", ErrOldLayout, "list"],
   ["ErrSubmissionUnconfirmed", ErrSubmissionUnconfirmed, "send-keys"],
   ["ErrCantSend", ErrCantSend, "send-keys"],
+  ["ErrSendAcceptedForceFailed", ErrSendAcceptedForceFailed, "send-keys"],
 ] as const)("%s: the exported class is what both factories build from its err_name", (name, Class, verb) => {
   const thrown = thrownBy(() => throwFromEnvelope(verb, { err_name: name, err_description: "d" }));
   for (const err of [errorFromEnvelope(verb, name, "d"), thrown]) {
@@ -116,6 +119,13 @@ test.each([
     result: { caller_uuid: "0f8e2a34-5b6c-4d7e-8f90-a1b2c3d4e5f6", request_id: "m1", class: "not_started", final: true, reason: "admission_unknown",
       resend_safe: true, retry_with: "new_id", wait: null, forced: false, instance_id: "id-1", launch_token: null, evidence_kind: null, outcome: "not_started" },
   } satisfies CantSendDetails],
+  ...[true, false].map((confirmed) => ["ErrSendAcceptedForceFailed", confirmed ? "confirmed Result" : "unconfirmed Result",
+    ErrSendAcceptedForceFailed, "send-keys", {
+      result: { ...(confirmed ? { caller_uuid: "0f8e2a34-5b6c-4d7e-8f90-a1b2c3d4e5f6", request_id: "m1" } : {}),
+        class: "held", final: false, reason: "route_unavailable", resend_safe: false, retry_with: "none",
+        wait: { reason: "route_unavailable", since: "2026-11-20T01:02:03Z" }, forced: false,
+        instance_id: "id-1", launch_token: null, evidence_kind: null, outcome: "not_started" },
+    } satisfies SendAcceptedForceFailedDetails] as const),
   ["ErrSpawnNotPausable", "cause agent_not_covered", ErrSpawnNotPausable, "pause", { cause: "agent_not_covered" } satisfies NotPausableDetails],
 ] as const)("%s %s: errDetails through both factories", (name, _label, Class, verb, details) => {
   const envelope = { err_name: name, err_description: "d", err_details: details };

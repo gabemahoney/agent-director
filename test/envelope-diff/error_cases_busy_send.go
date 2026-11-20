@@ -9,10 +9,14 @@
 package envelope_diff
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -20,6 +24,7 @@ import (
 var cantSendDetails = map[string]any{"class": "cant_send", "reason": "agent_not_covered", "resend_safe": true, "retry_with": "new_send"}
 
 var busySendErrorCases = append([]errorCase{
+	acceptedForceFailureRow(),
 	busySendRow("send-keys", "ErrCantSend", busySendSeedRow("id-busy-keys", store.StateWaiting),
 		map[string]any{"instance_id": "id-busy-keys", "text": "hi", "send_mode": "wait_turn", "confirmed_delivery": false},
 		[]string{"send-keys", "--instance-id", "id-busy-keys", "--text", "hi", "--send-mode", "wait_turn", "--confirmed-delivery=false"},
@@ -116,4 +121,60 @@ func busySendSeedRow(id, state string) func(t *testing.T) string {
 		t.Helper()
 		return seedBusyRow(t, id, state, apitest.WithAgent("codex"))
 	}
+}
+
+// t3.xis.ec.9e.du: admission succeeds in both processes; the persistent force
+// INSERT cut survives copyFixtureStore into the real CLI process.
+func acceptedForceFailureRow() errorCase {
+	const id = "id-accepted-force-failed"
+	const caller = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
+	ec := busySendRow("send-keys", "ErrSendAcceptedForceFailed", busySendSeedNone,
+		map[string]any{"instance_id": id, "text": "private message", "force": true, "confirmed_delivery": true, "caller_uuid": caller, "delivery_request_id": "accepted-1"},
+		[]string{"send-keys", "--instance-id", id, "--text", "private message", "--force", "--confirmed-delivery", "--caller-uuid", caller, "--delivery-request-id", "accepted-1"}, nil)
+	ec.seed = func(t *testing.T) (string, map[string]any) {
+		dir := seedBusyRow(t, id, store.StateWaiting, apitest.WithAgent("claude"))
+		db := filepath.Join(dir, "state.db")
+		// A recorded route/wake proves the accepted send still notifies the agent.
+		wake := filepath.Join(t.TempDir(), "wake")
+		if err := os.WriteFile(wake, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(wake, time.Unix(1, 0), time.Unix(1, 0)); err != nil {
+			t.Fatal(err)
+		}
+		if err := apitest.SeedBusySendRoute(db, id, "claude_hooks", wake); err != nil {
+			t.Fatal(err)
+		}
+		storefix.InjectWriteFailure(t, db, storefix.WriteFailBusySendForceInsert, id)
+		return dir, map[string]any{"wake": wake}
+	}
+	ec.detailsFor = func(t *testing.T, db string, ctx map[string]any) map[string]any {
+		if got := storefix.ReadBusySendCounts(t, db); got != (storefix.BusySendCounts{Messages: 1, Pairs: 1}) {
+			t.Errorf("accepted records = %+v; want one Message/pair, no force/input", got)
+		}
+		info, err := os.Stat(ctx["wake"].(string))
+		if err != nil || !info.ModTime().After(time.Unix(1, 0)) {
+			t.Fatalf("ordinary admission wake was not touched: %v", err)
+		}
+		// Reset the endpoint so the second runner must notify independently.
+		if err := os.Chtimes(ctx["wake"].(string), time.Unix(1, 0), time.Unix(1, 0)); err != nil {
+			t.Fatal(err)
+		}
+		c, err := api.New(api.Options{StorePath: db, ConfigPath: filepath.Join(filepath.Dir(db), "absent.toml")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		got, err := c.GetDelivery(api.GetDeliveryParams{CallerUUID: caller, DeliveryRequestID: "accepted-1"})
+		if err != nil || got.Result == nil || got.Result.Wait == nil {
+			t.Fatalf("retained Result = %+v, %v", got, err)
+		}
+		return map[string]any{"result": map[string]any{
+			"caller_uuid": caller, "request_id": "accepted-1", "class": "held", "final": false,
+			"reason": "readiness_unknown", "resend_safe": false, "retry_with": "none",
+			"wait":   map[string]any{"reason": "readiness_unknown", "since": got.Result.Wait.Since.Format(time.RFC3339Nano)},
+			"forced": false, "instance_id": id, "launch_token": nil, "evidence_kind": nil, "outcome": "not_started",
+		}}
+	}
+	return ec
 }

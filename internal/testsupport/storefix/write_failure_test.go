@@ -398,6 +398,8 @@ func TestInjectWriteFailure(t *testing.T) {
 	production := map[storefix.WriteFailureKind]bool{
 		storefix.WriteFailInputAttemptInsert: true, storefix.WriteFailInputTextIntent: true, storefix.WriteFailInputCurrent: true,
 		storefix.WriteFailInputAuthority: true, storefix.WriteFailPermissionResponseIssue: true,
+		// Real send-keys consumers: envelope-diff, MCP and TS smoke tests (t3.xis.ec.9e.du).
+		storefix.WriteFailBusySendForceInsert: true,
 	}
 	covered := map[storefix.WriteFailureKind]bool{}
 	for _, w := range proxyWrites {
