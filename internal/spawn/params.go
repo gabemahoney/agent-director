@@ -140,7 +140,9 @@ type SpawnParams struct {
 	// template's value; any supplied value, false and wait_turn included, is
 	// set. They apply only to a Covered Agent: a launch that sets one for an
 	// agent busy send does not cover is refused before anything is written
-	// (SR-9.2).
+	// (SR-9.2). ConfirmFromTranscripts relies on agent internals with no
+	// published contract and may change without notice. Changes to this
+	// setting or its reports are not breaking changes.
 	SendMode               *string
 	ConfirmedDelivery      *bool
 	ConfirmFromTranscripts *bool

@@ -135,6 +135,8 @@ Messages without replaying startup input.
 `SpawnParams`, `ResumeParams` and `MakeTemplateParams` take the Agent Defaults
 `SendMode` and `ConfirmedDelivery` and the experimental
 `ConfirmFromTranscripts` ([Confirm From Transcripts](../../docs/caller-contract.md#confirm-from-transcripts)).
+It relies on agent internals with no published contract and may change without
+notice; changes to this setting or its reports are not breaking changes.
 Each is a pointer: nil leaves it unset, and a pointer
 to any value, `false` or `"wait_turn"` included, sets it. They apply only to
 Covered Agents; see

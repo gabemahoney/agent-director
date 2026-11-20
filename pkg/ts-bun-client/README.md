@@ -110,7 +110,10 @@ in [Configuration](../../docs/configuration.md#idle-screen-timeout-state).
 `send_mode` and `confirmed_delivery` (Agent Defaults) and the experimental
 [`confirm_from_transcripts`](../../docs/caller-contract.md#confirm-from-transcripts)
 come from `AgentDefaultParams`, which `SpawnParams`,
-`ResumeParams` and `MakeTemplateParams` extend. An omitted or `undefined`
+`ResumeParams` and `MakeTemplateParams` extend. Confirm From Transcripts relies
+on agent internals with no published contract and may change without notice;
+changes to this setting or its reports are not breaking changes.
+An omitted or `undefined`
 field is not sent; any value, `false` included, is. They apply only to Covered
 Agents; a new launch busy send does not cover rejects with `ErrCantSend`. See
 [Busy-send options](../../docs/caller-contract.md#busy-send-options).

@@ -75,6 +75,9 @@ type MakeTemplateParams struct {
 	// is not offered its SendMode with reason steer_unsupported, before
 	// anything is written. A template with no Agent stores them; the spawn
 	// that uses it decides them for its resolved agent (SR-1.4, SR-9.2).
+	// ConfirmFromTranscripts relies on agent internals with no published
+	// contract and may change without notice. Changes to this setting or
+	// its reports are not breaking changes.
 	SendMode               *string
 	ConfirmedDelivery      *bool
 	ConfirmFromTranscripts *bool

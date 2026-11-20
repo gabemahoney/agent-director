@@ -84,11 +84,12 @@ required for release installs. `git`, `ps`, `lsof`, `pgrep`, `getent`, `dscl`,
 the macOS upgrade tools above. Scheduling
 keeps its [cron/systemd fallback and warnings](#schedule-the-sweeps).
 
-Native confirmed ordinary text delivery has narrower requirements: Linux, the exact
-agent versions above and a fresh supported launch. See
+For agents busy send does not cover, native confirmed ordinary text delivery
+requires Linux, exactly Codex 0.159.2 and a fresh supported launch. See
 [Ordinary text submission](caller-contract.md#ordinary-text-submission).
-Other launches retain literal text delivery without exact transcript confirmation,
-as described in that contract.
+Other uncovered launches use fallback input without exact transcript confirmation,
+as described in that contract. Covered Claude sends use
+[busy send](caller-contract.md#covered-sends).
 
 ## Install from a release
 

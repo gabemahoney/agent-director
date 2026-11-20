@@ -23051,12 +23051,10 @@ Provider-progress callers MUST reuse `RefreshTranscriptBindings` before the
 global recording check. It refreshes active owned Claude siblings read-only;
 `TranscriptPath` resolves checked and sibling tuples against the same explicit
 Home. Hooks never establish owner identity. `ErrTranscriptBindingPending`
-suppresses readiness acceptance within `AwaitStateChecked`/`AwaitEvidence`'s
-existing cadence/deadline; other errors remain terminal. A fully bound foreign
-tuple reports `does not match any bound owned parent` with the hook's
-`session_id`, `event` and `invocation`. Passive recorder receipts publish by
-temporary-file rename. Live missing/legacy truncated publication remains
-pending; sealed inventory still rejects incomplete or invalid recordings.
+suppresses readiness acceptance within the existing bounded wait; other errors
+remain terminal. Sealed inventory rejects incomplete or invalid recordings.
+The [collection runbook](../test/claude-live/README.md#collect-summarize-and-rerun)
+owns binding diagnostics and receipt publication.
 
 Progress loops that need only activity MUST reuse `AwaitActivityChecked` and
 the narrow identity reader shared by `RefreshTranscriptBindings`: owned
@@ -23145,14 +23143,12 @@ missing eligible PostToolBatch measurement. F3's reservation precedes enqueue
 and follows its original tail/reclaim identity, including ordinary early issue.
 
 Group producers MUST reuse the exact owned gate-driver checks and canonical
-cleanup shared with N8. G0's three separate foreground calls hold the entire
-steer plan before its two tool-boundary releases, then the entire ordinary plan
-before Stop. Per-admission guards and all-Held snapshots bind whole partitions;
-`group-admission` records mode, complete/partial state and the selected gate.
-The [runbook schedule](../test/claude-live/README.md#physical-prompt-schedule)
-owns release paths/timeouts. Partial closure sends no further input. A different
-physical partition never inherits O1/O2 or their alternatives; its start remains
-unmatched and charged independently of incomplete measurement judgments.
+cleanup shared with N8. Guards and custody evidence must bind each complete
+physical partition; partial closure sends no further input. A changed partition
+cannot inherit another partition's reservation: starts remain unmatched and
+charged independently of incomplete measurements. The
+[physical prompt schedule](../test/claude-live/README.md#physical-prompt-schedule)
+owns G0 gates, admission records and partition handling.
 
 `LoadCapture` and `AnalyzePhase` are the shared live-finalizer/offline boundary.
 They read confined indexed files and retained imports, never HOME, a live DB or
@@ -23190,17 +23186,14 @@ Provider-refusal continuation requires its separately reviewed attempt-bound
 policy; it is not a named workload deviation.
 
 Future continuation callers MUST reuse file-only `CheckContinuation`, exposed
-as `qualification-continuation`. It reloads the sealed capture, requires the
-exact reconciled current ledger and passed `accounting`, `cleanup` and canonical
-analyzer `contract` checks, validates frozen input/parent-event bindings and
-rejects failed components (including
-nested failures), unknown returned phase errors and uncertain cleanup. Output
-`status`, `continue_independent`, `blocked_imports`, `b3_gaps` and `outcomes`
-preserve incompleteness while gating only existing independent work. It grants
-no partial import, pass, retry, new phase or budget/deadline authority. Dependent
-skips retain selected incompleteness; the
-[runbook gate](../test/claude-live/README.md#sealed-continuation-gate) owns commands
-and dependencies.
+as `qualification-continuation`. It validates sealed capture, exact reconciled
+ledger and frozen input/owned-parent bindings; independent and nested failures
+take precedence over incompleteness. Unknown phase errors or uncertain cleanup
+block continuation. It gates only already selected independent work and grants
+no pass, partial
+import, retry, new phase or budget/deadline authority. The
+[sealed continuation gate](../test/claude-live/README.md#sealed-continuation-gate)
+owns check/output catalogues, dependencies and operational limits.
 
 `BuildProductSource`/`ProductDigest` fingerprint the actual runtime/admin build
 inputs, module pins, platform and toolchain separately from the harness tree.
@@ -23228,21 +23221,19 @@ prompt replacement is separately inapplicable under the documented hook
 interface; genuine block and additionalContext fixtures remain required.
 
 `AggregateQualification`/`WriteQualificationSummary` export retrievable sealed
-inputs, coverage, timings, force rows, bounds, cleanup and accounting. Selected
-execution, full qualification and b3 measurement readiness have independent
-statuses; deferred full-run checks stay incomplete. Summary and continuation
-MUST reuse recursive `incompleteJudgments` so `b3_gaps` includes incomplete
-children even under failed combinations, with deduplicated/inherited evidence.
-Summary also exports coverage-only obligations as `coverage/<id>`, retaining
-kind/source and capture-prefixed nested references; a missing R-a guard remains
-a premise-guard gap. Unattempted dependencies stay visible and a failed aggregate
-stays failed. `AggregatePhaseResults` is the pure scope-aggregation seam used
-only after capture validation: labelled
-unit outcomes can test scope without pretending to be provider recordings.
-Native wake/PostToolBatch observations describe Claude's bounds (including
-honest lower bounds); actual AD cap/refusal proof uses the unmodified candidate.
-Neither exact test transcript intake nor first assistant text creates a public
-Claude delivery-confirmation capability.
+evidence, coverage and accounting. Selected execution, full qualification and
+b3 measurement readiness have independent statuses. Summary and continuation
+MUST reuse recursive `incompleteJudgments` to retain nested incomplete children
+and coverage-only obligations without downgrading independent failures.
+Unattempted dependencies and deferred checks remain incomplete. The
+[collection runbook](../test/claude-live/README.md#collect-summarize-and-rerun)
+owns gap/output shapes, evidence references and collection procedures.
+`AggregatePhaseResults` is the pure scope-aggregation seam used only after
+capture validation: labelled unit outcomes can test scope without pretending to
+be provider recordings. Native wake/PostToolBatch observations describe
+Claude's bounds (including honest lower bounds); actual AD cap/refusal proof
+uses the unmodified candidate. Neither exact test transcript intake nor first
+assistant text creates a public Claude delivery-confirmation capability.
 
 `StartNativeSteer` is the production N7 launch seam whose exported entry is
 used only by tests. It shares the actual measurement helper, reservation,
@@ -23250,20 +23241,19 @@ PostToolBatch route, five-tool prompt, native session/PID checks and bounded
 startup. Replay tests MUST reuse it for fresh N7 setup rather than fabricate a
 wake ladder or add a simulation/confinement bypass.
 
-N7 requires five separate foreground parent batches, retaining a measured prefix
-on `insufficient-batches`. Corpus acknowledgment preserves scheduled tools;
-PostToolBatch rung instructions preserve the initial sequence with inert data,
-separately from native wake instructions. Independent N8 requires native exit.
-N8 MUST reuse the harness-owned PreToolUse hold and exact registered driver
-PID/start/run/instance/session/cwd/input digest. Pre/post-admission and refusal
-checks prove the same driver is live and unreleased with no Stop, PostToolBatch
-or issued prompt; receipt files alone are insufficient. Full custody snapshots
-remain every 25 admissions, around refusals and at stop/reuse/final collection.
-`checkBacklogHold` separately validates sealed first/last live observations
-spanning all admissions/refusals, exact input/owner binding and provider exit
-after the interval; `CheckBacklog` still requires custody/disposal/Lookup proof.
-Cleanup exits provider owners before releasing/reaping only exact owned drivers;
-uncertain identities retain resources. Activity polling never weakens this proof.
+The [physical prompt schedule](../test/claude-live/README.md#physical-prompt-schedule)
+owns N7 batches and rung instructions. Independent N8 requires native exit and
+MUST reuse the harness-owned PreToolUse hold with exact registered
+driver/input/owner identity; receipt files alone prove no live hold.
+`checkBacklogHold` validates sealed live observations spanning all admissions/
+refusals and subsequent
+provider exit; `CheckBacklog` retains custody/disposal/Lookup proof. Activity
+polling never replaces custody evidence. The
+[N8 proof](../test/claude-live/README.md#n8-hold-and-custody-proof) owns driver
+fields, admission guards and snapshot cadence;
+[cleanup rules](../test/claude-live/README.md#stop-and-cleanup-rules) own the
+sequence. Cleanup releases/reaps only exact owned drivers and retains resources
+when ownership or exit is uncertain.
 
 `NewLedger`, `Reserve`, `Reconcile`, `AccountTurns`, `UpdateLedger` and
 `NewAttempt` are the reusable authority/accounting interfaces. Reservations are

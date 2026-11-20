@@ -556,7 +556,11 @@ export interface AgentDefaultParams {
   send_mode?: SendMode;
   /** Agent Default Confirmed Delivery. */
   confirmed_delivery?: boolean;
-  /** Experimental: whether a force may be confirmed from transcripts. */
+  /**
+   * Experimental: whether a force may be confirmed from transcripts. Relies on agent internals
+   * with no published contract; may change without notice. Changes to this setting or its
+   * reports are not breaking changes.
+   */
   confirm_from_transcripts?: boolean;
 }
 

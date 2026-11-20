@@ -125,6 +125,9 @@ type ResumeParams struct {
 	// They apply only to a Covered Agent: when busy send would not cover the
 	// resumed Launch, a resume that sets one is refused with ErrCantSend,
 	// reason agent_not_covered, before anything is written (SR-9.2).
+	// ConfirmFromTranscripts relies on agent internals with no published
+	// contract and may change without notice. Changes to this setting or
+	// its reports are not breaking changes.
 	SendMode               *string `json:"send_mode,omitempty"`
 	ConfirmedDelivery      *bool   `json:"confirmed_delivery,omitempty"`
 	ConfirmFromTranscripts *bool   `json:"confirm_from_transcripts,omitempty"`

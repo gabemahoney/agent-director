@@ -122,6 +122,7 @@ timing, risks and limits are in
 and [Steer Turn delivery](caller-contract.md#steer-turn-delivery).
 
 Delivered means the message was passed to the harness, but not necessarily confirmed received by the LLM.
+`queued` is not Delivered.
 
 For a worker, send a confirmed Message with your own Caller UUID and Message ID,
 then read its actual Result:

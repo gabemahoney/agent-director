@@ -403,7 +403,7 @@ func agentDefaultParams(before string, covered func(value string) string) []Para
 	return []ParamDef{
 		{Name: "send_mode", Type: "string", Description: "Agent Default Send Mode: wait_turn or steer_turn. " + before + covered("wait_turn"), Nullable: false, AllowEmpty: false, AllowedValues: []string{"wait_turn", "steer_turn"}},
 		{Name: "confirmed_delivery", Type: "bool", Description: "Agent Default Confirmed Delivery. " + before + covered("false"), Nullable: false, AllowEmpty: false},
-		{Name: "confirm_from_transcripts", Type: "bool", Description: "Experimental: whether a force may be confirmed from transcripts. " + before + covered("false"), Nullable: false, AllowEmpty: false},
+		{Name: "confirm_from_transcripts", Type: "bool", Description: "Experimental: whether a force may be confirmed from transcripts. Relies on agent internals with no published contract; may change without notice. Changes to this setting or its reports are not breaking changes. " + before + covered("false"), Nullable: false, AllowEmpty: false},
 	}
 }
 

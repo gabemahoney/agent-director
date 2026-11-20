@@ -751,7 +751,9 @@ force pending there ([Launch end](#launch-end-resume-and-reuse)).
 shows what it can do for the agent, whatever the setting:
 `confirm_from_transcripts_capability` is `can_confirm`, `not_needed` or
 `cannot_confirm`, and `confirm_from_transcripts_reason` is a stable code
-saying why.
+saying why. This experimental setting rests on agent internals with no
+published contract and can change without notice. Changes to the setting or
+what it reports are not breaking changes, including changes to those codes.
 
 Claude Code is `not_needed`, reason `hook_sighting_first`: agent-director's
 own [sighting](#claude-code-force-capability) came before Claude Code's
