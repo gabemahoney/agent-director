@@ -102,7 +102,16 @@ type replayParent struct {
 type replayGateDriver struct {
 	command *exec.Cmd
 	start   string
-	done    chan error
+	done    chan struct{}
+}
+
+func (d replayGateDriver) wait(ctx context.Context) error {
+	select {
+	case <-d.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 type setupReplay struct {
@@ -131,6 +140,7 @@ type setupReplay struct {
 	cleanupUPS        bool
 	workload          *workloadReplay
 	drivers           []replayGateDriver
+	openRaw           func(string) (*sql.DB, error)
 }
 
 func replayRead(t *testing.T, path string) []byte {
@@ -374,9 +384,18 @@ func (s *setupReplay) prerequisite(phase string, ledger q.Ledger) string {
 }
 
 func (s *setupReplay) db() string { return filepath.Join(s.r.Home, ".config/agent-director/state.db") }
+
+func (s *setupReplay) rawDB() (*sql.DB, error) {
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(%d)", s.db(), store.DefaultBusyTimeoutMs)
+	if s.openRaw != nil {
+		return s.openRaw(dsn)
+	}
+	return sql.Open("sqlite", dsn)
+}
+
 func (s *setupReplay) sql(query string, args ...any) {
 	s.t.Helper()
-	db, err := sql.Open("sqlite", s.db())
+	db, err := s.rawDB()
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -599,10 +618,17 @@ func (s *setupReplay) gateDriver(p *replayParent, dir string) {
 	if !alive || !known {
 		s.t.Fatal("gate driver start identity unavailable")
 	}
-	driver := replayGateDriver{command: command, start: start, done: make(chan error, 1)}
-	go func() { driver.done <- command.Wait() }()
+	driver := replayGateDriver{command: command, start: start, done: make(chan struct{})}
+	go func() { _ = command.Wait(); close(driver.done) }()
 	s.drivers = append(s.drivers, driver)
-	s.t.Cleanup(func() { _ = command.Process.Kill(); <-driver.done })
+	s.t.Cleanup(func() {
+		_ = command.Process.Kill()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := driver.wait(ctx); err != nil {
+			s.t.Errorf("gate driver cleanup: %v", err)
+		}
+	})
 	replayJSON(s.t, filepath.Join(dir, "driver.json"), runner.Row{"pid": command.Process.Pid, "process_start": start, "run": s.r.Manifest.RunID, "instance": p.id, "session": p.session, "cwd": p.cwd, "input_sha256": runner.Digest(replayRead(s.t, filepath.Join(dir, "input.json")))})
 }
 
@@ -1479,7 +1505,7 @@ func (w *workloadReplay) stop(p *replayParent, prose string) {
 }
 
 func (w *workloadReplay) query(query string, args ...any) string {
-	db, err := sql.Open("sqlite", w.s.db())
+	db, err := w.s.rawDB()
 	if err != nil {
 		w.s.t.Fatal(err)
 	}
@@ -2088,9 +2114,9 @@ func (w *workloadReplay) backlog(ctx context.Context, p *replayParent, id, text 
 		if err := driver.command.Process.Kill(); err != nil {
 			w.s.t.Fatal(err)
 		}
-		// Reinsert the wait result for the fixture's existing explicit cleanup.
-		er := <-driver.done
-		driver.done <- er
+		if err := driver.wait(ctx); err != nil {
+			return true, -1, err
+		}
 		gone, er := runner.ProcessGone(driver.command.Process.Pid, driver.start)
 		if er != nil || !gone {
 			w.s.t.Fatalf("injected driver exit not witnessed: gone=%t err=%v", gone, er)

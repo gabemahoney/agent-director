@@ -86,7 +86,7 @@ func LostReplyClient(planPath string) error {
 	return errors.New("client was not interrupted within the planned lost-reply window")
 }
 
-func (e *Exercise) lostReply(ctx context.Context, iid, text string) error {
+func (e *Exercise) lostReply(ctx context.Context, iid, text string) (err error) {
 	r := e.Run
 	if err := e.reserve("L2"); err != nil {
 		return err
@@ -98,28 +98,16 @@ func (e *Exercise) lostReply(ctx context.Context, iid, text string) error {
 	}
 	started := r.Now().UTC()
 	r.Manifest.Cases = append(r.Manifest.Cases, runner.Case{ID: "L2", Text: text, Mode: "wait_turn", InstanceID: iid, RequestID: "L2", Started: started, Command: ref, Ready: true})
-	childCtx, cancel := context.WithCancel(ctx)
-	type finished struct {
-		command runner.Command
-		err     error
-	}
-	done := make(chan finished, 1)
-	go func() {
-		c, _, err := r.Commands.Run(childCtx, "lost-reply-client", 75*time.Second, filepath.Join(r.Kit, "bin/claude-live"), "qualification-lost-client", "--client-plan", filepath.Join(r.Evidence.Root, ref))
-		done <- finished{c, err}
-	}()
-	joined := false
-	defer func() {
-		cancel()
-		if !joined {
-			<-done
-		}
-	}()
+	call := startCommand(ctx, func(ctx context.Context) commandResult {
+		c, _, er := r.Commands.Run(ctx, "lost-reply-client", 75*time.Second, filepath.Join(r.Kit, "bin/claude-live"), "qualification-lost-client", "--client-plan", filepath.Join(r.Evidence.Root, ref))
+		return commandResult{c, er}
+	})
+	defer func() { err = errors.Join(err, call.stop(ctx)) }()
 	var receipt LostClientReceipt
-	err := r.AwaitEvidence(ctx, 20*time.Second, func(context.Context) (bool, error) {
+	err = r.AwaitEvidence(ctx, 20*time.Second, func(context.Context) (bool, error) {
 		select {
-		case f := <-done:
-			joined = true
+		case f := <-call.done:
+			call.joined = true
 			return false, fmt.Errorf("client ended before interruption: %w", f.err)
 		default:
 		}
@@ -158,8 +146,10 @@ func (e *Exercise) lostReply(ctx context.Context, iid, text string) error {
 	if _, _, err = r.Commands.Run(ctx, "kill-owned-client-only", 5*time.Second, "kill", "-KILL", strconv.Itoa(receipt.PID)); err != nil {
 		return err
 	}
-	f := <-done
-	joined = true
+	f := call.wait(ctx)
+	if !call.joined {
+		return f.err
+	}
 	if f.command.ExitCode == 0 {
 		return errors.New("client was not interrupted")
 	}
@@ -176,7 +166,7 @@ func (e *Exercise) lostReply(ctx context.Context, iid, text string) error {
 	return err
 }
 
-func Lifecycle(ctx context.Context, e *Exercise) error {
+func Lifecycle(ctx context.Context, e *Exercise) (err error) {
 	r := e.Run
 	release := filepath.Join(r.Evidence.Root, "work-L1", "release-initial-never")
 	iid, err := e.spawn(ctx, "L1", "This local timing fixture waits for a file controlled by the test runner in this run directory. Run this exact single foreground Bash call, without background work: `"+controlledTool(release)+"`. Finish briefly only after it exits.")
@@ -208,10 +198,15 @@ func Lifecycle(ctx context.Context, e *Exercise) error {
 	}
 	// Two independent public callers overlap the real SessionStart/ordinary
 	// callback. Both refer to the original pair; no third parent start is spent.
-	forceDone := make(chan error, 1)
-	go func() { forceDone <- e.forceCommand(ctx, iid, "L2-concurrent-force") }()
+	call := startCommand(ctx, func(ctx context.Context) commandResult {
+		return commandResult{err: e.forceCommand(ctx, iid, "L2-concurrent-force")}
+	})
+	defer func() { err = errors.Join(err, call.stop(ctx)) }()
 	repeatErr := e.sendPair(ctx, iid, "L2-repeat-during-resume", "L2", text, "wait_turn", true, false)
-	forceErr := <-forceDone
+	if repeatErr != nil {
+		return repeatErr
+	}
+	forceErr := call.wait(ctx).err
 	if err = errors.Join(repeatErr, forceErr); err != nil {
 		return err
 	}

@@ -274,22 +274,11 @@ func ForceStates(ctx context.Context, e *Exercise) (err error) {
 	if err = e.send(ctx, iid, "F3", f3, "wait_turn", true, false); err != nil {
 		return err
 	}
-	type completed struct {
-		cmd runner.Command
-		err error
-	}
-	done := make(chan completed, 1)
-	go func() {
+	call := startCommand(ctx, func(ctx context.Context) commandResult {
 		c, _, er := e.Run.AD(ctx, "F2-force", "force-delivery", "--instance-id", iid)
-		done <- completed{c, er}
-	}()
-	joined := false
-	defer func() {
-		if !joined {
-			v := <-done
-			err = errors.Join(err, v.err)
-		}
-	}()
+		return commandResult{c, er}
+	})
+	defer func() { err = errors.Join(err, call.stop(ctx)) }()
 	_, err = e.wait(ctx, iid, func(s runner.Snapshot) bool {
 		p, ok := promptFor(s, f2)
 		return ok && runner.Number(p, "transport_at_ms") > 0
@@ -300,16 +289,15 @@ func ForceStates(ctx context.Context, e *Exercise) (err error) {
 	if err = e.force(ctx, iid, "second-force-refusal"); err != nil {
 		return err
 	}
-	v := <-done
-	joined = true
-	e.Observations = append(e.Observations, Observation{Case: "F2-force", Instance: iid, Kind: "force", State: "tool_running", Started: v.cmd.Started, Ended: v.cmd.Ended, Command: v.cmd.Stdout})
+	v := call.wait(ctx)
 	if v.err != nil {
 		return v.err
 	}
+	e.Observations = append(e.Observations, Observation{Case: "F2-force", Instance: iid, Kind: "force", State: "tool_running", Started: v.command.Started, Ended: v.command.Ended, Command: v.command.Stdout})
 	if _, err = e.observe(ctx, iid, "F2-tail-return"); err != nil {
 		return err
 	}
-	returnedForceData, er := runner.Read(e.Run.Evidence.Root, v.cmd.Stdout)
+	returnedForceData, er := runner.Read(e.Run.Evidence.Root, v.command.Stdout)
 	if er != nil {
 		return er
 	}
@@ -324,8 +312,8 @@ func ForceStates(ctx context.Context, e *Exercise) (err error) {
 		if er != nil {
 			return er
 		}
-		if returnedForce.Outcome == "handed_over" && forceToolEnded(Capture{Hooks: facts, Owners: []OwnerEvidence{{Owner: owner}}}, v.cmd) {
-			return e.workload("precondition-not-established", iid, "F2", "the selected foreground tool completed before the force call returned; pending-force schedule remains incomplete", v.cmd.Stdout)
+		if returnedForce.Outcome == "handed_over" && forceToolEnded(Capture{Hooks: facts, Owners: []OwnerEvidence{{Owner: owner}}}, v.command) {
+			return e.workload("precondition-not-established", iid, "F2", "the selected foreground tool completed before the force call returned; pending-force schedule remains incomplete", v.command.Stdout)
 		}
 	}
 	if err = e.earlyF3(ctx, iid, f3); err != nil {
