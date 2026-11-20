@@ -66,6 +66,17 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 }
 
 func (c *Commands) Run(ctx context.Context, name string, limit time.Duration, argv ...string) (Command, []byte, error) {
+	return c.run(ctx, name, limit, false, argv...)
+}
+
+// RunStatus records no credential/account/configuration output from provider
+// authentication commands. Exit, lengths and hashes are the only retained data.
+func (c *Commands) RunStatus(ctx context.Context, name string, limit time.Duration, argv ...string) (Command, error) {
+	row, _, err := c.run(ctx, name, limit, true, argv...)
+	return row, err
+}
+
+func (c *Commands) run(ctx context.Context, name string, limit time.Duration, redact bool, argv ...string) (Command, []byte, error) {
 	if limit <= 0 || limit > 5*time.Minute {
 		return Command{}, nil, errors.New("command requires a limit at most five minutes")
 	}
@@ -82,6 +93,14 @@ func (c *Commands) Run(ctx context.Context, name string, limit time.Duration, ar
 	row.Ended, row.ExitCode, row.Timeout = c.Now(), exit, ctx.Err() != nil
 	if exit == -1 && err != nil {
 		row.SpawnError = err.Error()
+	}
+	if redact {
+		projection, encodeErr := json.Marshal(map[string]any{"redacted": true, "stdout_bytes": len(out.b), "stdout_sha256": Digest(out.b), "stderr_bytes": len(errout.b), "stderr_sha256": Digest(errout.b)})
+		if encodeErr != nil {
+			return row, nil, encodeErr
+		}
+		out.b = append(projection, '\n')
+		errout.b = nil
 	}
 	logErr := errors.Join(c.Evidence.Put(row.Stdout, out.b), c.Evidence.Put(row.Stderr, errout.b))
 	c.mu.Lock()

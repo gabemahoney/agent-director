@@ -64,11 +64,23 @@ func (r *Run) Install(ctx context.Context, backup string, recreateV21, maintenan
 	if !maintenance {
 		return errors.New("install requires --maintenance-window after excluding all old writers")
 	}
-	if err := r.Preflight(ctx); err != nil {
-		return err
+	if r.Manifest.ProviderVersion == "" {
+		if err := r.Preflight(ctx); err != nil {
+			return err
+		}
 	}
-	if _, err := r.VerifyCandidate(ctx, false); err != nil {
-		return err
+	if r.Manifest.Candidate == "" {
+		if _, err := r.VerifyCandidate(ctx, false); err != nil {
+			return err
+		}
+	} else {
+		k, err := VerifyKit(r.Kit)
+		if err != nil {
+			return err
+		}
+		if r.Manifest.Candidate != k.BaseCommit+"/"+k.SnapshotTree {
+			return errors.New("candidate changed since preflight")
+		}
 	}
 	if filepath.Clean(backup) != backup || filepath.Dir(backup) != r.scopeRoot() || backup == r.Evidence.Root {
 		return errors.New("backup must be a new private test-root directory outside evidence")
@@ -113,23 +125,33 @@ func (r *Run) Install(ctx context.Context, backup string, recreateV21, maintenan
 		if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 			return err
 		}
-		rows, err := db.QueryContext(ctx, "SELECT state,pid,proc_starttime FROM spawns")
+		rows, err := db.QueryContext(ctx, "SELECT instance_id,state,pid,proc_starttime FROM spawns")
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
-			var state string
+			var instanceID, state string
 			var pid any
 			var start any
-			if err = rows.Scan(&state, &pid, &start); err != nil {
+			if err = rows.Scan(&instanceID, &state, &pid, &start); err != nil {
 				rows.Close()
 				return err
 			}
-			if state != "ended" && state != "missing" {
+			ownedLive := false
+			if r.AllowOwnedInstall && version >= 16 && version < 21 {
+				for _, o := range r.Manifest.Owned {
+					p, ok := pid.(int64)
+					st, _ := start.(string)
+					if o.InstanceID == instanceID && ok && o.PID == int(p) && o.ProcessStart == st && o.LaunchToken != "" {
+						ownedLive = true
+					}
+				}
+			}
+			if !ownedLive && state != "ended" && state != "missing" {
 				rows.Close()
 				return errors.New("old agent still live; operator must stop it")
 			}
-			if pid != nil {
+			if pid != nil && !ownedLive {
 				p, ok := pid.(int64)
 				s, _ := start.(string)
 				gone, e := ProcessGone(int(p), s)
@@ -187,8 +209,10 @@ func (r *Run) Install(ctx context.Context, backup string, recreateV21, maintenan
 	// Exercise the installer's --no-hooks preservation as well as the later
 	// probe's spawn-time hook merge. Cleanup verifies that every exact entry
 	// survives installation before removing this install phase's recorder.
-	if err = r.StartRecorder([]string{"SessionStart", "FileChanged", "PostToolBatch", "UserPromptSubmit", "Stop"}); err != nil {
-		return err
+	if r.Settings == nil {
+		if err = r.StartRecorder([]string{"SessionStart", "FileChanged", "PostToolBatch", "UserPromptSubmit", "Stop"}); err != nil {
+			return err
+		}
 	}
 	_, _, err = r.Commands.Run(ctx, "install-candidate", 4*time.Minute, "bash", filepath.Join(r.Kit, "skills/install-agent-director/install.sh"), "--binary", filepath.Join(r.Kit, "payload/agent-director-linux-"+runtime.GOARCH), "--admin-binary", filepath.Join(r.Kit, "payload/agent-director-admin-linux-"+runtime.GOARCH), "--no-hooks", "--keep-prior", "--symlink-dir", filepath.Join(r.Home, ".local/bin"))
 	if err != nil {

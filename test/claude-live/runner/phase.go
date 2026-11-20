@@ -31,8 +31,15 @@ type Run struct {
 	Sleep           func(context.Context, time.Duration) error
 	ProviderCommand string
 	Socket          string
-	runtimeDir      string
-	runRoot         string
+	// Qualification records reconciled usage after canonical cleanup and the
+	// recorder drain, before the raw-artifact index is sealed.
+	Finalize          func(context.Context) error
+	StopOnUnreserved  bool
+	LaunchArtifacts   bool
+	AllowOwnedInstall bool
+	runtimeDir        string
+	runRoot           string
+	runtimeFiles      []string
 }
 
 func Sleep(ctx context.Context, d time.Duration) error {
@@ -100,7 +107,8 @@ func newRunAt(runRoot, home, kit, root, phase string, turns int) (*Run, error) {
 		return nil, err
 	}
 	r.Socket = filepath.Join(r.runtimeDir, "tmux.sock")
-	r.Manifest = Manifest{Schema: Schema, RunID: uuid.NewString(), Phase: phase, Platform: runtime.GOOS + "/" + runtime.GOARCH, Started: now().UTC(), Deadline: now().Add(PhaseLimit).UTC(), TurnBudget: turns}
+	t := now()
+	r.Manifest = Manifest{Schema: Schema, RunID: uuid.NewString(), Phase: phase, Platform: runtime.GOOS + "/" + runtime.GOARCH, Started: t.UTC(), Deadline: t.Add(PhaseLimit).UTC(), TurnBudget: turns}
 	r.Commands = &Commands{Evidence: e, Execute: Exec, Environment: Environment(r.Socket), Now: now}
 	return r, nil
 }
@@ -134,6 +142,10 @@ func (r *Run) ReserveTurn() error {
 // Every caught error is retained next to any independent analyzer failures.
 func (r *Run) ExecutePhase(parent context.Context, phase Phase, analyze Analyze) (v Verdict, err error) {
 	deadline := r.Manifest.Deadline
+	// Refused metadata still needs cleanup, within the runner's hard limit.
+	if limit := r.Manifest.Started.Add(PhaseLimit); deadline.After(limit) {
+		deadline = limit
+	}
 	ctx, cancel := context.WithDeadline(parent, deadline.Add(-CleanupReserve))
 	defer cancel()
 	defer func() {
@@ -173,6 +185,11 @@ func (r *Run) ExecutePhase(parent context.Context, phase Phase, analyze Analyze)
 				if !invocation.Complete {
 					r.Problem("recording-hook-incomplete", "fail", fmt.Errorf("%s: %s", invocation.Directory, invocation.Reason))
 				}
+			}
+		}
+		if r.Finalize != nil {
+			if e := r.Finalize(cleanup); e != nil {
+				r.Problem("qualification-finalization", "not_completed", e)
 			}
 		}
 		if e := r.Commands.Finish(); e != nil {

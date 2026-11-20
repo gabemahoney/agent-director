@@ -116,6 +116,23 @@ func (c capture) wakeOrder(text string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	history, err := c.history()
+	if err != nil {
+		return 0, err
+	}
+	return WakeOrderBody(c.m.Owned[0], c.s, p, h, Prompt(text), c.hooks["UserPromptSubmit"], c.trail, history)
+}
+
+// WakeOrderBody shares ci's exact fact/sighting/Launch/callback/causal checks
+// with multi-Message qualification. Captured writer timestamps can reverse;
+// order is the second fact transaction, never a fabricated max timestamp.
+func WakeOrderBody(owner runner.Owned, snapshot runner.Snapshot, p, h runner.Row, body string, hooks, trail []runner.Row, history []runner.Snapshot) (int64, error) {
+	c := capture{m: runner.Manifest{Owned: []runner.Owned{owner}}, s: snapshot, hooks: map[string][]runner.Row{"UserPromptSubmit": hooks}, trail: trail}
+	for _, s := range history {
+		if s.InstanceID != owner.InstanceID || len(s.Tables["spawns"]) != 1 || runner.Text(s.Tables["spawns"][0], "launch_token") != owner.LaunchToken || runner.Text(s.Tables["spawns"][0], "session_id") != owner.SessionID {
+			return 0, errors.New("unbound wake fact observation")
+		}
+	}
 	issued, written, sighted, order := runner.Number(p, "issued_at_ms"), runner.Number(p, "transport_at_ms"), runner.Number(p, "admitted_at_ms"), runner.Number(p, "order_at_ms")
 	if runner.Text(h, "boundary") != "force" && runner.Text(h, "boundary") != "turn_end" {
 		return 0, errors.New("not a Claude wake")
@@ -151,16 +168,12 @@ func (c capture) wakeOrder(text string) (int64, error) {
 	// One exact bound callback corroborates AD's uniquely selected sighting.
 	sightings := 0
 	for _, row := range c.hooks["UserPromptSubmit"] {
-		if c.parent(row, "UserPromptSubmit") && runner.Text(row, "prompt") == Render(text, "wait_turn") && runner.Text(row, "prompt_id") != "" {
+		if c.parent(row, "UserPromptSubmit") && runner.Text(row, "prompt") == RenderBody(body, "wait_turn") && runner.Text(row, "prompt_id") != "" {
 			sightings++
 		}
 	}
 	if sightings != 1 || !c.fired("UserPromptSubmit") {
 		return 0, errors.New("missing or ambiguous exact parent wake sighting")
-	}
-	history, err := c.history()
-	if err != nil {
-		return 0, err
 	}
 	causal := false
 	for _, s := range history {

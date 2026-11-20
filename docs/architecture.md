@@ -22818,7 +22818,7 @@ fields NULL. **Must use:** future Docker cases use this fixture rather than raw
 
 ### Claude live runner (reusable qualification fixture)
 
-Future live phases, including the qualification shakedown, MUST reuse
+All live phases, including the qualification shakedown, MUST reuse
 `test/claude-live/runner`, whose package comment declares this shared fixture.
 `NewRun`/`ExecutePhase` own bounded commands, the cleanup reserve, private
 evidence and aggregate turn budget; `Commands.Run` records argv, time bounds,
@@ -22826,6 +22826,30 @@ exit and outputs. `Observe`, `Bind`/`BindOwned`, `Collect` and `CollectFiles`
 keep reads and cleanup tied to owned Launch/process identities. `Evidence`
 confines files and indexes their hashes. Reuse these interfaces rather than
 another command loop, store exporter or cleanup implementation.
+
+Provider-progress callers MUST reuse `RefreshTranscriptBindings` before the
+global recording check. It refreshes active owned Claude siblings read-only;
+`TranscriptPath` resolves checked and sibling tuples against the same explicit
+Home. Hooks never establish owner identity. `ErrTranscriptBindingPending`
+suppresses readiness acceptance within `AwaitStateChecked`/`AwaitEvidence`'s
+existing cadence/deadline; other errors remain terminal. A fully bound foreign
+tuple reports `does not match any bound owned parent` with the hook's
+`session_id`, `event` and `invocation`. Passive recorder receipts publish by
+temporary-file rename. Live missing/legacy truncated publication remains
+pending; sealed inventory still rejects incomplete or invalid recordings.
+
+Progress loops that need only activity MUST reuse `AwaitActivityChecked` and
+the narrow identity reader shared by `RefreshTranscriptBindings`: owned
+spawn/Launch identity and prompt existence, with the existing transaction,
+ownership, budget, Dialog and provider guards. They do not read retained Message
+or member tables. Reuse full `Observe` snapshots where custody predicates need
+them; a narrow poll is never custody evidence.
+
+`Cleanup` refreshes same-Launch PID/start/session facts around grace/recovery
+and before collection. A replacement revokes further commands. Its first pass
+stops/binds all owned parents; its second collects transcripts, preventing
+collection order from depending on which sibling was observed first. Native
+stopping shares this order; direct `StopNative` still stops and collects.
 
 `StartRecorder`/`InstallRecorder`/`Settings.Remove` preserve unrelated settings
 and remove only exact owned entries. `StartContinuationVariant`,
@@ -22863,6 +22887,251 @@ FileChanged sample and synthetic PostToolBatch values; those structural
 fixtures do not qualify live behavior. Keep real capture replacement and
 independent per-signal negative checks under the README's
 [requalification procedure](../test/claude-live/README.md#deliberate-requalification).
+
+### Claude qualification (reusable analysis and accounting)
+
+Future qualification work MUST reuse `test/claude-live/qualification` and the
+[shared live runner](#claude-live-runner-reusable-qualification-fixture).
+The dependency flow is registered phase → bounded runner/owned collection →
+sealed file-only judgment → coverage resolution/summary. The
+[single runbook](../test/claude-live/README.md#phase-selection-and-turn-accounting)
+owns commands, phase shares and the readable requirement map; architecture
+does not keep another operational table.
+
+`Registry`, `Coverage` and `DialogDimensions` define required checks,
+requirement references and every Dialog mode/confirmation/relay/origin/state
+combination. `Execute`/`Dispatch` use one runner lifecycle, deadline and cleanup
+reserve. `PreparePhase` checks persisted authority, provider/kit identity and
+product provenance before input. Collectors reserve each physical parent
+start, bind its observed Launch/prompt and retain actual usage, including
+overshoots. Mid-turn context, compactions, API requests and child/background
+activity are separate metadata; a new parent start is charged even if caused
+by background work. Cross-phase consumers share immutable evidence rather
+than a live session or another turn charge.
+
+`WorkloadOutcome` is the reusable branch-closure record: named code, frozen
+case/input digest, owned Launch/session, available request/tool/Stop references
+and teardown uncertainty. Collectors MUST correlate actual parent PreToolUse
+IDs, one-call PostToolBatch membership, exact foreground commands and requests;
+instructions alone prove no state. Missing/substituted/parallel/background tools,
+missing Dialog origin/plan, early Stop, insufficient N7 batches and absent N8
+hold retain incomplete measurements without replacement input. The
+[runbook](../test/claude-live/README.md#named-workload-outcomes-and-reserved-alternatives)
+owns exact names and slot alternatives. `Charge.Alternatives`/`SelectedCase`
+bind mutually exclusive physical starts in an existing reservation; accounting
+retains `max(reserved, actual)`. Exact Stop-delivered typed input can consume
+the reserved idle AD slot once, but whole wait-turn intake never supplies the
+missing eligible PostToolBatch measurement. F3's reservation precedes enqueue
+and follows its original tail/reclaim identity, including ordinary early issue.
+
+Group producers MUST reuse the exact owned gate-driver checks and canonical
+cleanup shared with N8. G0's three separate foreground calls hold the entire
+steer plan before its two tool-boundary releases, then the entire ordinary plan
+before Stop. Per-admission guards and all-Held snapshots bind whole partitions;
+`group-admission` records mode, complete/partial state and the selected gate.
+The [runbook schedule](../test/claude-live/README.md#physical-prompt-schedule)
+owns release paths/timeouts. Partial closure sends no further input. A different
+physical partition never inherits O1/O2 or their alternatives; its start remains
+unmatched and charged independently of incomplete measurement judgments.
+
+`LoadCapture` and `AnalyzePhase` are the shared live-finalizer/offline boundary.
+They read confined indexed files and retained imports, never HOME, a live DB or
+commands. Reuse the [signal parser and order witnesses](#claude-signal-qualification),
+including `signals.WakeOrderBody` and exact whole-next-request matching;
+do not create another transcript matcher. Whole-input, typed-pair, packing/order,
+force, native-size, backlog, lifecycle/hook and Esc checkers keep independent
+component verdicts. `PhaseResult` requires every registered check, and
+`runner.Verdict.Aggregate` retains failure precedence over incompleteness.
+The shared sighting wait preserves its original guard/workload error. A
+`force-sighting` failure requires the exact issued/written unsighted target
+joined to an accepted forced handover on the current instance/Launch/session.
+A retained target sighting prevents a false missing-sighting claim from another
+workload exit; independent `forceState`/`CheckForceState` order/contract judgments
+remain unchanged. This is no blanket suppression of product failures.
+Typed controls MUST reuse `signals.ParseTypedInput`/`Transcript.NextTypedInput`
+for exact plain/pasted input and independently bound human queued forwards.
+They retain raw wrapper/ID and compare inner text; AD input/order proofs keep
+their original exact bytes and never accept typed normalization as AD evidence.
+Written plus uniquely bound sighting establishes wake order in either fact
+order; Stop is not a release and timestamp maxima cannot replace the transaction.
+
+Provider-progress checks and sealed analysis MUST reuse
+`signals.Transcript.ProviderRefusals`, with owned main-request/Launch/session/
+case intervals and indexed marker references. `qualification.RefusalEvidence`
+keeps the active input case separate from the waiting operation;
+`ProviderRefusalError` and `provider_refusal/not_completed` are diagnostics, never
+AD input/admission/order or confirmation evidence. Independent failures retain
+precedence. `runner.AwaitStateChecked` is opt-in for provider-progress waits;
+ordinary file/process/cleanup waits stay unchecked. There is no global guard.
+The README owns the [wait inventory](../test/claude-live/README.md#named-provider-refusal).
+Only a provably untouched typed suffix after a bound refusal becomes incomplete;
+attempted/conflicting/extra starts and independent failures keep their verdicts.
+Provider-refusal continuation requires its separately reviewed attempt-bound
+policy; it is not a named workload deviation.
+
+Future continuation callers MUST reuse file-only `CheckContinuation`, exposed
+as `qualification-continuation`. It reloads the sealed capture, requires the
+exact reconciled current ledger and passed `accounting`, `cleanup` and canonical
+analyzer `contract` checks, validates frozen input/parent-event bindings and
+rejects failed components (including
+nested failures), unknown returned phase errors and uncertain cleanup. Output
+`status`, `continue_independent`, `blocked_imports`, `b3_gaps` and `outcomes`
+preserve incompleteness while gating only existing independent work. It grants
+no partial import, pass, retry, new phase or budget/deadline authority. Dependent
+skips retain selected incompleteness; the
+[runbook gate](../test/claude-live/README.md#sealed-continuation-gate) owns commands
+and dependencies.
+
+`BuildProductSource`/`ProductDigest` fingerprint the actual runtime/admin build
+inputs, module pins, platform and toolchain separately from the harness tree.
+The kit binds that product record, full inventory and candidate contract/assets.
+Ordinary `CompatibleCapture` imports require identical run, candidate, product,
+provider and qualification kit, with explicit historical-attempt authority.
+`retainImports`, before consumer phase dispatch/reservation/spawn/input, and
+offline `importPhase` MUST reuse file-only `loadPhaseImport`: sealed
+`LoadCapture`, `CompatibleCapture` and fresh `AnalyzePhase` PASS, with no failed
+verdict or incomplete judgment, including nested rows. Compatibility or selected
+passing facts alone cannot authorize import; rejected partial evidence remains
+retained for diagnosis and gaps. The separate ci path uses `compatibleCI`,
+preserves its original kit/capture and verifies the
+same product/provider through its own product asset or original-build
+`SourceWitness` inventory/log. Harness-only drift never restamps a candidate.
+
+`ValidateSchedulerTest`/`ResolveCoverageEvidence` require exact successful
+final-candidate test/subcase logs, hashes, native platform/Environment Record,
+source and an applicable reason. Dialog fallback binds the exact dimension;
+unavailable providers and E7 upgrades bind registered Docker cases. Budget
+omissions cannot resolve coverage. R-a remains disclosed named-premise metadata
+with the awaiting-take guard regression and b3 release reference: AD prevents
+the live race, so no impossible capture or live PASS/FAIL is required. Claude
+prompt replacement is separately inapplicable under the documented hook
+interface; genuine block and additionalContext fixtures remain required.
+
+`AggregateQualification`/`WriteQualificationSummary` export retrievable sealed
+inputs, coverage, timings, force rows, bounds, cleanup and accounting. Selected
+execution, full qualification and b3 measurement readiness have independent
+statuses; deferred full-run checks stay incomplete. Summary and continuation
+MUST reuse recursive `incompleteJudgments` so `b3_gaps` includes incomplete
+children even under failed combinations, with deduplicated/inherited evidence.
+Summary also exports coverage-only obligations as `coverage/<id>`, retaining
+kind/source and capture-prefixed nested references; a missing R-a guard remains
+a premise-guard gap. Unattempted dependencies stay visible and a failed aggregate
+stays failed. `AggregatePhaseResults` is the pure scope-aggregation seam used
+only after capture validation: labelled
+unit outcomes can test scope without pretending to be provider recordings.
+Native wake/PostToolBatch observations describe Claude's bounds (including
+honest lower bounds); actual AD cap/refusal proof uses the unmodified candidate.
+Neither exact test transcript intake nor first assistant text creates a public
+Claude delivery-confirmation capability.
+
+`StartNativeSteer` is the production N7 launch seam whose exported entry is
+used only by tests. It shares the actual measurement helper, reservation,
+PostToolBatch route, five-tool prompt, native session/PID checks and bounded
+startup. Replay tests MUST reuse it for fresh N7 setup rather than fabricate a
+wake ladder or add a simulation/confinement bypass.
+
+N7 requires five separate foreground parent batches, retaining a measured prefix
+on `insufficient-batches`. Corpus acknowledgment preserves scheduled tools;
+PostToolBatch rung instructions preserve the initial sequence with inert data,
+separately from native wake instructions. Independent N8 requires native exit.
+N8 MUST reuse the harness-owned PreToolUse hold and exact registered driver
+PID/start/run/instance/session/cwd/input digest. Pre/post-admission and refusal
+checks prove the same driver is live and unreleased with no Stop, PostToolBatch
+or issued prompt; receipt files alone are insufficient. Full custody snapshots
+remain every 25 admissions, around refusals and at stop/reuse/final collection.
+`checkBacklogHold` separately validates sealed first/last live observations
+spanning all admissions/refusals, exact input/owner binding and provider exit
+after the interval; `CheckBacklog` still requires custody/disposal/Lookup proof.
+Cleanup exits provider owners before releasing/reaping only exact owned drivers;
+uncertain identities retain resources. Activity polling never weakens this proof.
+
+`NewLedger`, `Reserve`, `Reconcile`, `AccountTurns`, `UpdateLedger` and
+`NewAttempt` are the reusable authority/accounting interfaces. Reservations are
+durable and serialized; each start has one owner and separate consumers.
+`AttachPriorLedger` carries settled actual usage across a changed kit while
+retaining digest-bound original ledger bytes; later updates cannot remove or
+replace that prior usage.
+`ReadSummary`/`Rerun` require an indexed immutable previous summary and explicit
+new allowance. Charges, failed history and original identities survive; a
+selected phase without its current-attempt capture remains incomplete. Reuse
+these interfaces rather than a second budget or rerun implementation.
+
+### Claude qualification recordings (reusable test fixture)
+
+Future qualification analyzer/CLI tests MUST reuse
+`test/claude-live/internal/qualificationfix`, whose package comment identifies
+its narrow synthetic adaptation scope, and the existing
+[signal fixture loader](#claude-signal-capture-reusable-test-fixture).
+`qualificationfix.New` wraps `signalsfix.Copy` of immutable capture 6;
+`Capture` is its indexed file adapter and `Packing` selects the three genuinely
+sighted emissions, leaving the terminal reserved-tag exercise in the original.
+Added authority/product metadata and token-qualified aliases are synthetic
+unit data and cannot qualify today's candidate. Mutate temporary copies only.
+
+The narrow clips in `qualification/testdata/recorded/` retain their
+[provenance](../test/claude-live/qualification/testdata/recorded/provenance.json):
+E5 `force-idle.json` preserves historical Result/ForceResult facts, E6
+`pause-resume.json` preserves ordinary owned resume evidence, and E4
+`idle-input.json` projects controlled framing from request rows 39/40.
+The a2 `a2-typed-paste.json` projection retains Claude 2.1.311's long-tool
+pair: the control paste and AD side, exercised by
+`TestQualificationRecordedLongToolPair`. Its explicit privacy projection keeps
+native AD bytes, original identities/times and original/projected blob hashes,
+with 22 source hashes. It consistently replaces unrelated context in the merged
+AD frame with two labelled neutral tools and one neutral instruction, omitting
+machine paths/process/socket fields and unrelated non-text blocks/history.
+This is bounded recorded-data calculation coverage, not a live qualification
+pass or evidence for unrecorded between-tools/idle pairs.
+`a2-a3-provider-refusals.json` is a metadata-only privacy projection of four
+owned parent transcripts: machine refusal fields, request/UUID ancestry,
+identities, times and original source hashes/line mappings. Thinking/response
+blocks retain type only; request history is empty, and explanations, account/
+tool context and host data are omitted. It proves no model intake.
+`TestQualificationRecordedProviderRefusal`, `TestQualificationProviderProgressWait`
+and `TestQualificationRefusalBlockedSuffix` exercise detection, checked versus
+unchecked waits and the bounded incomplete suffix without a live-pass claim.
+`a3-ledger.json`, `a4-ledger.json` and `a5-ledger.json` keep exact original bytes
+and nested prior ledgers. `TestAccountingA4OriginalNestedCarry` retains the a3-to-a4 case with
+six prior actual starts and the a4-to-a5 case with seven, ci once and immutable
+carry; a5-to-a6 carries 12. `a5-skipped-tool.json` preserves the skipped second
+Bash, whole Stop fallback and absent eligible tool boundary, with declared
+privacy projection/source hashes. Keep these fixtures and the retained a2
+paste/long-tool pair; do not repair their historical facts or restamp them.
+The provenance records original paths/hashes, scrubbing, adaptations and output
+digests. These prove only their narrow judgments: neither current wake order,
+Esc recovery nor an entire live qualification. Synthetic pure aggregation
+outcomes likewise establish no provider claim. Keep original candidate/provider
+identities and declare any additional adaptations rather than manufacturing
+a second passing live baseline.
+
+`runner/testdata/recorded/a4-transcript-binding.json` is a privacy projection of
+the original owned entries, phase times, three receipt records and hook identity
+fields. It retains source hashes/paths and original tuples, with no prompt,
+transcript content or invented successful binding. Projected input hash/size
+changes are explicit test adaptations; source receipt hashes stay original.
+Binding/cleanup tests MUST reuse `internal/bindingfix.Child` for harmless owned
+processes with real PID/start identity and exact-child teardown; it starts no
+provider or tmux server.
+
+`runner/qualification_replay_test.go` exercises six real producer setup prefixes
+through Execute/Dispatch/preparation and canonical cleanup, plus fresh N7/N8
+entry variants. Its `runner/testdata/qualification-replay-schedules.json` keeps
+original a2–a4 timestamps, source paths and hashes, rebasing offsets to the
+constructor clock. Ownership/prompt context, reversed orders and missing a4
+tool events are explicitly synthetic. Force/Dialog/groups/text/Esc schedules
+and complete prerequisite producers are synthetic; no live provider executes.
+`runner/qualification_prerequisite_test.go` builds whole force/typed/groups
+producers through the shared fixture adapter; replay prerequisites require
+sealed `LoadCapture` and fresh `AnalyzePhase` PASS. The
+`groups-incomplete-prerequisite` negative reseals a passing producer with a
+workload gap and requires rejection before consumer parents/reservations/input.
+Its workload replay extends those prefixes through named closure/alternative
+slots, N7 correlation and N8 live-hold/admission/refusal/loss/cleanup controls.
+Future setup/workload regressions MUST extend this replay and reuse existing fixture
+loaders rather than another producer simulation. Positive prefixes stay
+`not_completed`, with no intake, native-limit, Dialog-safety or recovery claim.
+The README owns [run order, scope and measured walls](../test/claude-live/README.md#offline-phase-setup-replay);
+independent real-clock and recorded analyzer regressions remain required.
 
 ### Release Check Kit (`test/release-check/`)
 

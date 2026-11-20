@@ -92,13 +92,12 @@ func load(root string) (capture, error) { return loadOwner(root, 0) }
 
 func loadOwner(root string, owner int) (capture, error) {
 	c := capture{root: root, hooks: map[string][]runner.Row{}}
-	b, err := runner.Read(root, "manifest.json")
+	manifest, err := runner.ReadManifest(root)
+	c.m = manifest
 	if err != nil {
 		return c, err
 	}
-	if err = json.Unmarshal(b, &c.m); err != nil {
-		return c, err
-	}
+	var b []byte
 	if c.m.Schema != runner.Schema || c.m.Phase != "probe" || c.m.RunID == "" || c.m.Candidate == "" || c.m.ProviderVersion == "" || (len(c.m.Owned) != 1 && len(c.m.Owned) != 2) || (c.m.TurnBudget != 5 && c.m.TurnBudget != 6 && c.m.TurnBudget != 7) || c.m.Artifacts == nil {
 		return c, errors.New("missing or unsupported signal evidence manifest")
 	}
@@ -112,15 +111,6 @@ func loadOwner(root string, owner int) (capture, error) {
 	}
 	if o.InstanceID == "" || o.SessionID == "" || o.LaunchID == "" || o.LaunchToken == "" {
 		return c, errors.New("missing parent Launch identity")
-	}
-	for name, want := range c.m.Artifacts {
-		b, err := runner.Read(root, name)
-		if err != nil {
-			return c, err
-		}
-		if runner.Digest(b) != want.SHA256 || int64(len(b)) != want.Bytes {
-			return c, fmt.Errorf("artifact integrity: %s", name)
-		}
 	}
 	if err := c.provenance(); err != nil {
 		return c, err

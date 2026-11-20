@@ -38,7 +38,7 @@ bash "$source_dir/test/driver/platform-env.sh" > "$work/platform-env.json"
 platform_record=$(cat "$work/platform-env.json")
 printf 'PLATFORM_ENV %s\n' "$platform_record"
 kit=$work/kit
-mkdir -p "$kit/bin" "$kit/payload" "$kit/skills/install-agent-director/schedule"
+mkdir -p "$kit/bin" "$kit/payload" "$kit/skills/install-agent-director/schedule" "$kit/docs" "$kit/qualification"
 flags="-s -w -X github.com/gabemahoney/agent-director/internal/version.Version=$version -X github.com/gabemahoney/agent-director/internal/version.Commit=$base"
 for component in agent-director agent-director-admin; do
     # Match make build: -trimpath omits -ldflags from Go build metadata,
@@ -53,6 +53,14 @@ for name in agent-director.cron agent-director-find-missing.service agent-direct
     cp "$source_dir/skills/install-agent-director/schedule/$name" "$kit/skills/install-agent-director/schedule/$name"
 done
 source_hash=$(sha256sum < "$source_tar"); source_hash=${source_hash%% *}
+# Separate the unmodified product build inputs from harness-only tree changes.
+(cd "$source_dir" && CGO_ENABLED=0 go list -deps -json ./cmd/agent-director ./cmd/agent-director-admin) > "$work/product-packages.json"
+"$kit/bin/claude-live" qualification-build-source --source-root "$source_dir" --source-inventory "$identity" --package-graph "$work/product-packages.json" --source-archive "$source_hash" --build-platform "$target" --toolchain "$build_version" --out "$kit/qualification/source.json"
+cp "$source_dir/docs/caller-contract.md" "$kit/docs/caller-contract.md"
+cp "$source_dir/internal/spawn/launch.go" "$kit/qualification/launch.go"
+cp "$source_dir/internal/store/spawns.go" "$kit/qualification/spawns.go"
+cp "$identity" "$kit/qualification/source-inventory.json"
+
 git -C "$source_dir" diff --binary HEAD > "$work/source.diff"
 diff_hash=$(sha256sum < "$work/source.diff"); diff_hash=${diff_hash%% *}
 head_tree=$(git -C "$source_dir" rev-parse 'HEAD^{tree}')
@@ -70,7 +78,7 @@ done < "$work/kit-files"
 jq -n --arg base "$base" --arg tree "$tree" --arg source "$source_hash" --arg diff "$diff_hash" --argjson dirty "$dirty" --arg version "$version" --arg platform "$target" --slurpfile files "$work/files.json" \
     '{schema:1,base_commit:$base,snapshot_tree:$tree,source_sha256:$source,diff_sha256:$diff,dirty:$dirty,version:$version,commit_stamp:$base,platform:$platform,files:$files[0]}' > "$kit/kit.json"
 "$kit/bin/claude-live" verify-kit --kit "$kit" > "$work/verified.json"
-tar -C "$kit" --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf "$work/claude-live-kit.tar.gz" bin payload skills kit.json
+tar -C "$kit" --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf "$work/claude-live-kit.tar.gz" bin payload skills docs qualification kit.json
 archive_hash=$(sha256sum < "$work/claude-live-kit.tar.gz"); archive_hash=${archive_hash%% *}
 printf '%s  claude-live-kit.tar.gz\n' "$archive_hash" > "$work/claude-live-kit.tar.gz.sha256"
 cp "$kit/kit.json" "$work/kit.json"

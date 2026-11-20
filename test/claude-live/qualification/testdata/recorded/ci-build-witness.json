@@ -1,0 +1,19 @@
+{
+  "scope": "Original build facts only. Inventory is a projection onto the two pins in the labelled unit product descriptor; not a full product or live qualification.",
+  "original_inventory": "/home/horde/projects/agent-director-project/.scratch/b.kii/e2/check-contexts/ci-kit-order-1/source-identity.json",
+  "original_inventory_sha256": "a3862b21fba61bab0bbd6aac2c2e9f314c3878042b67b62583aed0ad092801d2",
+  "original_log": "/home/horde/.job-scheduler/jobs/j20261118171243-555dda/run.log",
+  "original_log_sha256": "5dc2d09c1b7bd6722cbfc8082207e8959286c262492c8c8b9cd91f7115adf996",
+  "original_job": "j20261118171243-555dda",
+  "inventory": {
+    "tree": "570be2967066fd4bdb85c07cd951f3a3f9feb6c1",
+    "files": {
+      "go.mod": "0f6e120e20440b75bd9299885b19be937be085dc4d93513e46204061c6350baf",
+      "go.sum": "0732829bfdc15c0ae133bbc573ee5e07038c8aef79ed112e46ac87096b019011"
+    }
+  },
+  "build_lines": [
+    "KIT_BUILT 510f57fceacb95f0c85e65c3fdd9ec406187c25b644d66f614d2662a1da26e57 linux/amd64"
+  ],
+  "toolchain": "go1.27.3"
+}

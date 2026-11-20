@@ -1,0 +1,114 @@
+{
+  "provenance": {
+    "attempt": "a4",
+    "kit": "kit18",
+    "provider": "2.1.311 (Claude Code)",
+    "source": "z9-shakedown/retrieved-a4/z9-typed-5d520d5a5610-a4/",
+    "source_sha256": {
+      "manifest.json": "0f2702aac2a777470b9b1e1c67b288faf02be6034cb921cd7d4583d505c504f5",
+      "raw/hooks/invocation-1771881715/input.json": "4fe777e0764edb255e45d3a08f83d6def08571ab0b3eefc1b827900b4a3fab46",
+      "raw/hooks/invocation-1771881715/receipt.json": "6ac24f34fa33cacd173f6a111bc0eb9d66eb424613a8058b3bf3f52c53bf4ff9",
+      "raw/hooks/invocation-3446000337/input.json": "81b9e4d3fae480834c78114191b1c76d3a2d104afb10e0a476cbe835a40b6d62",
+      "raw/hooks/invocation-3446000337/receipt.json": "7f2efeb285c6530553e5a16f19de0bc081b531823e4fa58391872a1c21bb0223",
+      "raw/hooks/invocation-429264627/input.json": "e700e1daf200b0ac0daba61a0db71776ead016e2b48de5974a8c860d9f34702e",
+      "raw/hooks/invocation-429264627/receipt.json": "018d3d3783d553ec101d95df2df80f401b7552fca2844b0f6622c8ff262007cd"
+    },
+    "projection": "Only original owned entries, run/phase times, receipt metadata and four input identity fields retained. No prompt, model, scratchpad, account data or host. Receipt hashes/bytes describe the original source inputs; replay recomputes only those two fields for each projected or one-field-mutated input. No transcript content or successful binding fabricated."
+  },
+  "run_id": "0cbcce8d-4c62-4a56-afa7-c84155f7f765",
+  "started": "2026-11-19T15:57:09.604624459Z",
+  "finished": "2026-11-19T15:57:15.229057301Z",
+  "owned": [
+    {
+      "stopped_at": "2026-11-19T15:57:11.652568341Z",
+      "instance_id": "live-0cbcce8d-4c62-4a56-afa7-c84155f7f765-typed-ad-start",
+      "launch_id": "2664ee51-0aba-4024-8ee9-37e4436dc828",
+      "launch_token": "252db5246cc04ea9",
+      "session_id": "e8a61cc6-205b-4a41-8cf0-88fd44b905a5",
+      "cwd": "/home/horde/ad-test/z9-typed-5d520d5a5610-a4/work-typed-ad-start",
+      "socket": "/home/horde/ad-test/claude-live-runtime-3718024471/tmux.sock",
+      "transcript": "",
+      "started": "2026-11-19T15:57:10.193234574Z",
+      "pid": 3104506,
+      "process_start": "231830389",
+      "exited": true
+    },
+    {
+      "stopped_at": "2026-11-19T15:57:12.217757229Z",
+      "instance_id": "live-0cbcce8d-4c62-4a56-afa7-c84155f7f765-typed-control-start",
+      "launch_id": "85e13c9d-eebb-43bc-bf72-815bbb6291fa",
+      "launch_token": "c91d0953610fe5b9",
+      "session_id": "c1c6d0b9-46f8-4d95-9f51-faf28d455900",
+      "cwd": "/home/horde/ad-test/z9-typed-5d520d5a5610-a4/work-typed-control-start",
+      "socket": "/home/horde/ad-test/claude-live-runtime-3718024471/tmux.sock",
+      "transcript": "/home/horde/ad-test/home/.claude/projects/-home-horde-ad-test-z9-typed-5d520d5a5610-a4-work-typed-control-start/c1c6d0b9-46f8-4d95-9f51-faf28d455900.jsonl",
+      "started": "2026-11-19T15:57:10.245989786Z",
+      "pid": 3104567,
+      "process_start": "231830393",
+      "observed_turns": 1,
+      "exited": true
+    }
+  ],
+  "hooks": [
+    {
+      "directory": "invocation-1771881715",
+      "receipt": {
+        "schema": 1,
+        "run_id": "0cbcce8d-4c62-4a56-afa7-c84155f7f765",
+        "event": "SessionStart",
+        "received": "2026-11-19T15:57:10.871483905Z",
+        "finished": "2026-11-19T15:57:10.871525225Z",
+        "input": "input.json",
+        "sha256": "4fe777e0764edb255e45d3a08f83d6def08571ab0b3eefc1b827900b4a3fab46",
+        "bytes": 541,
+        "complete": true
+      },
+      "input": {
+        "hook_event_name": "SessionStart",
+        "session_id": "e8a61cc6-205b-4a41-8cf0-88fd44b905a5",
+        "transcript_path": "/home/horde/ad-test/home/.claude/projects/-home-horde-ad-test-z9-typed-5d520d5a5610-a4-work-typed-ad-start/e8a61cc6-205b-4a41-8cf0-88fd44b905a5.jsonl",
+        "cwd": "/home/horde/ad-test/z9-typed-5d520d5a5610-a4/work-typed-ad-start"
+      }
+    },
+    {
+      "directory": "invocation-3446000337",
+      "receipt": {
+        "schema": 1,
+        "run_id": "0cbcce8d-4c62-4a56-afa7-c84155f7f765",
+        "event": "SessionStart",
+        "received": "2026-11-19T15:57:10.879235524Z",
+        "finished": "2026-11-19T15:57:10.879280484Z",
+        "input": "input.json",
+        "sha256": "81b9e4d3fae480834c78114191b1c76d3a2d104afb10e0a476cbe835a40b6d62",
+        "bytes": 556,
+        "complete": true
+      },
+      "input": {
+        "hook_event_name": "SessionStart",
+        "session_id": "c1c6d0b9-46f8-4d95-9f51-faf28d455900",
+        "transcript_path": "/home/horde/ad-test/home/.claude/projects/-home-horde-ad-test-z9-typed-5d520d5a5610-a4-work-typed-control-start/c1c6d0b9-46f8-4d95-9f51-faf28d455900.jsonl",
+        "cwd": "/home/horde/ad-test/z9-typed-5d520d5a5610-a4/work-typed-control-start"
+      }
+    },
+    {
+      "directory": "invocation-429264627",
+      "receipt": {
+        "schema": 1,
+        "run_id": "0cbcce8d-4c62-4a56-afa7-c84155f7f765",
+        "event": "UserPromptSubmit",
+        "received": "2026-11-19T15:57:11.133529447Z",
+        "finished": "2026-11-19T15:57:11.133570507Z",
+        "input": "input.json",
+        "sha256": "e700e1daf200b0ac0daba61a0db71776ead016e2b48de5974a8c860d9f34702e",
+        "bytes": 871,
+        "complete": true
+      },
+      "input": {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "c1c6d0b9-46f8-4d95-9f51-faf28d455900",
+        "transcript_path": "/home/horde/ad-test/home/.claude/projects/-home-horde-ad-test-z9-typed-5d520d5a5610-a4-work-typed-control-start/c1c6d0b9-46f8-4d95-9f51-faf28d455900.jsonl",
+        "cwd": "/home/horde/ad-test/z9-typed-5d520d5a5610-a4/work-typed-control-start"
+      }
+    }
+  ]
+}

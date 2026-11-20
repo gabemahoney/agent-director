@@ -179,5 +179,18 @@ func (r *Run) VerifyCandidate(ctx context.Context, installed bool) (Kit, error) 
 	if installed {
 		name = "raw/candidate-installed.json"
 	}
+	if _, ok := k.Files["qualification/source.json"]; ok {
+		data, er := Read(r.Kit, "qualification/source.json")
+		if er != nil {
+			return k, er
+		}
+		sourceName := "raw/candidate-source-payload.json"
+		if installed {
+			sourceName = "raw/candidate-source-installed.json"
+		}
+		if er = r.Evidence.Put(sourceName, data); er != nil {
+			return k, er
+		}
+	}
 	return k, r.Evidence.JSON(name, proof)
 }

@@ -25,8 +25,13 @@ type Receipt struct {
 // process deadline too: even a blocked filesystem operation must not hold a
 // provider hook open. Receipt times are NOT AD output completion times.
 func RecordHook(root, runID, event string, input io.Reader) {
+	RecordOwnedHook(root, runID, event, input, os.Getenv("AGENT_DIRECTOR_INSTANCE_ID"))
+}
+
+// RecordOwnedHook shares the passive sink with identity-bound direct native probes.
+func RecordOwnedHook(root, runID, event string, input io.Reader, instance string) {
 	defer func() { _ = recover() }()
-	if runID == "" || event == "" || !strings.HasPrefix(os.Getenv("AGENT_DIRECTOR_INSTANCE_ID"), "live-"+runID+"-") {
+	if runID == "" || event == "" || !strings.HasPrefix(instance, "live-"+runID+"-") {
 		return
 	}
 	p, err := Confined(root, "raw/hooks")
@@ -50,5 +55,9 @@ func RecordHook(root, runID, event string, input io.Reader) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(filepath.Join(dir, "receipt.json"), append(meta, '\n'), 0600)
+	temporary := filepath.Join(dir, "receipt.tmp")
+	if err = os.WriteFile(temporary, append(meta, '\n'), 0600); err != nil {
+		return
+	}
+	_ = os.Rename(temporary, filepath.Join(dir, "receipt.json"))
 }

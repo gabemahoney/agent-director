@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -47,6 +48,18 @@ func OpenReadOnly(path string) (*sql.DB, error) {
 }
 
 func Observe(ctx context.Context, path, id string) (Snapshot, error) {
+	return observe(ctx, path, id, queries)
+}
+
+// activityQueries never read Message bodies or enumerate the growing backlog.
+// The prompt row is only an existence witness, not a custody/evidence snapshot.
+var activityQueries = map[string]string{
+	"spawns":   queries["spawns"],
+	"launches": queries["launches"],
+	"prompts":  `SELECT 1 AS issued FROM busy_send_prompts WHERE handover_id IN (SELECT handover_id FROM busy_send_handovers WHERE instance_id=?) LIMIT 1`,
+}
+
+func observe(ctx context.Context, path, id string, selected map[string]string) (Snapshot, error) {
 	s := Snapshot{Observed: time.Now().UTC(), InstanceID: id, Tables: map[string][]Row{}}
 	if id == "" {
 		return s, errors.New("observation requires an owned instance")
@@ -61,7 +74,20 @@ func Observe(ctx context.Context, path, id string) (Snapshot, error) {
 		return s, err
 	}
 	defer tx.Rollback()
-	for name, q := range queries {
+
+	var schema int
+	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); err != nil {
+		return s, err
+	}
+	for name, q := range selected {
+		if schema > 0 && schema < 21 {
+			if name != "spawns" {
+				s.Tables[name] = []Row{}
+				continue
+			}
+			q = `SELECT instance_id,state,session_id,jsonl_path,pid,proc_starttime,launch_token,tmux_socket,launch_started_at,0 AS turn_starts FROM spawns WHERE instance_id=?`
+		}
+
 		rows, err := tx.QueryContext(ctx, q, id)
 		if err != nil {
 			return s, fmt.Errorf("%s: %w", name, err)
@@ -126,6 +152,12 @@ func (r *Run) Observe(ctx context.Context, id string) (Snapshot, error) {
 	return Observe(ctx, filepath.Join(r.Home, ".config/agent-director/state.db"), id)
 }
 
+func (r *Run) observeActivity(ctx context.Context, id string) (Snapshot, error) {
+	ctx, c := context.WithTimeout(ctx, 3*time.Second)
+	defer c()
+	return observe(ctx, filepath.Join(r.Home, ".config/agent-director/state.db"), id, activityQueries)
+}
+
 var ErrTurnBudget = errors.New("observed turn budget exceeded")
 
 // Bind is the exercise guard. Cleanup uses BindOwned so an exceeded budget
@@ -138,8 +170,15 @@ func (r *Run) Bind(s Snapshot) error {
 }
 
 func (r *Run) CheckTurnBudget() error {
+	cause := "no case recorded"
+	if len(r.Manifest.Cases) > 0 {
+		cause = r.Manifest.Cases[len(r.Manifest.Cases)-1].ID
+	}
 	if r.Manifest.ObservedTurns > int64(r.Manifest.TurnBudget) {
-		return ErrTurnBudget
+		return fmt.Errorf("%w: phase cap exceeded; observed=%d reserved=%d cap=%d cause=%s", ErrTurnBudget, r.Manifest.ObservedTurns, r.Manifest.TurnsReserved, r.Manifest.TurnBudget, cause)
+	}
+	if r.StopOnUnreserved && r.Manifest.ObservedTurns > int64(r.Manifest.TurnsReserved) {
+		return fmt.Errorf("%w: case reservation exceeded; observed=%d reserved=%d phase_cap=%d cause=%s", ErrTurnBudget, r.Manifest.ObservedTurns, r.Manifest.TurnsReserved, r.Manifest.TurnBudget, cause)
 	}
 	return nil
 }
@@ -150,6 +189,9 @@ func (r *Run) BindOwned(s Snapshot) error {
 	for i := range r.Manifest.Owned {
 		o := r.Manifest.Owned[i]
 		if o.InstanceID != s.InstanceID {
+			continue
+		}
+		if o.Exited && o.LaunchToken != "" && len(s.Tables["spawns"]) == 1 && o.LaunchToken != Text(s.Tables["spawns"][0], "launch_token") {
 			continue
 		}
 		if len(s.Tables["spawns"]) != 1 {
@@ -173,7 +215,9 @@ func (r *Run) BindOwned(s Snapshot) error {
 		r.Manifest.Owned[i] = o
 		var total int64
 		for _, owned := range r.Manifest.Owned {
-			total += owned.ObservedTurns
+			if owned.Agent == "" || owned.Agent == "claude" {
+				total += owned.ObservedTurns
+			}
 		}
 		r.Manifest.ObservedTurns = max(r.Manifest.ObservedTurns, total)
 		return nil
@@ -182,10 +226,35 @@ func (r *Run) BindOwned(s Snapshot) error {
 }
 
 func (r *Run) Await(ctx context.Context, id string, limit time.Duration, predicate func(Snapshot) bool) (Snapshot, error) {
+	return r.AwaitState(ctx, id, limit, false, predicate)
+}
+
+// AwaitState permits only explicitly expected Dialog exercises; ordinary
+// callers retain Await's stop-on-Dialog behavior and its bounded observation loop.
+func (r *Run) AwaitState(ctx context.Context, id string, limit time.Duration, dialogExpected bool, predicate func(Snapshot) bool) (Snapshot, error) {
+	return r.AwaitStateChecked(ctx, id, limit, dialogExpected, nil, predicate)
+}
+
+// AwaitStateChecked checks provider progress only for explicit operational callers.
+// Ordinary Await/cleanup/process-exit waits retain their unchecked contract.
+func (r *Run) AwaitStateChecked(ctx context.Context, id string, limit time.Duration, dialogExpected bool, check func(context.Context, Snapshot) error, predicate func(Snapshot) bool) (Snapshot, error) {
+	return r.awaitStateChecked(ctx, id, limit, dialogExpected, r.Observe, check, predicate)
+}
+
+// AwaitActivityChecked retains the ownership, budget, Dialog and provider guards
+// without reading retained Messages. Its predicate sees only spawns, launches
+// and at most one prompt-existence row. Collect full custody evidence separately.
+// Future activity-only guards must reuse this wait and its ownership/deadline
+// checks; see the shared live runner reuse rules in docs/architecture.md.
+func (r *Run) AwaitActivityChecked(ctx context.Context, id string, limit time.Duration, dialogExpected bool, check func(context.Context, Snapshot) error, predicate func(Snapshot) bool) (Snapshot, error) {
+	return r.awaitStateChecked(ctx, id, limit, dialogExpected, r.observeActivity, check, predicate)
+}
+
+func (r *Run) awaitStateChecked(ctx context.Context, id string, limit time.Duration, dialogExpected bool, observe func(context.Context, string) (Snapshot, error), check func(context.Context, Snapshot) error, predicate func(Snapshot) bool) (Snapshot, error) {
 	ctx, c := context.WithTimeout(ctx, limit)
 	defer c()
 	for {
-		s, err := r.Observe(ctx, id)
+		s, err := observe(ctx, id)
 		if err != nil {
 			return s, err
 		}
@@ -193,8 +262,19 @@ func (r *Run) Await(ctx context.Context, id string, limit time.Duration, predica
 			return s, err
 		}
 		state := Text(s.Tables["spawns"][0], "state")
-		if state == "check_permission" || state == "ask_user" {
+		if !dialogExpected && (state == "check_permission" || state == "ask_user") {
 			return s, errors.New("unexpected dialog; intelligence required, no answer sent")
+		}
+		if check != nil {
+			if err = check(ctx, s); err != nil {
+				if !errors.Is(err, ErrTranscriptBindingPending) {
+					return s, err
+				}
+				if err = r.Sleep(ctx, 200*time.Millisecond); err != nil {
+					return s, err
+				}
+				continue
+			}
 		}
 		if predicate(s) {
 			return s, nil
@@ -229,7 +309,7 @@ func (r *Run) ReadTranscript(o Owned) ([]byte, error) {
 	}
 	o.Transcript = path
 	if r.Manifest.RecordingHook.Installed {
-		if err := CheckTranscriptRecordings(r.Evidence.Root, r.Manifest.RunID, o, r.Manifest.Owned...); err != nil {
+		if err := checkTranscriptRecordings(r.Home, r.Evidence.Root, r.Manifest.RunID, o, r.Manifest.Owned...); err != nil {
 			return nil, err
 		}
 	}
@@ -250,11 +330,26 @@ func (r *Run) ReadTranscript(o Owned) ([]byte, error) {
 }
 
 func (r *Run) CollectFiles(o Owned) error {
+	if o.Agent != "" && o.Agent != "claude" {
+		return r.collectTrail(o)
+	}
 	b, err := r.ReadTranscript(o)
+	if r.LaunchArtifacts && os.IsNotExist(err) {
+		// Absence is an observation, not proof of no input. Qualification's
+		// loader must independently establish the narrow expected case.
+		err = r.Evidence.JSON("raw/"+r.OwnedPrefix(o)+"-transcript-absence.json", map[string]any{"instance": o.InstanceID, "launch": o.LaunchToken, "session": o.SessionID, "observed": r.Now().UTC(), "reason": "not_exist"})
+		if !o.Native {
+			err = errors.Join(err, r.collectTrail(o))
+		}
+		return err
+	}
 	if err == nil {
-		err = r.Evidence.Put("raw/"+o.InstanceID+"-transcript.jsonl", b)
+		err = r.Evidence.Put("raw/"+r.OwnedPrefix(o)+"-transcript.jsonl", b)
 	}
 	// A missing transcript must not suppress the independent trail export.
+	if o.Native {
+		return err
+	}
 	return errors.Join(err, r.collectTrail(o))
 }
 
@@ -282,17 +377,23 @@ func (r *Run) collectTrail(o Owned) error {
 	if err = scan.Err(); err != nil {
 		return err
 	}
-	return r.Evidence.Put("raw/"+o.InstanceID+"-trail.jsonl", out)
+	return r.Evidence.Put("raw/"+r.OwnedPrefix(o)+"-trail.jsonl", out)
 }
 
 // ProcessGone checks the recorded Linux process start identity; a missing row
 // or a reused numeric PID is never evidence that this process is still alive.
 func ProcessGone(pid int, start string) (bool, error) {
+	return processGone(pid, start, os.ReadFile)
+}
+
+func processGone(pid int, start string, readFile func(string) ([]byte, error)) (bool, error) {
 	if pid <= 0 || start == "" {
 		return false, errors.New("process identity unavailable")
 	}
-	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if os.IsNotExist(err) {
+	b, err := readFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	// A task can exit after procfs opens stat but before the read completes;
+	// Linux then reports ESRCH rather than ENOENT. Both prove this PID gone.
+	if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
 		return true, nil
 	}
 	if err != nil {
@@ -307,4 +408,12 @@ func ProcessGone(pid int, start string) (bool, error) {
 		return false, errors.New("short process stat")
 	}
 	return fields[19] != start || fields[0] == "Z" || fields[0] == "X", nil
+}
+
+// OwnedPrefix separates resumed Launch artifacts without changing signal captures.
+func (r *Run) OwnedPrefix(o Owned) string {
+	if r.LaunchArtifacts && o.LaunchToken != "" {
+		return o.InstanceID + "-" + o.LaunchToken
+	}
+	return o.InstanceID
 }

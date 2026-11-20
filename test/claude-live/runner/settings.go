@@ -176,6 +176,84 @@ func installRecorderFile(path, executable, root, runID string, events []string) 
 	return s, nil
 }
 
+// AddOwnedHook adds a behavior fixture beside the passive recorder in the
+// already-owned entry. Its private ledger and removal keep unrelated entries.
+func (s *Settings) AddOwnedHook(event string, hook any) error {
+	old, ok := s.added[event]
+	if !ok || s.lock == nil {
+		return errors.New("behavior fixture requires an owned recording entry")
+	}
+	obj, prior, err := settingsObject(s.path)
+	if err != nil {
+		return err
+	}
+	var hooks map[string]json.RawMessage
+	if err = json.Unmarshal(obj["hooks"], &hooks); err != nil {
+		return err
+	}
+	var entries []json.RawMessage
+	if err = json.Unmarshal(hooks[event], &entries); err != nil {
+		return err
+	}
+	var entry struct {
+		Hooks []json.RawMessage `json:"hooks"`
+	}
+	if err = json.Unmarshal(old, &entry); err != nil {
+		return err
+	}
+	h, err := json.Marshal(hook)
+	if err != nil {
+		return err
+	}
+	entry.Hooks = append(entry.Hooks, h)
+	replacement, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	matches := 0
+	for i, v := range entries {
+		if equalJSON(v, old) {
+			entries[i] = replacement
+			matches++
+		}
+	}
+	if matches != 1 {
+		return errors.New("owned recording entry changed; fixture not installed")
+	}
+	hooks[event], err = json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	obj["hooks"], err = json.Marshal(hooks)
+	if err != nil {
+		return err
+	}
+	ledgerPath := s.path + ".claude-live-ledger"
+	data, err := os.ReadFile(ledgerPath)
+	if err != nil {
+		return err
+	}
+	var ledger settingsLedger
+	if err = json.Unmarshal(data, &ledger); err != nil {
+		return err
+	}
+	if !equalJSON(ledger.Added[event], old) {
+		return errors.New("private hook ledger differs from installed ownership")
+	}
+	ledger.Added[event] = replacement
+	data, err = json.Marshal(ledger)
+	if err != nil {
+		return err
+	}
+	// As with initial installation, retain the exact intended entry if a
+	// concurrent change prevents the settings update; recovery is explicit.
+	if err = os.WriteFile(ledgerPath, data, 0600); err != nil {
+		return err
+	}
+	s.added[event] = replacement
+	return replaceSettings(s.path, prior, obj)
+}
+
 func equalJSON(a, b []byte) bool {
 	var x, y any
 	return json.Unmarshal(a, &x) == nil && json.Unmarshal(b, &y) == nil && reflect.DeepEqual(x, y)

@@ -20,6 +20,9 @@ type Message struct {
 	StopReason string          `json:"stop_reason,omitempty"`
 }
 type TranscriptRow struct {
+	Subtype        string               `json:"subtype"`
+	UUID           string               `json:"uuid"`
+	ParentUUID     string               `json:"parentUuid"`
 	Type           string               `json:"type"`
 	SessionID      string               `json:"sessionId"`
 	OtherSessionID string               `json:"session_id"`
@@ -57,6 +60,16 @@ type Transcript struct {
 // only when their canonical hash occurs in an actual request's tail; a displayed
 // user row, hook attachment or assistant reply alone never proves model input.
 func ParseTranscript(b []byte, session string) (Transcript, error) {
+	t, err := ParseSessionTranscript(b, session)
+	if err == nil && len(t.Requests) == 0 {
+		err = errors.New("no main-thread model request journal")
+	}
+	return t, err
+}
+
+// ParseSessionTranscript validates a session even when no model request was made.
+// Whole-input callers still use ParseTranscript and require a real request.
+func ParseSessionTranscript(b []byte, session string) (Transcript, error) {
 	var t Transcript
 	blobs := map[string]Message{}
 	requests := map[string][]Message{}
@@ -164,9 +177,6 @@ func ParseTranscript(b []byte, session string) (Transcript, error) {
 	if err := scan.Err(); err != nil {
 		return t, err
 	}
-	if len(t.Requests) == 0 {
-		return t, errors.New("no main-thread model request journal")
-	}
 	return t, nil
 }
 
@@ -189,13 +199,14 @@ func Texts(m Message) ([]string, error) {
 }
 
 type Intake struct {
-	Request int       `json:"request"`
-	Line    int       `json:"line"`
-	Message int       `json:"message"`
-	Block   int       `json:"block"`
-	Offset  int       `json:"offset"` // Byte offset of a whole input within a measured merged block.
-	Time    time.Time `json:"time"`
-	Count   int       `json:"count"`
+	Request int         `json:"request"`
+	Line    int         `json:"line"`
+	Message int         `json:"message"`
+	Block   int         `json:"block"`
+	Offset  int         `json:"offset"` // Byte offset of a whole input within a measured merged block.
+	Time    time.Time   `json:"time"`
+	Count   int         `json:"count"`
+	Typed   *TypedInput `json:"typed_input,omitempty"`
 }
 
 func (t Transcript) NextInput(after int64, want, role string) (Intake, error) {

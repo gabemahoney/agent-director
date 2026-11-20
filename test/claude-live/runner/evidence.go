@@ -77,6 +77,10 @@ type Artifact struct {
 }
 
 type Owned struct {
+	Agent         string    `json:"agent,omitempty"`
+	Native        bool      `json:"native,omitempty"`
+	TmuxID        string    `json:"tmux_id,omitempty"`
+	StoppedAt     time.Time `json:"stopped_at,omitempty"`
 	InstanceID    string    `json:"instance_id"`
 	LaunchID      string    `json:"launch_id"`
 	LaunchToken   string    `json:"launch_token"`

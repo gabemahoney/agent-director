@@ -43,8 +43,13 @@ var CheckIDs = []string{"session-watch", "file-changed", "async-rewake", "post-t
 
 func Prompt(text string) string { return store.BusySendSeparator(1, 1) + text }
 func Render(text, mode string) string {
+	return RenderBody(Prompt(text), mode)
+}
+
+// RenderBody applies the same measured forward transformation to a multi-
+// Message or native measurement body. No reverse/unescaping inference is made.
+func RenderBody(body, mode string) string {
 	limits, _ := store.BusySendCapabilitiesFor("claude").Mode(store.BusySendMode(mode))
-	body := Prompt(text)
 	for _, e := range limits.Wrapping.Escapes {
 		body = replace(body, e.Raw, e.Escaped)
 	}
@@ -76,5 +81,9 @@ func nativeQueuedWake(prompt string) string {
 // NativeContext is Claude's measured model-input framing, distinct from AD's
 // unwrapped JSON additionalContext output. A changed framing fails qualification.
 func NativeContext(text string) string {
-	return "PostToolBatch hook additional context: " + Render(text, "steer_turn")
+	return NativeContextBody(Prompt(text))
+}
+
+func NativeContextBody(body string) string {
+	return "PostToolBatch hook additional context: " + RenderBody(body, "steer_turn")
 }

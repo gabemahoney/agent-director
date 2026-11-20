@@ -236,6 +236,45 @@ func TestClaudeLiveCollectorRefusesInvalidSourcesAndBindings(t *testing.T) {
 	}
 }
 
+// a5 used five starts below the six-turn phase plan but above four reserved
+// case starts. Keep the error sentinel and distinguish the two budgets.
+func TestClaudeLiveTurnBudgetDiagnostic(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		observed        int64
+		phase, reserved int
+		words           []string
+	}{
+		{"case-reservation", 5, 6, 4, []string{"5", "4", "6", "unit-budget-case"}},
+		{"phase-plan", 7, 6, 8, []string{"7", "6", "8", "unit-budget-case"}},
+		{"within-both", 4, 6, 4, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &Run{Manifest: Manifest{ObservedTurns: tc.observed, TurnBudget: tc.phase, TurnsReserved: tc.reserved}, StopOnUnreserved: true}
+			r.Manifest.Cases = []Case{{ID: "unit-budget-case", Ready: true}}
+			err := r.CheckTurnBudget()
+			if tc.words == nil {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrTurnBudget) {
+				t.Fatalf("budget error lost ErrTurnBudget identity: %v", err)
+			}
+			message := strings.ToLower(err.Error())
+			for _, word := range tc.words {
+				if !strings.Contains(message, word) {
+					t.Errorf("%s diagnostic must retain observed/limit %s: %s", tc.name, word, message)
+				}
+			}
+			if tc.name == "case-reservation" && !(strings.Contains(message, "case") || strings.Contains(message, "reserv")) || tc.name == "phase-plan" && !strings.Contains(message, "phase") {
+				t.Errorf("%s diagnostic names the wrong budget: %s", tc.name, message)
+			}
+		})
+	}
+}
+
 func TestClaudeLiveCollectRetainsOverBudgetEvidence(t *testing.T) {
 	r, _ := runnerFixture(t)
 	_, owned := seedRunner(t, r, "waiting", true, apitest.WithTurnStarts(7))
@@ -434,6 +473,152 @@ func TestClaudeLiveTranscriptFallback(t *testing.T) {
 			}
 			if !bytes.Equal(beforeDB, readFixture(t, path)) {
 				t.Fatal("transcript resolution changed store bytes")
+			}
+		})
+	}
+}
+
+// a4/kit18 (Claude 2.1.311) supplied these completed hooks while AD's owned
+// transcript was still empty. Projection provenance is beside the input facts.
+func TestClaudeLiveRecordedTranscriptBinding(t *testing.T) {
+	pending := func(err error) bool {
+		if err == nil {
+			return false
+		}
+		reason := strings.ToLower(err.Error())
+		return (strings.Contains(reason, "bound") && strings.Contains(reason, "yet")) || (strings.Contains(reason, "bind") && strings.Contains(reason, "pending"))
+	}
+	for _, scenario := range []string{"self-unbound", "session_id", "transcript_path", "cwd", "sibling-only", "partial-self-empty", "partial-self-truncated", "partial-sibling-empty", "partial-sibling-truncated", "interrupted"} {
+		t.Run(scenario, func(t *testing.T) {
+			clip := readJSON[struct {
+				RunID string `json:"run_id"`
+				Owned []Owned
+				Hooks []struct {
+					Directory string
+					Receipt   Receipt
+					Input     Row
+				}
+			}](t, "testdata/recorded/a4-transcript-binding.json")
+			ad, control := clip.Owned[0], clip.Owned[1]
+			if ad.Transcript != "" || control.Transcript == "" {
+				t.Fatal("recorded AD must be unbound while its control is bound")
+			}
+			r, _ := runnerFixture(t)
+			r.Manifest.RunID = clip.RunID
+			root, adPath, hookSession, adInvocation, controlInvocation := r.Evidence.Root, "", ad.SessionID, "", ""
+			for _, hook := range clip.Hooks {
+				if Text(hook.Input, "session_id") == ad.SessionID {
+					adPath = Text(hook.Input, "transcript_path")
+					adInvocation = "raw/hooks/" + hook.Directory
+					if scenario == "sibling-only" {
+						continue
+					}
+					switch scenario {
+					case "session_id":
+						hookSession = "unit-unowned-a4-session"
+						hook.Input["session_id"] = hookSession
+					case "transcript_path":
+						hook.Input["transcript_path"] = filepath.Join(TestHome, ".claude/projects/unowned", ad.SessionID+".jsonl")
+					case "cwd":
+						hook.Input["cwd"] = ad.CWD + "/unowned"
+					}
+				}
+				if Text(hook.Input, "session_id") == control.SessionID && hook.Receipt.Event == "SessionStart" {
+					controlInvocation = "raw/hooks/" + hook.Directory
+				}
+				input, err := json.Marshal(hook.Input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Rehash only projection/one-field mutation bytes; retain every
+				// original receipt identity, event, completion and timestamp.
+				hook.Receipt.SHA256, hook.Receipt.Bytes = Digest(input), len(input)
+				receipt, err := json.Marshal(hook.Receipt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				dir := filepath.Join(root, "raw/hooks", hook.Directory)
+				putFixture(t, filepath.Join(dir, "input.json"), input)
+				putFixture(t, filepath.Join(dir, "receipt.json"), receipt)
+			}
+			if adPath == "" {
+				t.Fatal("recorded AD SessionStart must supply its own transcript path")
+			}
+			if _, err := InspectRecordings(root, clip.RunID, []string{"SessionStart", "UserPromptSubmit"}); err != nil {
+				t.Fatalf("recording must be complete before ownership judgment: %v", err)
+			}
+			bound := ad
+			bound.Transcript = adPath // Published path from a4, not a resolver oracle.
+			switch scenario {
+			case "self-unbound":
+				if err := CheckTranscriptRecordings(root, clip.RunID, ad, control); err != nil && !pending(err) {
+					t.Errorf("own completed AD SessionStart must resolve or report not yet bound: %v", err)
+				}
+
+			case "sibling-only":
+				if err := CheckTranscriptRecordings(root, clip.RunID, bound, control); err == nil || strings.Contains(err.Error(), "another parent") {
+					t.Fatalf("sibling hooks must remain attributable to the sibling without binding AD: %v", err)
+				}
+				if err := CheckTranscriptRecordings(root, clip.RunID, control, bound); err != nil {
+					t.Fatalf("the same sibling recordings must bind the control: %v", err)
+				}
+			default:
+				if strings.HasPrefix(scenario, "partial-") || scenario == "interrupted" {
+					invocation := adInvocation
+					if strings.Contains(scenario, "sibling") {
+						invocation = controlInvocation
+					}
+					path := filepath.Join(root, invocation, "receipt.json")
+					complete := readFixture(t, path)
+					partial := []byte{}
+					if strings.Contains(scenario, "truncated") || scenario == "interrupted" {
+						partial = []byte(`{"schema":1,"run_id":`)
+					}
+					visible, release, finished := make(chan error, 1), make(chan struct{}), make(chan error, 1)
+					go func() {
+						err := os.WriteFile(path, partial, 0600)
+						visible <- err
+						if err == nil {
+							<-release // The live read happens before publication completes.
+							if scenario != "interrupted" {
+								err = os.WriteFile(path, complete, 0600)
+							}
+						}
+						finished <- err
+					}()
+					if err := <-visible; err != nil {
+						t.Fatal(err)
+					}
+					if scenario != "interrupted" {
+						if err := CheckTranscriptRecordings(root, clip.RunID, bound, control); err != nil && !pending(err) {
+							t.Errorf("live %s receipt is pending publication, not corrupt evidence: %v", scenario, err)
+						}
+					}
+					close(release)
+					if err := <-finished; err != nil {
+						t.Fatal(err)
+					}
+					if scenario == "interrupted" {
+						r.Manifest.RecordingHook = RecordingHook{Installed: true, Removed: true, Directory: "raw/hooks", Events: []string{"SessionStart", "UserPromptSubmit"}}
+						v, err := r.ExecutePhase(context.Background(), func(context.Context, *Run) error { return nil }, nil)
+						incomplete := false
+						for _, row := range v.Results {
+							incomplete = incomplete || (row.SignalID == "recording-hook-incomplete" && row.Status == "fail" && strings.Contains(row.Reason, invocation))
+						}
+						if err != nil || v.Status != "fail" || !incomplete {
+							t.Fatalf("sealed finalization must fail interrupted receipt %s: status=%s rows=%+v error=%v", invocation, v.Status, v.Results, err)
+						}
+					} else if err := CheckTranscriptRecordings(root, clip.RunID, bound, control); err != nil {
+						t.Errorf("completed receipt must bind after causal publication: %v", err)
+					}
+					return
+				}
+				err := CheckTranscriptRecordings(root, clip.RunID, bound, control)
+				for _, fact := range []string{fmt.Sprintf("session_id=%q", hookSession), `event="SessionStart"`, fmt.Sprintf("invocation=%q", adInvocation), "does not match any bound owned parent"} {
+					if err == nil || !strings.Contains(err.Error(), fact) {
+						t.Fatalf("foreign %s must fail with session/event/invocation and bound-parent mismatch (%q): %v", scenario, fact, err)
+					}
+				}
 			}
 		})
 	}

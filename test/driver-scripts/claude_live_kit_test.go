@@ -15,10 +15,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/test/claude-live/qualification"
 	"github.com/gabemahoney/agent-director/test/claude-live/runner"
 )
 
-// liveKitFixture freezes a small git input and substitutes only go build.
+// liveKitFixture freezes small inputs and stubs go build; native mode uses
+// real executables for the kit and installed-pair verification.
 // Its synthetic provenance/build outputs never qualify a live provider.
 type liveKitFixture struct {
 	base, source, identity, archive, commit, version, stubs, binaries, marker string
@@ -32,7 +34,7 @@ func newLiveKitFixture(t *testing.T, native bool) *liveKitFixture {
 	p.marker = filepath.Join(p.base, "unexpected-execution")
 	p.env = []string{"HOME=" + filepath.Join(p.base, "home"), "TMPDIR=" + t.TempDir(), "GIT_CONFIG_NOSYSTEM=1",
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid"}
-	for _, name := range []string{"test/claude-live/prepare.sh", "test/claude-live/build-kit.sh", "test/driver/platform-env.sh", "test/driver/sql.sh", "go.mod", "skills/install-agent-director/install.sh"} {
+	for _, name := range []string{"test/claude-live/prepare.sh", "test/claude-live/build-kit.sh", "test/driver/platform-env.sh", "test/driver/sql.sh", "go.mod", "go.sum", "docs/caller-contract.md", "internal/spawn/launch.go", "internal/store/spawns.go", "skills/install-agent-director/install.sh"} {
 		copyRepoFile(t, p.source, name)
 	}
 	entries, err := os.ReadDir(filepath.Join(repoRoot(t), "skills/install-agent-director/schedule"))
@@ -42,7 +44,9 @@ func newLiveKitFixture(t *testing.T, native bool) *liveKitFixture {
 	for _, e := range entries {
 		copyRepoFile(t, p.source, "skills/install-agent-director/schedule/"+e.Name())
 	}
-	writeFile(t, p.source, "cmd/agent-director/main.go", "package main // committed source\n", 0600)
+	for _, component := range []string{"agent-director", "agent-director-admin"} {
+		writeFile(t, p.source, "cmd/"+component+"/main.go", "package main // committed source\n", 0600)
+	}
 	p.git(t, "init", "-q")
 	p.git(t, "add", "-A")
 	p.git(t, "commit", "-qm", "synthetic kit source")
@@ -68,16 +72,33 @@ func newLiveKitFixture(t *testing.T, native bool) *liveKitFixture {
 		} else {
 			body := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = version ] || { touch '%s'; exit 90; }\nprintf '%%s\\n' '{\"version\":\"%s\",\"commit\":\"%s\"}'\n", p.marker, p.version, p.commit)
 			if component == "claude-live" {
-				body = "#!/bin/sh\n[ \"$1\" = verify-kit ] || exit 91\nprintf '{}\\n'\n"
+				body = `#!/bin/sh
+case "$1" in
+    verify-kit) printf '{}\n';;
+    qualification-build-source)
+        shift
+        out=''
+        while [ "$#" -gt 0 ]; do
+            if [ "$1" = --out ]; then out=$2; fi
+            shift 2
+        done
+        [ -n "$out" ] || exit 91
+        printf '{}\n' > "$out";;
+    *) exit 91;;
+esac
+`
 			}
 			writeFile(t, p.binaries, component, body, 0755)
 		}
 	}
 	writeFile(t, p.stubs, "go", `#!/bin/bash
 set -eu
-if [[ $1 != build ]]; then exec "$P9_REAL_GO" "$@"; fi
+if [[ $1 != build ]]; then
+    if [[ $1 == list ]]; then printf '%s\n' "$*" >> "$P9_BUILD_LOG"; fi
+    exec "$P9_REAL_GO" "$@"
+fi
 printf 'build\n' >> "$P9_BUILD_LOG"
-sha256sum cmd/agent-director/*.go >> "$P9_BUILD_LOG"
+sha256sum cmd/agent-director/*.go cmd/agent-director-admin/*.go >> "$P9_BUILD_LOG"
 [[ ${P9_FAIL_BUILD:-} != 1 ]] || exit 73
 out='' component=''
 while (($#)); do
@@ -164,8 +185,14 @@ func (p *liveKitFixture) unpack(t *testing.T, out string) (string, runner.Kit) {
 	if !bytes.Equal(files["kit.json"], liveKitRead(t, filepath.Join(out, "kit.json"))) {
 		t.Fatal("inner/outer manifest differ")
 	}
-	if len(files) != 10 || len(k.Files) != 9 {
+	if len(files) != 15 || len(k.Files) != 14 {
 		t.Fatalf("unexpected archive membership: %d files, %d indexed", len(files), len(k.Files))
+	}
+	for _, component := range []string{"agent-director", "agent-director-admin"} {
+		name := "payload/" + component + "-linux-" + runtime.GOARCH
+		if !bytes.Equal(files[name], liveKitRead(t, filepath.Join(p.binaries, component))) {
+			t.Fatalf("kit lacks the expected %s payload", component)
+		}
 	}
 	root := filepath.Join(out, "kit")
 	for name, body := range files {
@@ -225,6 +252,22 @@ func TestClaudeLiveKitPreparation(t *testing.T) {
 				}
 			}
 			log := string(liveKitRead(t, filepath.Join(p.base, "build.log")))
+			admin := "cmd/agent-director-admin/main.go"
+			if want := sha256Hex(liveKitRead(t, filepath.Join(p.source, admin))) + "  " + admin; !strings.Contains(log, want) {
+				t.Fatal("admin build did not consume frozen source")
+			}
+			if !strings.Contains(log, "list -deps -json ./cmd/agent-director ./cmd/agent-director-admin\n") {
+				t.Fatal("product listing omitted the admin command")
+			}
+			var inventory struct {
+				Files map[string]string `json:"files"`
+			}
+			if err := json.Unmarshal(liveKitRead(t, filepath.Join(root, "qualification/source-inventory.json")), &inventory); err != nil {
+				t.Fatal(err)
+			}
+			if inventory.Files[admin] != sha256Hex(liveKitRead(t, filepath.Join(p.source, admin))) {
+				t.Fatal("kit inventory omitted the frozen admin source")
+			}
 			for _, name := range []string{"main.go", "new.go"} {
 				if name == "new.go" && !dirty {
 					continue
@@ -378,6 +421,19 @@ func TestClaudeLiveKitVerification(t *testing.T) {
 	root, k := p.unpack(t, out)
 	if got, err := runner.VerifyKit(root); err != nil || !reflect.DeepEqual(got, k) {
 		t.Fatalf("real verifier: %+v %v", got, err)
+	}
+	source, err := qualification.LoadProductSource(root, "qualification/source.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = qualification.VerifyProductKit(source, k); err != nil {
+		t.Fatal(err)
+	}
+	for _, component := range []string{"agent-director", "agent-director-admin"} {
+		name := "cmd/" + component + "/main.go"
+		if source.Files[name] != sha256Hex(liveKitRead(t, filepath.Join(p.source, name))) {
+			t.Fatalf("native product listing omitted frozen %s", name)
+		}
 	}
 	t.Run("record-hook-packaged", func(t *testing.T) {
 		evidence := t.TempDir()

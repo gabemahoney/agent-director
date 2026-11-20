@@ -12,6 +12,7 @@ type TranscriptAttachment struct {
 	Content     json.RawMessage `json:"content"`
 	Prompt      string          `json:"prompt"`
 	CommandMode string          `json:"commandMode"`
+	HumanTurn   bool            `json:"humanTurn"`
 	Origin      struct {
 		Kind     string `json:"kind"`
 		Producer string `json:"producer"`
@@ -132,4 +133,93 @@ func addedToolsText(a TranscriptAttachment) (string, bool) {
 	}
 	return "The following tools just became available and are ready to use:\n" + strings.Join(ready, "\n") +
 		"\n\nThe following deferred tools are now available via ToolSearch. Their schemas are NOT loaded — calling them directly will fail with InputValidationError. Use ToolSearch with query \"select:<name>[,<name>...]\" to load tool schemas before calling them:\n" + strings.Join(deferred, "\n"), true
+}
+
+// mergedBody reconstructs the measured additions-only tool/MCP frame for a
+// single known steer body. It never learns a successful suffix from a request.
+func (t Transcript) mergedBody(after int64, body string) (inputForm, bool) {
+	index := -1
+	for i, q := range t.Requests {
+		if q.Time.UnixMilli() >= after {
+			index = i
+			break
+		}
+	}
+	if index <= 0 {
+		return inputForm{}, false
+	}
+	previous, request := t.Requests[index-1], t.Requests[index]
+	end := 0
+	for _, row := range t.Rows {
+		if row.Line > request.Line && (row.Type == "api-request" || (row.Type == "assistant" && row.RequestRef == request.ID)) {
+			end = row.Line
+			break
+		}
+	}
+	if end == 0 {
+		return inputForm{}, false
+	}
+	count := 0
+	var tools, instructions *TranscriptAttachment
+	for _, row := range t.Rows {
+		if row.Type != "attachment" || row.Line <= previous.Line || row.Line >= end || !row.Timestamp.After(previous.Time) || row.Timestamp.After(request.Time) {
+			continue
+		}
+		a := row.Attachment
+		switch a.Type {
+		case "hook_additional_context":
+			var content []string
+			if a.Event != "PostToolBatch" || json.Unmarshal(a.Content, &content) != nil || len(content) != 1 || content[0] != RenderBody(body, "steer_turn") {
+				return inputForm{}, false
+			}
+			count++
+		case "queued_command":
+			return inputForm{}, false // needs all separately known inputs, as ci's existing mergedForm does
+		case "deferred_tools_delta":
+			if tools != nil {
+				return inputForm{}, false
+			}
+			copy := a
+			tools = &copy
+		case "mcp_instructions_delta":
+			if instructions != nil {
+				return inputForm{}, false
+			}
+			copy := a
+			instructions = &copy
+		}
+	}
+	if count != 1 {
+		return inputForm{}, false
+	}
+	parts := []string{NativeContextBody(body)}
+	if tools != nil {
+		text, ok := addedToolsText(*tools)
+		if !ok {
+			return inputForm{}, false
+		}
+		parts = append(parts, text)
+	}
+	if instructions != nil {
+		a := *instructions
+		if len(a.RemovedNames) != 0 || len(a.AddedBlocks) == 0 || len(a.AddedBlocks) != len(a.AddedNames) {
+			return inputForm{}, false
+		}
+		parts = append(parts, "# MCP Server Instructions\n\nThe following MCP servers have provided instructions for how to use their tools and resources:\n\n"+strings.Join(a.AddedBlocks, "\n\n"))
+	}
+	return inputForm{role: "system", text: strings.Join(parts, "\n\n")}, true
+}
+
+// NextBodyInput uses the same request journal and measured forward forms for
+// a frozen multi-Message body. No substring, normalization or echo proof.
+func (t Transcript) NextBodyInput(after int64, body, mode string) (Intake, error) {
+	want, role := NativeWake(RenderBody(body, "wait_turn")), "user"
+	var additional []inputForm
+	if mode == "steer_turn" {
+		want, role = NativeContextBody(body), "system"
+		if form, ok := t.mergedBody(after, body); ok && (form.role != role || form.text != want || form.offset != 0) {
+			additional = append(additional, form)
+		}
+	}
+	return t.nextInput(after, want, role, additional)
 }

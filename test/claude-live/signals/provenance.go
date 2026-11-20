@@ -108,3 +108,14 @@ func (c *capture) provenance() error {
 	}
 	return nil
 }
+
+// CandidateCommands reuses the signal capture's exact installed-pair, kit,
+// recorder and successful identity-command validation for qualification.
+// The caller supplies a manifest already checked by runner.ReadManifest.
+func CandidateCommands(root string, m runner.Manifest) (map[string]runner.Command, error) {
+	c := capture{root: root, m: m}
+	if err := c.provenance(); err != nil {
+		return nil, err
+	}
+	return c.commands, nil
+}
