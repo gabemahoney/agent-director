@@ -680,24 +680,25 @@ func TestListHasSRDErrorNames(t *testing.T) {
 }
 
 // TestListSubagentsHasSRDErrorNames pins list-subagents', and
-// Client.ListSubagents' "Errors:" list, to exactly ErrSpawnNotFound: the verb
-// reads one row and changes nothing.
+// Client.ListSubagents' "Errors:" list: empty IDs are invalid (b.2ix), and
+// unknown IDs have no row; the verb changes nothing.
 func TestListSubagentsHasSRDErrorNames(t *testing.T) {
-	assertErrorNames(t, "list-subagents", "ListSubagents", true, "ErrSpawnNotFound")
+	assertErrorNames(t, "list-subagents", "ListSubagents", true, "ErrInvalidFlags", "ErrSpawnNotFound")
 }
 
 // TestKillHasSRDErrorNames pins kill's ErrorNames, and Client.Kill's "Errors:"
-// list, to exactly SR-1.7's five names.
+// list, to SR-1.7's five names and empty-ID ErrInvalidFlags (b.2ix).
 func TestKillHasSRDErrorNames(t *testing.T) {
-	assertErrorNames(t, "kill", "Kill", true, "ErrSpawnNotFound", "ErrTmuxKillFailed", "ErrTmuxNotAvailable",
+	assertErrorNames(t, "kill", "Kill", true, "ErrInvalidFlags", "ErrSpawnNotFound", "ErrTmuxKillFailed", "ErrTmuxNotAvailable",
 		"ErrTmuxSessionConflict", "ErrTmuxUnresponsive")
 }
 
 // TestPauseHasSRDErrorNames pins pause's to exactly SR-1.7's seven names and
 // the three relay refusals of the plain send-keys it is held as (b.zdz), plus
-// ErrSubmissionUnconfirmed for uncertain input delivery.
+// ErrSubmissionUnconfirmed for uncertain input delivery and ErrInvalidFlags
+// for an empty instance_id (b.2ix).
 func TestPauseHasSRDErrorNames(t *testing.T) {
-	assertErrorNames(t, "pause", "Pause", true, "ErrAgentCapabilityUnsupported", "ErrPauseTimeout", "ErrSpawnNotFound", "ErrSpawnNotPausable",
+	assertErrorNames(t, "pause", "Pause", true, "ErrInvalidFlags", "ErrAgentCapabilityUnsupported", "ErrPauseTimeout", "ErrSpawnNotFound", "ErrSpawnNotPausable",
 		"ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive",
 		"ErrSendKeysWhileRelayed", "ErrRelayFallenBack", "ErrDialogMaybeOpen", "ErrSubmissionUnconfirmed")
 }

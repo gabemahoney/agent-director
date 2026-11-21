@@ -442,6 +442,7 @@
         }
       ],
       "error_names": [
+        "ErrInvalidFlags",
         "ErrSpawnNotFound",
         "ErrStoreBusy"
       ]
@@ -815,6 +816,7 @@
         }
       ],
       "error_names": [
+        "ErrInvalidFlags",
         "ErrSpawnNotFound",
         "ErrStoreBusy"
       ]
@@ -1311,6 +1313,7 @@
         }
       ],
       "error_names": [
+        "ErrInvalidFlags",
         "ErrSpawnNotFound",
         "ErrTmuxNotAvailable",
         "ErrTmuxKillFailed",
@@ -2356,6 +2359,7 @@
         }
       ],
       "error_names": [
+        "ErrInvalidFlags",
         "ErrSpawnNotFound"
       ]
     },
@@ -2386,6 +2390,7 @@
       ],
       "result_fields": [],
       "error_names": [
+        "ErrInvalidFlags",
         "ErrAgentCapabilityUnsupported",
         "ErrSpawnNotFound",
         "ErrSpawnNotPausable",

@@ -558,8 +558,9 @@ type sendKeysGuard struct {
 //
 // Trail (SR-7.4, SR-14): SendKeys writes at most one ad.provenance.disagree
 // record per distinct reason per call (source ad_send_keys), fail-open, and
-// none in the normal case; Client.SendKeys writes the same records through
-// the same path, plus its one ad.send_keys.called. Each record's action
+// none in the normal case. Client.SendKeys and Client.SendKeysContext,
+// after their closed and empty-ID checks, write the same records through
+// this path plus one ad.send_keys.called. Each record's action
 // summarizes recorded send facts, not submission proof: keys_sent (input was
 // attempted with no recorded send error), text_sent (structured
 // SubmissionUnconfirmedDetails with KeysSent true, including non-timeout
@@ -1244,8 +1245,9 @@ func isInteractiveState(state string) bool {
 // Errors:
 //   - [ErrAgentCapabilityUnsupported]: DeliveryRequestID requests native
 //     delivery for a pane-only row; nothing is sent. Omit it for manual input.
-//   - [ErrInvalidFlags]: the params' shape is refused (a pane answer without
-//     As allow or deny, Key or ExpectPaneSHA256, or with Text; As without
+//   - [ErrInvalidFlags]: instance_id is empty or the params' shape is
+//     refused (a pane answer without As allow or deny, Key or ExpectPaneSHA256,
+//     or with Text; As without
 //     RequestToken; Key with Text; NoEnter with neither; a Key that is not a
 //     named key or one character; a malformed hash; a negative NLines; a
 //     SendMode other than wait_turn or steer_turn; a CallerUUID that is not
@@ -1402,6 +1404,9 @@ func (c *Client) SendKeysContext(ctx context.Context, params SendKeysParams) (Se
 	if err := c.checkClosed(); err != nil {
 		return SendKeysResult{}, err
 	}
+	if params.InstanceID == "" {
+		return SendKeysResult{}, fmt.Errorf("%w: send-keys: instance_id is required", ErrInvalidFlags)
+	}
 
 	// The relay view is the Client's own: its clock (c.now), start-time
 	// reader, pid namespace and the configured effective relay window. A pane
@@ -1413,7 +1418,7 @@ func (c *Client) SendKeysContext(ctx context.Context, params SendKeysParams) (Se
 	env := c.sendKeysEnv()
 	env.Context = ctx
 	facts, result, err := sendKeys(c.st.WithContext(ctx), c.tmuxClient, env, params)
-	// Exactly one ad.send_keys.called per call past the closed check, on
+	// Exactly one ad.send_keys.called per call past the closed and ID checks, on
 	// every outcome (SR-7.4, SR-5.2), fail-open.
 	emitSendKeysCalled(params, facts, err)
 	return result, err

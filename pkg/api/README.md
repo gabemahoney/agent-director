@@ -491,10 +491,10 @@ Returns `ReadPaneResult` (`.Pane` string, and `.PaneSHA256`, the SHA-256 in
 lowercase hex of exactly the bytes of `.Pane`, which `SendKeys` and
 `RecordPaneAnswer` take back as `ExpectPaneSHA256` with the same `NLines`;
 the hash of an `ANSI: true` read never matches).
-Common errors: `ErrInvalidFlags` (negative `NLines`), `ErrSpawnNotFound`,
-`ErrTmuxCaptureFailed`, `ErrTmuxSessionConflict`, `ErrTmuxUnresponsive`,
-`ErrTmuxNotAvailable` and `ErrInternal`. See `(*Client).ReadPane` godoc and
-the [caller contract](../../docs/caller-contract.md).
+Common errors: `ErrInvalidFlags` (empty `InstanceID` or negative `NLines`),
+`ErrSpawnNotFound`, `ErrTmuxCaptureFailed`, `ErrTmuxSessionConflict`,
+`ErrTmuxUnresponsive`, `ErrTmuxNotAvailable` and `ErrInternal`. See
+`(*Client).ReadPane` godoc and the [caller contract](../../docs/caller-contract.md).
 
 #### `AllowPending` — surface symmetry with `send-keys`
 

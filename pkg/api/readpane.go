@@ -278,7 +278,8 @@ func (r *readPaneRun) leftover(res tmux.Result, launch tmux.Launch) (string, tmu
 // CLI: agent-director read-pane
 //
 // Errors:
-//   - [ErrInvalidFlags]: NLines is negative; refused before the row is read.
+//   - [ErrInvalidFlags]: instance_id is empty or NLines is negative;
+//     refused before the row is read.
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
 //     not accessible to this user, or this is not the tmux server the agent
@@ -295,6 +296,9 @@ func (r *readPaneRun) leftover(res tmux.Result, launch tmux.Launch) (string, tmu
 func (c *Client) ReadPane(params ReadPaneParams) (ReadPaneResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ReadPaneResult{}, err
+	}
+	if params.InstanceID == "" {
+		return ReadPaneResult{}, fmt.Errorf("%w: read-pane: instance_id is required", ErrInvalidFlags)
 	}
 	return readPane(c.st, c.tmuxClient, c.procChecker, params)
 }

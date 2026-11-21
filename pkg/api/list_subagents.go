@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -168,10 +169,14 @@ func ListSubagents(s ListSubagentsStore, instanceID string) (ListSubagentsResult
 // CLI: agent-director list-subagents
 //
 // Errors:
+//   - [ErrInvalidFlags]: instance_id is empty; no row is read.
 //   - [ErrSpawnNotFound]: no row exists for instanceID.
 func (c *Client) ListSubagents(instanceID string) (ListSubagentsResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return emptyListSubagentsResult(), err
+	}
+	if instanceID == "" {
+		return emptyListSubagentsResult(), fmt.Errorf("%w: list-subagents: instance_id is required", ErrInvalidFlags)
 	}
 	return ListSubagents(c.st, instanceID)
 }

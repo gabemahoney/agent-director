@@ -746,6 +746,7 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // ownership" in docs/caller-contract.md before sending more input.
 //
 // Errors:
+//   - [ErrInvalidFlags]: instance_id is empty; no row is read or input sent.
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrAgentCapabilityUnsupported]: the row's agent is pane-only and
 //     cannot be paused; nothing is changed or sent.
@@ -812,6 +813,9 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 func (c *Client) Pause(ctx context.Context, params PauseParams) (PauseResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return PauseResult{}, err
+	}
+	if params.InstanceID == "" {
+		return PauseResult{}, fmt.Errorf("%w: pause: instance_id is required", ErrInvalidFlags)
 	}
 	// The effective pause wait (b.8q2): the configured value when positive,
 	// otherwise the default; Load has refused a negative value and one too

@@ -122,24 +122,15 @@ func TestListSubagentsMCPTracked(t *testing.T) {
 	}
 }
 
-// TestListSubagentsMCPRefusals: a missing or empty instance_id is refused as
-// get refuses it (the empty id names no row), an unknown id is ErrSpawnNotFound.
+// TestListSubagentsMCPRefusals: an unknown non-empty id is ErrSpawnNotFound,
+// as for get. TestMCPRequiredInstanceID covers omitted and empty IDs (b.2ix).
 func TestListSubagentsMCPRefusals(t *testing.T) {
 	e := newEnv(t)
-	for name, args := range map[string]string{
-		"missing":    `{}`,
-		"empty":      `{"instance_id":""}`,
-		"unknown id": `{"instance_id":"mls-no-such-row"}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			got := toolErrorData(t, callTool(t, e.d, "list_subagents", args))
-			want := toolErrorData(t, callTool(t, e.d, "get", args))
-			if got.ErrName != "ErrSpawnNotFound" {
-				t.Errorf("err_name = %s: %q; want ErrSpawnNotFound", got.ErrName, got.ErrDescription)
-			}
-			if got.ErrName != want.ErrName || got.ErrDescription != want.ErrDescription {
-				t.Errorf("list_subagents = %s: %q; get = %s: %q; want the same refusal",
-					got.ErrName, got.ErrDescription, want.ErrName, want.ErrDescription)
+	for _, tool := range []string{"list_subagents", "get"} {
+		t.Run(tool, func(t *testing.T) {
+			data := toolErrorData(t, callTool(t, e.d, tool, `{"instance_id":"mls-no-such-row"}`))
+			if data.ErrName != "ErrSpawnNotFound" || data.ErrDescription != "ErrSpawnNotFound: mls-no-such-row" {
+				t.Errorf("error = %s: %q; want ErrSpawnNotFound: mls-no-such-row", data.ErrName, data.ErrDescription)
 			}
 		})
 	}

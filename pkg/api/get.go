@@ -613,6 +613,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 // CLI: agent-director get
 //
 // Errors:
+//   - [ErrInvalidFlags]: instance_id is empty; no row is read.
 //   - [ErrSpawnNotFound]: no row exists for instanceID.
 //   - [ErrStoreBusy]: a zero-wait store read selecting the row, or projecting
 //     its checked result, did not finish within its bound: another operation
@@ -626,6 +627,9 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 func (c *Client) Get(instanceID string) (SpawnRow, error) {
 	if err := c.checkClosed(); err != nil {
 		return emptySpawnRow(), err
+	}
+	if instanceID == "" {
+		return emptySpawnRow(), fmt.Errorf("%w: get: instance_id is required", ErrInvalidFlags)
 	}
 	return getSettled(c.st, c.relayView(), c.settleRead(), instanceID)
 }

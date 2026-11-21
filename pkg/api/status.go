@@ -240,6 +240,7 @@ func withUnknownMainFields(out StatusResult, agent string) StatusResult {
 // CLI: agent-director status
 //
 // Errors:
+//   - [ErrInvalidFlags]: instance_id is empty; no row is read.
 //   - [ErrSpawnNotFound]: no row exists for instanceID.
 //   - [ErrStoreBusy]: a zero-wait store read selecting the row, or projecting
 //     its checked result, did not finish within its bound: another operation
@@ -253,6 +254,9 @@ func withUnknownMainFields(out StatusResult, agent string) StatusResult {
 func (c *Client) Status(instanceID string) (StatusResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return StatusResult{}, err
+	}
+	if instanceID == "" {
+		return StatusResult{}, fmt.Errorf("%w: status: instance_id is required", ErrInvalidFlags)
 	}
 	return statusSettledWithRelay(c.st, c.relayView(), c.settleRead(), instanceID)
 }
