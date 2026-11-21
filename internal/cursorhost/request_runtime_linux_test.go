@@ -227,8 +227,7 @@ func (e *requestEnv) prepareRunPTY(t *testing.T) (*os.File, *os.File) {
 	}
 	e.exec(t, `DELETE FROM cursor_runtimes`)
 	e.exec(t, `UPDATE spawns SET state='pending',session_id=NULL`)
-	t.Setenv("AD_TEST_CURSOR_REPORT_HELPER", "1")
-	t.Setenv("AD_TEST_CURSOR_REPORT_DB", e.path)
+	prepareCursorReportHelper(t, e.path)
 	t.Setenv("AD_TEST_CURSOR_REPORT_PAYLOADS", e.path+".reports")
 	t.Setenv("AD_TEST_CURSOR_REPORT_MODE", "current")
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", e.binding.InstanceID)

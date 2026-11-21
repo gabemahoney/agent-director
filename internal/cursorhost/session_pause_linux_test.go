@@ -64,10 +64,6 @@ func (p pausePTY) SendKeysPane(socket, pane, text string, enter bool) error {
 
 func TestCursorEligiblePublicPauseCancelsAcceptedQueue(t *testing.T) {
 	// Serial: real Run/report subprocess with isolated verified pane and PTY.
-	// b.dcj: Stop and SessionEnd re-exec this race-built test binary. Remove
-	// their detector's default exit sleeps from the product cancellation window;
-	// the current process's detector is already initialized and stays unchanged.
-	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
 	exitConsumed := make(chan struct{})
 	var exitOnce sync.Once
 	starter := func(in *os.File, out io.Writer, emit func(terminalInput), admit func() bool, choices ...func(rune) (string, string, bool)) func() {

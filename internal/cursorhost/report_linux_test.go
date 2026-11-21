@@ -20,6 +20,16 @@ import (
 
 func init() { cursorReportHelper = runCursorReportHelper }
 
+// prepareCursorReportHelper selects the existing direct-child reporting seam.
+func prepareCursorReportHelper(t *testing.T, path string) {
+	t.Helper()
+	// b.dcj: keep race-built helpers' default exit sleeps out of product control
+	// windows; the current process's detector is already initialized and unchanged.
+	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
+	t.Setenv("AD_TEST_CURSOR_REPORT_HELPER", "1")
+	t.Setenv("AD_TEST_CURSOR_REPORT_DB", path)
+}
+
 // The external hook-command seam applies its store write; reporter still verifies real kernel/pane evidence.
 func runCursorReportHelper() int {
 	path := os.Getenv("AD_TEST_CURSOR_REPORT_DB")
@@ -151,8 +161,7 @@ func TestReporterHeldLifecycleRequiresIndependentEvidence(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Setenv("AD_TEST_CURSOR_REPORT_HELPER", "1")
-				t.Setenv("AD_TEST_CURSOR_REPORT_DB", path)
+				prepareCursorReportHelper(t, path)
 				t.Setenv("AD_TEST_CURSOR_REPORT_MODE", mode)
 				rep := reporter{store: s, cfg: config.Default(), binding: b, exe: exe, path: tr.path}
 				err = rep.report(event)
@@ -174,8 +183,7 @@ func TestReporterRetirementCannotRestartExpiredControlDeadline(t *testing.T) {
 				t.Fatal(err)
 			}
 			payloads := filepath.Join(t.TempDir(), "reports")
-			t.Setenv("AD_TEST_CURSOR_REPORT_HELPER", "1")
-			t.Setenv("AD_TEST_CURSOR_REPORT_DB", e.path)
+			prepareCursorReportHelper(t, e.path)
 			t.Setenv("AD_TEST_CURSOR_REPORT_PAYLOADS", payloads)
 			if err = e.process.terminate(); err != nil {
 				t.Fatal(err)
@@ -237,8 +245,7 @@ func TestReporterObservesCommittedRotationBeforeStalledHookReturns(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Setenv("AD_TEST_CURSOR_REPORT_HELPER", "1")
-			t.Setenv("AD_TEST_CURSOR_REPORT_DB", e.path)
+			prepareCursorReportHelper(t, e.path)
 			dir := rotationBarrier(t, "after")
 			until := time.Now().Add(cancelWait)
 			ctx, cancel := context.WithDeadline(context.Background(), until)
