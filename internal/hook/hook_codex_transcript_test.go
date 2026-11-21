@@ -114,7 +114,8 @@ func TestCodexStartupDeferredRollout(t *testing.T) {
 }
 
 func TestCodexStartupInvalidatedByLaterSessionStart(t *testing.T) {
-	for _, source := range []string{"startup", "resume", "fork", "clear"} {
+	// b.n9q: compaction invalidates startup provenance without ending the turn.
+	for _, source := range []string{"startup", "resume", "fork", "clear", "compact"} {
 		t.Run(source, func(t *testing.T) {
 			const id = "cx-startup-invalidated"
 			st, _ := cxSeed(t, id, store.StatePending)
@@ -123,10 +124,23 @@ func TestCodexStartupInvalidatedByLaterSessionStart(t *testing.T) {
 			if mustGetSpawn(t, st, id).CodexStartup == nil {
 				t.Fatal("initial startup was not admitted")
 			}
+			prompt, _, _ := codexPayload(t, "user-prompt-submit.json", false, map[string]any{"session_id": sid, "transcript_path": path})
+			cxFire(t, st, id, cxOwn(t, st, id), prompt)
+			if row := mustGetSpawn(t, st, id); row.State != store.StateWorking || row.CodexStartup == nil {
+				t.Fatal("working setup lost startup provenance")
+			}
 			later, _, _ := codexPayload(t, "session-start-"+source+".json", false, map[string]any{"session_id": sid, "transcript_path": path})
 			cxFire(t, st, id, cxOwn(t, st, id), later)
-			if row := mustGetSpawn(t, st, id); row.State != store.StateWaiting || row.SessionID != sid || row.CodexStartup != nil {
-				t.Fatalf("later %s did not invalidate origin while preserving lifecycle: %+v", source, row)
+			row := mustGetSpawn(t, st, id)
+			wantState := store.StateWaiting
+			if source == "compact" {
+				wantState = store.StateWorking
+			}
+			if row.State != wantState {
+				t.Errorf("later %s state = %q; want %q", source, row.State, wantState)
+			}
+			if row.SessionID != sid || row.JSONLPath != path || row.CodexStartup != nil {
+				t.Errorf("later %s did not invalidate origin while preserving session/path: %+v", source, row)
 			}
 			cxFire(t, st, id, cxOwn(t, st, id), startup)
 			if mustGetSpawn(t, st, id).CodexStartup != nil {

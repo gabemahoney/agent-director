@@ -252,7 +252,8 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // SessionStart (SR-22.9, SR-5.3): the row is read for the snapshot the write
 // is conditioned on, and one gated RecordSessionStartIdentity records the
 // payload's session id and transcript path and the parent as pid and
-// proc_starttime, and sets waiting. When only the snapshot changed, the row is
+// proc_starttime, and sets waiting unless a compact SessionStart preserves
+// working/check_permission/ask_user. When only the snapshot changed, the row is
 // re-read and the write retried once; a second change logs one line and
 // writes no ad.hook.ignored (decision A3). A SessionStart that arrives before
 // its launch's identity write (the write does not apply because the row
@@ -553,6 +554,8 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		SessionID:    sessionID,
 		CodexStartup: res.CodexStartup,
 	}
+	gate.SessionStartSoftRefresh = (res.Agent == store.AgentClaude || res.Agent == store.AgentCodex) &&
+		res.EventName == "SessionStart" && res.SoftRefresh
 	codexTurnGate(&gate, res)
 	claudeTurnGate(&gate, res)
 	// SR-3.3: a parent Claude Stop's take evidence counts only steered output

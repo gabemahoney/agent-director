@@ -29,6 +29,12 @@ func TestClassifyEventSRDTable(t *testing.T) {
 		wantEnd          bool // EndReport (SR-6.5)
 	}{
 		{name: "SessionStart", raw: `{"hook_event_name":"SessionStart"}`, wantState: store.StateWaiting},
+		// b.n9q: compact refreshes a live session; other sources still report in.
+		{name: "SessionStart compact", raw: `{"hook_event_name":"SessionStart","source":"compact"}`, wantSoft: true},
+		{name: "claude SessionStart compact", agent: "claude", raw: `{"hook_event_name":"SessionStart","source":"compact"}`, wantSoft: true},
+		{name: "claude SessionStart startup", agent: "claude", raw: `{"hook_event_name":"SessionStart","source":"startup"}`, wantState: store.StateWaiting},
+		{name: "claude SessionStart resume", agent: "claude", raw: `{"hook_event_name":"SessionStart","source":"resume"}`, wantState: store.StateWaiting},
+		{name: "claude SessionStart clear", agent: "claude", raw: `{"hook_event_name":"SessionStart","source":"clear"}`, wantState: store.StateWaiting},
 		{name: "legacy event_name field", raw: `{"event_name":"SessionStart"}`, wantState: store.StateWaiting},
 		{name: "UserPromptSubmit", raw: `{"hook_event_name":"UserPromptSubmit"}`, wantState: store.StateWorking},
 		{name: "PreToolUse AskUserQuestion", raw: `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}`, wantState: store.StateAskUser},
@@ -64,7 +70,8 @@ func TestClassifyEventSRDTable(t *testing.T) {
 		{name: "codex SessionStart clear", agent: "codex", raw: `{"hook_event_name":"SessionStart","source":"clear"}`, wantState: store.StateWaiting},
 		{name: "codex SessionStart resume", agent: "codex", raw: `{"hook_event_name":"SessionStart","source":"resume"}`, wantState: store.StateWaiting},
 		{name: "codex SessionStart fork", agent: "codex", raw: `{"hook_event_name":"SessionStart","source":"fork"}`, wantState: store.StateWaiting},
-		{name: "codex SessionStart compact", agent: "codex", raw: `{"hook_event_name":"SessionStart","source":"compact"}`, wantState: store.StateWaiting},
+		// b.n9q: Codex's compact SessionStart has the same state-neutral contract.
+		{name: "codex SessionStart compact", agent: "codex", raw: `{"hook_event_name":"SessionStart","source":"compact"}`, wantSoft: true},
 		{name: "codex UserPromptSubmit", agent: "codex", raw: `{"hook_event_name":"UserPromptSubmit"}`, wantState: store.StateWorking},
 		{name: "codex PreToolUse Bash", agent: "codex", raw: `{"hook_event_name":"PreToolUse","tool_name":"Bash"}`, wantState: store.StateWorking},
 		{name: "codex PreToolUse request_user_input", agent: "codex", raw: `{"hook_event_name":"PreToolUse","tool_name":"request_user_input"}`, wantState: store.StateWorking},
@@ -82,6 +89,8 @@ func TestClassifyEventSRDTable(t *testing.T) {
 		{name: "codex SubagentStart", agent: "codex", raw: `{"hook_event_name":"SubagentStart","agent_id":"a1"}`, wantSoft: true},
 		{name: "codex SubagentStop", agent: "codex", raw: `{"hook_event_name":"SubagentStop","agent_id":"a1"}`, wantSoft: true},
 		{name: "codex SessionEnd other", agent: "codex", raw: `{"hook_event_name":"SessionEnd","reason":"other"}`, wantSoft: true, wantEnd: true},
+		// b.n9q: SessionEnd compact retains its separate end-report behavior.
+		{name: "codex SessionEnd compact", agent: "codex", raw: `{"hook_event_name":"SessionEnd","reason":"compact"}`, wantSoft: true, wantEnd: true},
 		{name: "codex SessionEnd with a reason Claude ends the row on", agent: "codex", raw: `{"hook_event_name":"SessionEnd","reason":"logout"}`, wantSoft: true, wantEnd: true},
 		{name: "codex SessionEnd no cause", agent: "codex", raw: `{"hook_event_name":"SessionEnd"}`, wantSoft: true, wantEnd: true},
 		{name: "codex SessionEnd with agent_id", agent: "codex", raw: `{"hook_event_name":"SessionEnd","reason":"other","agent_id":"a1"}`, wantSoft: true},

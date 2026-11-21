@@ -3295,8 +3295,8 @@ guard reads. The writes and the derivation live in
   `state_changed_ms` the statement's clock. A hook that moves a row out of
   `missing` or `ended`, which the hook gate allows for the row's own agent
   (find-missing's mark and the ended transition keep the pane, and resume's
-  restore writes it back; SessionStart sets `waiting` whatever the prior
-  state), makes such a write: the move settles.
+  restore writes it back; SessionStart sets these rows to `waiting`), makes
+  such a write: the move settles.
 - **Immediate writes**: a terminal value (`ended`, `missing`), a hook's
   included, and every state write outside the settling category above:
   `InsertPending`,
@@ -6527,7 +6527,7 @@ its own table, in [The agent-aware hook classifier](#the-agent-aware-hook-classi
 
 | Event | Tool / reason carve-out | Resulting state |
 | --- | --- | --- |
-| `SessionStart` | — | `waiting`, whatever the prior state, in one statement (`RecordSessionStartIdentity`): also writes `session_id` from `transcript_path`; `jsonl_path` only when the file exists on disk, else NULL/provisional — b.v2c; `pid` and `proc_starttime` = the hook's parent, the pane process; a differing session id archives the prior pair to `session_history`, tagged with the row's current life, in the same transaction; on a covered Launch an applied main one also returns the wake path in `watchPaths` ([The Claude route](#the-claude-route)) |
+| `SessionStart` | `source = compact` keeps `working` / `check_permission` / `ask_user` | Otherwise `waiting`; in one statement (`RecordSessionStartIdentity`), also writes `session_id` from `transcript_path`; `jsonl_path` only when the file exists on disk, else NULL/provisional — b.v2c; `pid` and `proc_starttime` = the hook's parent, the pane process; a differing session id archives the prior pair to `session_history`, tagged with the row's current life, in the same transaction; on a covered Launch an applied main one also returns the wake path in `watchPaths` ([The Claude route](#the-claude-route)) |
 | `UserPromptSubmit` | — | `working`; a main-agent one with a session id also advances the Turn Start counter in the same write, held or applied (see "Turn Start counter" under [`internal/store`](#internalstore)), then offers a wake prompt as take evidence ([The Claude route](#the-claude-route)) |
 | `PreToolUse` | `tool_name = AskUserQuestion` | `ask_user` |
 | `PreToolUse` | any other tool | `working`; for `tool_name` `Agent`, the row write is followed by its own gated entry transaction (see [Subagent capture](#subagent-capture)); no trail record, and `upsert_outcome` stays the row write's |
@@ -6718,11 +6718,16 @@ no `Stop` turn-end entry transaction, and Claude's behaviour is unchanged. A
 new agent adds its classifier table and flags; any agent-specific authority
 gate must also be enforced before its writes.
 
+For Claude/Codex `SessionStart` with `source: "compact"`, the classifier
+returns empty `NewState` and `SoftRefresh` true. The handler carries that
+through `HookGate.SessionStartSoftRefresh` to `RecordSessionStartIdentity`;
+it still uses the [SessionStart identity write](#hooks-move-a-row-only-for-its-own-agent).
+
 **The Codex table (`classifyCodex`).**
 
 | Event | `agent_id` | Result |
 | --- | --- | --- |
-| `SessionStart` | none | `waiting`; the session id is the payload's `session_id` and the transcript path is the payload's path, verbatim |
+| `SessionStart` | none | `waiting`, except `source: "compact"` keeps `working` / `check_permission` / `ask_user`; the session id is the payload's `session_id` and the transcript path is the payload's path, verbatim |
 | `Stop` | none | `waiting` |
 | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | none | `working`, for any tool (never `ask_user`, `request_user_input` and `request_user_input_async` included); a main-thread tool hook of a turn other than the row's current, not-ended one is a soft refresh (see "The Codex turn" below) |
 | `Interrupt` | none | `waiting`, and the main agent's turn end for the relay's proofs (`TurnEnded`; see "The relay on Codex rows" under [Permission relay](#permission-relay)) |
@@ -6761,8 +6766,7 @@ emits one `ad.spawn.state_transition` with prior and new state equal,
 permission request and no subagent record (no `closeSubagentsAgentGone`),
 and writes no subagent table, so it is one of the "Writes that close nothing" under [The liveness
 close of subagent entries](#the-liveness-close-of-subagent-entries). `RecordSessionStartIdentity` clears
-`end_reported_at` in its one UPDATE (a `SessionStart` from the same
-verified process starts a new session), with no extra statement and no
+`end_reported_at` in its one UPDATE, with no extra statement and no
 extra trail record.
 
 **The hook heal (`healCodexTranscript`).** After any applied write of a
@@ -7185,15 +7189,24 @@ min(grace bound − `Now` at the start, `sessionStartWaitCap`).
   report more time left; the wait then ends at whichever comes first, the
   re-read cap (about the time left at its start) or the cap.
 
-**SessionStart is one statement.** An applied SessionStart sets
-`waiting` whatever the prior state and, in the same UPDATE, records the
-payload's session id and transcript path (presence rule), `pid` and
-`proc_starttime` = the hook's parent (the pane process), `pane_starttime`
-when NULL, bumps `last_seen_at`, clears `ended_at`, the liveness notes
-and `launch_started_at`, and advances `row_version` once. The rotation
-archive runs inside the same transaction, only when the write applied
-(see [SessionStart hook side of the
-contract](#sessionstart-hook-side-of-the-contract)).
+**SessionStart is one statement.** With `SessionStartSoftRefresh`,
+`RecordSessionStartIdentity` keeps a snapshot-pinned `working`,
+`check_permission` or `ask_user` state and its settle, permission-epoch and
+observation/evidence fields. All other cases write `waiting`, including
+compact on `pending`, `ended`, `missing` or `waiting`. The same gated UPDATE
+records the payload's session id and transcript path (presence rule),
+`pid` and `proc_starttime` = the hook's parent (the pane process), and
+`pane_starttime` when NULL; bumps `last_seen_at`; clears `ended_at`, liveness
+notes, `idle_since`, `launch_started_at`, `end_reported_at` and
+`claude_capacity`; writes `codex_startup` under its admission rule; and
+advances `row_version` once. Snapshot changes still get one re-read/retry.
+The transaction still publishes busy-send candidates, archives rotations
+and refreshes families. A preserved state emits a same-state
+`ad.spawn.state_transition` with `soft_refresh: true`; other cases emit
+`waiting` with `soft_refresh: false`. On a covered Claude Launch, applied
+SessionStarts still return `watchPaths` and recover overdue forces ([The Claude route](#the-claude-route)).
+See [SessionStart hook side of the contract](#sessionstart-hook-side-of-the-contract)
+for identity and rotation details.
 
 **Must use:** every store write a hook makes takes the hook's
 `store.HookGate`, puts `hookGateSQL` (with `hookGateArgs`) in its own
@@ -7275,8 +7288,8 @@ the agent's session (its own main process), a leftover of an earlier
 life and any stray process that inherited `AGENT_DIRECTOR_INSTANCE_ID`
 are all ignored, for every event, SessionStart included. `/clear`,
 `/resume` and compaction inside the agent's own process are applied,
-because the process is the same, and SessionStart records the new session
-id. An `ended` row stays `ended` against every other process's hooks:
+because the process is the same, and SessionStart records the payload's
+session id. An `ended` row stays `ended` against every other process's hooks:
 only the row's own agent, or a verb such as `resume`, moves it again. The
 ended transition therefore comes only from the row's own agent (or from
 agent-director's own writes). A subagent's or in-process teammate's
@@ -7819,7 +7832,7 @@ to the `state` that `status`, `get` and `list` report on every surface
   hook's parent process, and a row keeps its pane through `find-missing`'s
   mark and the ended transition, and gets it back from resume's restore, so
   the row's own agent can move a row out of `missing` or `ended` (its
-  SessionStart sets `waiting` whatever the prior state; `hook_gate_test.go`
+  SessionStart sets these rows to `waiting`; `hook_gate_test.go`
   has a row marked `missing` before its agent reported in). Such a move is
   a hook write and settles: the row reads `missing` or `ended` for T, then
   the live value. Never state that hooks do not leave a terminal state.
@@ -19152,7 +19165,7 @@ The FK `ON DELETE SET NULL` cascade (Epic 3 schema) handles the
 
 ### SessionStart hook side of the contract
 
-For Claude/Codex and ordinary startup, SessionStart uses the gated statement
+Claude/Codex SessionStart uses the gated statement
 `RecordSessionStartIdentity`
 (`internal/store/hook_writes.go`; see [Hooks move a row only for its own
 agent](#hooks-move-a-row-only-for-its-own-agent)). It applies only when
@@ -19170,7 +19183,8 @@ makes the gated write again (see [Hooks move a row
 only for its own agent](#hooks-move-a-row-only-for-its-own-agent)); a
 fresh spawn's and a reuse's SessionStart wait the same way.
 
-In the one UPDATE it sets `waiting` (whatever the prior state), clears
+In the one UPDATE it sets `waiting`, with the
+[compact state-preservation rule](#hooks-move-a-row-only-for-its-own-agent), clears
 `ended_at` and the launch start, records the payload's session id and
 transcript path, and sets `pid` and `proc_starttime` to the hook's parent
 (`getppid()` of the exec-form hook, the pane process; no ancestry walk).
@@ -19189,22 +19203,23 @@ rotates the UUID on every `--resume`, so the column carries the
 freshly-rotated value after the hook fires — the next resume of this
 resumed launch uses the new id, pointing at the new JSONL. An in-session
 `/clear`, `/resume` or compaction comes from the same process, so it
-applies too and records the new id. The rotation stays within the row's
-current life.
+applies too and records the payload's session id. Any rotation stays
+within the row's current life.
 
 **A Codex SessionStart.** The same statement serves Codex rows, with these
 differences. The session id is the payload's `session_id`, not a path's
 basename, and the transcript path is the payload's path (Codex's rollout
-file), kept verbatim. Codex sends `SessionStart` at the agent's first prompt,
+file), kept verbatim. Codex sends its first `SessionStart` at the first prompt,
 not at start-up, so a Codex row stays `pending` until then; Codex's rollout
 file exists and is not empty by then in every kind, so the conditional
 `jsonl_path` write below records it. `/clear`, `/new`, `/fork` and `/resume`
 start another session in the same process and Codex names it in a
 `SessionStart` at the next prompt, so the rotation archival below applies
-from then; Codex does not end the old session when the session changes. The
-same statement sets `end_reported_at` to NULL: a `SessionStart` from the
-verified process begins a session, so an end report written for an earlier
-one no longer stands (see [The agent-aware hook
+from then; Codex does not end the old session when the session changes.
+A compact SessionStart can arrive mid-turn and preserves the active state
+as above. It still invalidates `codex_startup` provenance. Every applied
+SessionStart sets `end_reported_at` to NULL, superseding an earlier end
+report (see [The agent-aware hook
 classifier](#the-agent-aware-hook-classifier)).
 
 **Conditional `jsonl_path` write (b.v2c AC1).** A fresh Claude session writes

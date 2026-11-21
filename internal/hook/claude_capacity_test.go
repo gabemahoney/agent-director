@@ -74,6 +74,47 @@ func assertClaudeCallbackContext(t *testing.T, got api.ContextReading, sample co
 	}
 }
 
+// b.n9q: compact invalidates measured capacity while preserving the active turn.
+func TestClaudeCapacitySessionStartCompact(t *testing.T) {
+	for _, state := range []string{store.StateWorking, store.StateCheckPermission, store.StateAskUser} {
+		t.Run(state, func(t *testing.T) {
+			st, _, id, sample, hc := claudeCallbackRow(t)
+			ssgHandleWith(t, st, hc, string(sample.Callback), nil)
+			hc.ContextSource = ""
+			prior := mustGetSpawn(t, st, id)
+			if state != store.StateCheckPermission {
+				tool := "Bash"
+				if state == store.StateAskUser {
+					tool = "AskUserQuestion"
+				}
+				payload := payloadWith(t, "pre-tool-use-bash.json", map[string]any{
+					"session_id": prior.SessionID, "transcript_path": prior.JSONLPath, "tool_name": tool,
+				})
+				ssgHandleWith(t, st, hc, string(payload), nil)
+			}
+			prior = mustGetSpawn(t, st, id)
+			if prior.State != state || prior.ClaudeCapacity == nil {
+				t.Fatalf("setup state/capacity = %s/%+v; want %s/known", prior.State, prior.ClaudeCapacity, state)
+			}
+			payload := payloadWith(t, "session-start-compact.json", map[string]any{
+				"session_id": prior.SessionID, "transcript_path": prior.JSONLPath,
+			})
+			ssgHandleWith(t, st, hc, string(payload), nil)
+			row := mustGetSpawn(t, st, id)
+			if row.State != state {
+				t.Errorf("compact state = %q; want %q", row.State, state)
+			}
+			if row.ClaudeCapacity != nil {
+				t.Errorf("compact retained stale capacity: %+v", row.ClaudeCapacity)
+			}
+			if row.SessionID != prior.SessionID || row.JSONLPath != prior.JSONLPath || row.PID != prior.PID ||
+				row.ProcStarttime != prior.ProcStarttime || row.RowVersion != prior.RowVersion+1 || row.LastSeenAt.Before(prior.LastSeenAt) {
+				t.Errorf("compact identity/activity refresh = %+v; prior %+v", row, prior)
+			}
+		})
+	}
+}
+
 func TestClaudeCapacityAdmissionAndAuthority(t *testing.T) {
 	for _, name := range []string{"accepted", "foreign parent", "wrong process start", "unreadable process start", "wrong session", "wrong version", "wrong model", "zero capacity", "unmatched usage", "wrong agent", "wrong callback", "malformed"} {
 		t.Run(name, func(t *testing.T) {
