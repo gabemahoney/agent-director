@@ -57,7 +57,11 @@ func versionRefusal(t *testing.T, stdout, stderr string, code int, reason string
 	if len(wire) != 3 {
 		t.Fatalf("envelope keys: %s", stderr)
 	}
-	versionResultFields(t, wire["details"], 10)
+	size := 10
+	if reason == "core_mismatch" {
+		size = 12
+	}
+	versionResultFields(t, wire["details"], size)
 	return r
 }
 

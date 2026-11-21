@@ -152,6 +152,47 @@ func TestVersionAdminOutcomes(t *testing.T) {
 	}
 }
 
+// b.ett: a compatibility refusal must identify both sides of either comparison.
+func TestVersionAdminCoreMismatchIdentities(t *testing.T) {
+	for _, field := range []string{"core_version", "core_declarations_sha256"} {
+		t.Run(field, func(t *testing.T) {
+			home := poisonedHome(t)
+			root := layout.Dir(home)
+			candidate := versionFactsOf(t, adminPath, home, false)
+			anchor := candidate
+			anchor.Version = "previous"
+			if field == "core_version" {
+				anchor.CoreVersion = "different-permanent-core"
+			} else {
+				anchor.CoreDeclarationsSHA256 = strings.Repeat("a", 64)
+			}
+			_, err := seedVersion(t, root, anchor, "")
+			versionMust(t, err)
+			before := versionTree(t, root)
+			out, stderr, code := runAdmin(t, home, "publish-version", "--binary", mainPath)
+			r := versionRefusal(t, out, stderr, code, "core_mismatch")
+			if r.PublicationState != "not_published" || r.Durable || r.PublishedVersion == nil || *r.PublishedVersion != anchor.Version {
+				t.Fatalf("refusal facts=%+v", r)
+			}
+			var envelope struct {
+				Details map[string]json.RawMessage `json:"details"`
+			}
+			versionJSON(t, stderr, &envelope)
+			for key, facts := range map[string]installversion.Facts{"anchored_core": anchor, "candidate_core": candidate} {
+				want := map[string]string{"core_version": facts.CoreVersion, "core_declarations_sha256": facts.CoreDeclarationsSHA256}
+				var got map[string]string
+				if raw, ok := envelope.Details[key]; ok {
+					versionJSON(t, string(raw), &got)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("details.%s = %v, want %v", key, got, want)
+				}
+			}
+			versionUnchanged(t, root, before)
+		})
+	}
+}
+
 func TestVersionAdminRuntimeFactsMismatch(t *testing.T) {
 	for _, variant := range []string{"core", "coverage"} {
 		t.Run(variant, func(t *testing.T) {
