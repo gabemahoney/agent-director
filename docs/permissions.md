@@ -369,13 +369,15 @@ permission. Use `decide` for an eligible relay answer, or the
 To stop or reconnect covered Claude, use
 [keyless pause and resume](caller-contract.md#keyless-pause-of-a-covered-agent).
 
-For uncovered agents, permission guards apply in every live state, not only `check_permission`.
+For uncovered `send-keys`, permission guards apply in every live state, not only `check_permission`.
 For `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`,
 pane-answer refusals and retry rules, follow the
 [caller contract](caller-contract.md#permission-relay).
 
-To stop an uncovered held spawn, use `kill`, or have a person or an LLM inspect and
-exit it at the pane:
+To stop busy uncovered Codex, use
+[keyless pause](caller-contract.md#keyless-pause-of-busy-uncovered-codex).
+For other uncovered held spawns, use `kill`, or have a person or an LLM inspect
+and exit it at the pane:
 
 1. Read the pane. Close any fallen-back request with a token-specific
    pane answer, or `record-pane-answer` if already answered. Answer any
@@ -402,7 +404,9 @@ For Cursor turn-end recovery and gateway refusals, follow
 A delivery acknowledgement or pane-answer record does not prove the dialog
 gone. On covered Claude it holds ordinary Messages; keyless `pause` remains
 available. On uncovered relay-on rows, it holds plain input without a
-pane hash and holds `pause`. Cursor requests from an earlier launch are
+pane hash and holds waiting `pause`.
+[Busy Codex pause](caller-contract.md#keyless-pause-of-busy-uncovered-codex) bypasses
+that hold. Cursor requests from an earlier launch are
 excluded; requests with no launch on record still hold.
 
 Proof comes from the agent, not from the caller's answer record:

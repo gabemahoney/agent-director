@@ -3,7 +3,9 @@ spec/tla/codex/ provenance
 Scope of historical results and current files
   The b.ssz results in README.md belong to its 41 submitted model snapshots and
   configurations. b.w21 subsequently changed src/B146R5Cx.tla with
-  default-off legacy scenarios and repair knobs. The historical final-model
+  default-off legacy scenarios and repair knobs. b.y7g later extended
+  src/Phase5HookCx.tla with busy-pause signaling and added its focused suite.
+  The historical final-model
   equivalence results do not validate this evolving source. Every pin
   identifies current file bytes and claims no TLC result.
 
@@ -33,12 +35,34 @@ E2 authoring overlay (b.jf1, 2026-10-14; NOT MODEL CHECKED)
   The 41 historical results in README.md apply to the model copies their jobs
   submitted, never this E2 overlay.
 
-Not wired into make tla
-  No model-execution target runs these files. `make tla` runs ci/suite.tsv only,
-  and ci/run_ci.sh never reads codex/. To run a job again, build its
-  job-<run>/ directory (Dockerfile, spec/tla/jobs/lib/tlcjob.sh, the model,
-  its cfg, runs and spec/tla/tla2tools.jar) and submit it to the job
-  scheduler.
+Busy-pause overlay (b.y7g, 2026-11-21; scheduler checked)
+  src/Phase5HookCx.tla adds default-off BusyPauseOn and PauseSignalOn.
+  Busy Codex pause captures launch/PID/start identity, sends no keys, and
+  permits process Exit without SessionEnd. Its wait writes ended for the
+  same launch, including process-based recovery marking missing during the
+  pause (covered parity, b.nqq); initial terminal rows are a no-op and a
+  changed launch is left alone. Existing properties remain, with the stronger
+  PauseSignalEndsSameLaunch property added to cfg/ps_live.cfg.
+  pause-signal-suite.tsv is a current runner-format manifest with nine
+  cfg/ps_*.cfg selections: liveness, unchanged legacy pause, two safety actor
+  families, signal-off and PID-only negative controls, and reachability probes.
+  These results belong to Phase5HookCx.tla SHA-256
+  7e4ab389e8bda66490c894ecb6880151bbe33e17801801bc51b9f4a058ed4efe:
+    preflight     j20261121071358-2db853  PASS (SANY/import and evaluation)
+    signal-live   j20261121071425-cea78a  PASS (2/2 expected outcomes)
+    signal-red    j20261121071951-7b6ae4  PASS (1/1 expected violation)
+    signal-safe   j20261121072018-de1be9  PASS (3/3 expected outcomes)
+    signal-probes j20261121072448-4bac00  PASS (3/3 expected violations)
+  The complete run matched all nine expectations. README.md documents bounds,
+  fairness and the finite-instance scope. It does not validate the other
+  models or their overlays, nor does it validate the product implementation.
+
+Running the focused suite
+  Default make tla still selects ci/suite.tsv. Override TLA_SUITE with
+  spec/tla/codex/pause-signal-suite.tsv and TLA_SPEC_DIR with
+  spec/tla/codex/src, using make -j1 tla and the scheduler settings in README.md.
+  The historical codex/suite.tsv remains an inventory in its old format;
+  it is not a runner-format manifest.
 
 Source
   Bee b.ssz, directory tickets/Ideas/b.ssz/tla/ of the ticket tree
@@ -64,17 +88,20 @@ Source
 
 Layout (the bee folder's relative layout)
   README.md               the design, the knobs, the run table, findings F1-F6
-  src/*.tla               current sources; B146R5Cx has b.w21 extensions;
+  src/*.tla               current sources; Phase5HookCx has b.y7g extensions;
+                          B146R5Cx has b.w21 extensions;
                           Hold36hCx retains the E2 eligibility overlay
   src/cfg/*.cfg           41 historical job cfgs at import; live directory
                           has 43 selections (41 historical + 2 E2 selections)
-  suite.tsv               run, model, expected verdict, budgets, what it shows
+  suite.tsv               historical run inventory, not a runner-format manifest
+  cfg/ps_*.cfg            nine b.y7g busy-pause configurations
+  pause-signal-suite.tsv   b.y7g runner-format manifest and expected properties
 
 Pins (sha256sum format, paths relative to spec/tla/codex/)
-7667705e21269fb0966d4ac2b25dfd445d71e34ed2be11c1088c28779a70d7b9  README.md
+06e7d556ebc8c83afb03e6c149dd5694c2e7913499feb45fa2a43e201a28bfef  README.md
 2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f  src/B146R5Cx.tla
 1e7e9eb804db872fe3f0c97b9f4626d15e70f3bee624cc0c3e8fa801d85e6109  src/Hold36hCx.tla
-87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  src/Phase5HookCx.tla
+7e4ab389e8bda66490c894ecb6880151bbe33e17801801bc51b9f4a058ed4efe  src/Phase5HookCx.tla
 4a45419b04df889e2011b7b348603dd6fe7a1244975b4342137f9a19c2afec91  src/cfg/hx_C_endnow.cfg
 34304dbf03f91751afe6e54fc9b18b07608a29d4e08be0618fc03f504bb09c90  src/cfg/hx_C_pause.cfg
 d3d2e6f59bdcfbd113659edbadf9e38a12845b761494b22ae83895733cda1975  src/cfg/hx_L.cfg
@@ -117,7 +144,15 @@ bf98ceff257a0f398f1e9551293abb817161dcabd2cce34d2d938f47125ccf06  src/cfg/rx_liv
 d7d5a4a0fb40f21b5c9783bd47845d4bf0933ea884aa78612dfb17de8ab31e54  src/cfg/rx_safe_k0.cfg
 f3501f3d6a9041e29c777a4e3cec5f820ae9797263c036880ba1c71bf658fc4f  src/cfg/rx_safe_rv.cfg
 14062974e077138f660663ede73d7a747e94a1493be39c147bbe3e33c0463f9e  suite.tsv
-
 49c1933d735137ed510da062e5915cdedb002766035da9c005f5ca66fc30a37f  src/cfg/rx_U_null_safe.cfg
-
 504f93805cd07cd7b38e23208a437173a98829fcca3b7c633e7b2d151f019e2a  src/cfg/rx_U_null_control.cfg
+24dd88939dd31165ad27d5ff580569aa7d90820549e28b700bdb9223160a1dce  cfg/ps_alien.cfg
+20fe90eaebf70e08e433114ae9e08f2dd068658c49ad8d235cc2ff9b57f29f83  cfg/ps_legacy.cfg
+9caca4cabbd65dd840c79e330316967cbb0fcb499d5b534402750da3b823a0ae  cfg/ps_live.cfg
+b13ede41c639ddd639407d853039952b08bb49cef4133c6071c3e745f5e691df  cfg/ps_pidonly.cfg
+2b82522bd95d7342761acc3652124f96785bc0e5a2e0cddd3656609dc071b322  cfg/ps_probe_missing.cfg
+de73aa1e4a0fda0939c90acbd80c6f0b317635912ebaea9cf7e31bcd52648068  cfg/ps_probe_replaced.cfg
+7876fdec7e2d0fcfb9d2725fa2df45d0f3035d39ebcd36c08d58c2477b667e1f  cfg/ps_probe_sent.cfg
+f5b0b88834f968cab75c0dcf4ed3bf77b95af9d8cd225ad4d3f86979ccfd4ef1  cfg/ps_red.cfg
+d069bdc5a7c97c9987700cb49574645e8793cbcaaad1e112c0cb43b0a34242a9  cfg/ps_safe.cfg
+19b7d3ecadcfc77c9773e8094b50569c644bb5b3d6b379753b729dad22527792  pause-signal-suite.tsv

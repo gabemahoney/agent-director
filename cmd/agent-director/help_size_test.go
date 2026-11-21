@@ -78,7 +78,9 @@ import "testing"
 // On 2026-11-13 b.kii E1 added force-delivery, get-force and get-delivery and
 // trimmed existing descriptions to make room rather than raise the baseline,
 // lowering it to 14660 (free downward step).
-const helpStdoutBytes = 14660
+// On 2026-11-21 b.y7g describes busy Codex signal pause while trimming the
+// end-report wording, lowering it to 14657 (free downward step).
+const helpStdoutBytes = 14657
 
 // helpHardCap is the user's hard cap on `agent-director help` stdout, in
 // bytes. Help stdout must stay at or under it, with no slack.

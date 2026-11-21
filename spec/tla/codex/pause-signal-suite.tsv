@@ -1,0 +1,10 @@
+# group	spec	cfg	cap_s	expect	tier	what	props
+signal-live	Phase5HookCx	ps_live	1800	pass	fast	busy signal and pause liveness without fair FM or SessionEnd	-
+signal-red	Phase5HookCx	ps_red	1800	violation	fast	b.y7g regression: a refused busy pause cannot stop the loop	BusyPauseResolves
+signal-live	Phase5HookCx	ps_legacy	1800	pass	fast	existing hx_P pause property with both new knobs off	-
+signal-safe	Phase5HookCx	ps_safe	1800	pass	fast	nested and teammate actors, lost reply, rotation, crash, reuse, HUP	-
+signal-safe	Phase5HookCx	ps_alien	1800	pass	fast	stray and leftover actors, PID reuse and launch rollover	-
+signal-safe	Phase5HookCx	ps_pidonly	1800	violation	fast	PID-only control signals another incarnation	SignalOnlyLaunch
+signal-probes	Phase5HookCx	ps_probe_sent	1800	violation	fast	keyless busy signal reachable	NotSignalSent
+signal-probes	Phase5HookCx	ps_probe_missing	1800	violation	fast	recovery can mark missing before pause finishes	NotSignalMissing
+signal-probes	Phase5HookCx	ps_probe_replaced	1800	violation	fast	new launch can race with an earlier captured pause	NotSignalReplaced

@@ -85,9 +85,10 @@ var ErrSendAcceptedForceFailed = errors.New("ErrSendAcceptedForceFailed")
 
 // ErrSpawnNotPausable is returned by the pause verb when the target
 // Spawn's state is not pausable (SRD §9). With only_if_waiting false (the
-// default), pausable means `waiting`; `pending` / `working` / `ask_user` /
-// `check_permission` all reject, and `ended` / `missing` are not errors —
-// they are no-op success, since the desired post-condition is already true.
+// default), uncovered waiting rows use exit keys; busy uncovered Codex
+// (working, ask_user, check_permission) uses identity-checked SIGTERM. Other
+// uncovered live states reject. ended/missing give no-op success. Busy
+// Codex gets NotPausableDetails when its signal shutdown cannot be verified.
 // A row whose current Launch is recorded covered is paused keylessly in any
 // live state (SR-6.4), and gets this error, with NotPausableDetails' cause,
 // when its resumable keyless shutdown cannot be established.
@@ -194,7 +195,7 @@ var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 
 // ErrSendKeysWhileRelayed is returned by send-keys, plain or a pane answer
-// (with a request token), and by pause, which is held as a plain send-keys
+// (with a request token), and by waiting uncovered pause, held as a plain send-keys
 // (b.zdz), while a relay hook of the Spawn may still answer its request
 // (b.146 rule 7): the relay owns that answer, and keys typed now would race
 // it. A relay hook may still answer while its process runs (judged by
@@ -207,7 +208,7 @@ var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 // closed with its Spawn) never holds.
 // A Cursor request proven gone at its turn's end is excluded from the
 // row-wide relay and fallback holds of send-keys without a request token and
-// pause. A pane answer naming that request still receives this error while
+// waiting uncovered pause. A pane answer naming that request still receives this error while
 // its delivery is not_confirmed; do not answer or decide a proven-gone request.
 //
 // For a row-wide refusal, its message names the request holding the guard —
@@ -236,7 +237,7 @@ var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 var ErrPaneChanged = errors.New("ErrPaneChanged")
 
 // ErrDialogMaybeOpen is returned by a plain send-keys (no request token)
-// without expect_pane_sha256, and by pause, which types `/exit` and Enter as
+// without expect_pane_sha256, and by waiting uncovered pause, which types `/exit` and Enter as
 // such a send-keys would (b.zdz), while a permission request of the Spawn
 // holds the dialog (PermissionRow.HoldsDialog): it is not proven gone (b.146
 // step 2c), so no hook of the agent has shown its dialog gone, the dialog may
@@ -258,8 +259,8 @@ var ErrPaneChanged = errors.New("ErrPaneChanged")
 // admitted it. The refusals for a relay hook that may still answer
 // (ErrSendKeysWhileRelayed) and a fallen-back request (ErrRelayFallenBack)
 // come first. A plain send-keys whose expect_pane_sha256 matches the pane as
-// captured now is not refused with it (a mismatch is ErrPaneChanged). Pause
-// takes no pane hash: a caller that has read the pane and answered any dialog
+// captured now is not refused with it (a mismatch is ErrPaneChanged). Waiting
+// uncovered Pause takes no pane hash: a caller that has read the pane and answered any dialog
 // on it types `/exit` with such a send-keys, or kills the Spawn. Nothing was
 // sent. Its err_details (DialogMaybeOpenDetails) give the oldest such request
 // with its delivery facts, pane_answer and unproven_since, the Spawn's state

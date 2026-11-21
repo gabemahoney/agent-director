@@ -22,6 +22,37 @@ import (
 // Another Launch or agent identity is ErrBusySendLaunchChanged; an absent row
 // is CondAbsent. The caller owns the applied move's find_missing tick.
 func (s *Store) MarkKeylessPauseEndedWithin(ctx context.Context, captured Spawn, launch BusySendPublishedLaunch, exit ProcessExit, maxWait time.Duration) (string, CondResult, error) {
+	return s.markPauseEndedWithin(ctx, captured, exit, maxWait, func(ctx context.Context, conn *sql.Conn, row Spawn) error {
+		p, err := readExaminedBusySendLaunch(ctx, conn, captured.InstanceID)
+		if err != nil {
+			return err
+		}
+		if launch.LaunchToken == "" || captured.Identity.Token != launch.LaunchToken ||
+			p.launch != launch.LaunchID || p.token != launch.LaunchToken || p.provider != launch.Provider ||
+			p.conversation != launch.ConversationID || p.launchCoverage != BusySendCovered {
+			return ErrBusySendLaunchChanged
+		}
+		return nil
+	})
+}
+
+// MarkSignalPauseEndedWithin records the deliberate end of an uncovered Codex
+// Launch after pause verified its agent's exit. It needs no SessionEnd report
+// or busy-send protocol. It shares keyless pause's atomic cleanup and permits
+// only a same-agent process-based missing mark to be corrected to ended.
+// Callers must use this bounded writer and emit the shared end outcome.
+func (s *Store) MarkSignalPauseEndedWithin(ctx context.Context, captured Spawn, exit ProcessExit, maxWait time.Duration) (string, CondResult, error) {
+	return s.markPauseEndedWithin(ctx, captured, exit, maxWait, func(_ context.Context, _ *sql.Conn, row Spawn) error {
+		if captured.Agent != AgentCodex || captured.BusySend != BusySendNotCovered || row.BusySend != BusySendNotCovered {
+			return ErrBusySendLaunchChanged
+		}
+		return nil
+	})
+}
+
+// markPauseEndedWithin keeps the end, process evidence and cleanup in one
+// bounded transaction. Each pause mechanism supplies its additional guard.
+func (s *Store) markPauseEndedWithin(ctx context.Context, captured Spawn, exit ProcessExit, maxWait time.Duration, guard func(context.Context, *sql.Conn, Spawn) error) (string, CondResult, error) {
 	// Bounded SQL can finish unwinding after a refused call returns. Keep
 	// callback results private until the transaction confirms completion.
 	var prior string
@@ -38,15 +69,11 @@ func (s *Store) MarkKeylessPauseEndedWithin(ctx context.Context, captured Spawn,
 		if err != nil {
 			return err
 		}
-		p, err := readExaminedBusySendLaunch(ctx, conn, captured.InstanceID)
-		if err != nil {
+		if err := guard(ctx, conn, row); err != nil {
 			return err
 		}
 		agent := keylessPauseAgent(row)
-		if launch.LaunchToken == "" || captured.Identity.Token != launch.LaunchToken ||
-			p.launch != launch.LaunchID || p.token != launch.LaunchToken || p.provider != launch.Provider ||
-			p.conversation != launch.ConversationID || p.launchCoverage != BusySendCovered ||
-			row.Identity.Token != launch.LaunchToken || row.LifeNumber != captured.LifeNumber ||
+		if row.Identity.Token != captured.Identity.Token || row.LifeNumber != captured.LifeNumber ||
 			row.Agent != captured.Agent || agent != capturedAgent {
 			return ErrBusySendLaunchChanged
 		}

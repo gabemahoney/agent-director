@@ -179,7 +179,10 @@ type EndedMover interface {
 // store's MarkEndedIfSameLifeFrom, or EndedMover.MarkEndedIfSameLife on a
 // store without it), guarded on examined. Find-missing's two
 // gone-process paths and pause (before its state rules and in each wait poll)
-// call it, so each emits the same records, in order:
+// call it, so each emits the same records, in order. Busy uncovered Codex
+// signal pause supplies signalPauseEnd instead: verified exit needs no end
+// report, and its bounded transaction guards the captured Launch while
+// refreshing the same Launch's snapshot (including process-based missing):
 //
 //  1. the move's transaction, which closes the row's permission requests and
 //     subagent records and, once it commits, writes each denied request's

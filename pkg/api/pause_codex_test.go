@@ -67,8 +67,8 @@ func pcxSeedRequests(t *testing.T, e *killEnv, id string, n int) []string {
 // TestPauseCodexExitedBeforePause: a Codex row in any live state whose agent has exited (its SessionEnd
 // recorded, its process gone) is moved to ended before the state rules, the relay guard and every tmux call:
 // success, zero tmux calls, no wait, SR-6.5's records and its requests closed denied ended. With no end
-// report today's rules apply: pending, working and check_permission are ErrSpawnNotPausable, and a waiting
-// row's keys find no session (ErrTmuxSendKeys).
+// report, busy Codex still ends after verified process exit (b.y7g); pending is
+// ErrSpawnNotPausable, and a waiting row's keys find no session (ErrTmuxSendKeys).
 func TestPauseCodexExitedBeforePause(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -80,10 +80,10 @@ func TestPauseCodexExitedBeforePause(t *testing.T) {
 	}{
 		{name: "pending", state: store.StatePending, noReport: "ErrSpawnNotPausable"},
 		{name: "waiting", state: store.StateWaiting, noReport: "ErrTmuxSendKeys"},
-		{name: "working", state: store.StateWorking, noReport: "ErrSpawnNotPausable"},
-		{name: "check_permission", state: store.StateCheckPermission, noReport: "ErrSpawnNotPausable"},
+		{name: "working", state: store.StateWorking},
+		{name: "check_permission", state: store.StateCheckPermission},
 		{name: "check_permission, relay on, an undecided relayed request", state: store.StateCheckPermission, relay: true,
-			requests: 1, noReport: "ErrSpawnNotPausable"},
+			requests: 1},
 	}
 	for _, tc := range cases {
 		for _, report := range []bool{true, false} {
@@ -109,7 +109,7 @@ func TestPauseCodexExitedBeforePause(t *testing.T) {
 				if e.store.stateReads != 0 {
 					t.Errorf("state reads = %d; want no wait", e.store.stateReads)
 				}
-				if !report {
+				if !report && tc.noReport != "" {
 					assertOneName(t, err, tc.noReport)
 					e.assertNothingSent(t)
 					e.assertRowUnchanged(t, r.ID, before)
@@ -142,7 +142,7 @@ func TestPauseCodexExitedBeforePause(t *testing.T) {
 func TestPauseCodexPreCheckLostRace(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
-	spec := codexSpec(store.StateWorking, agentGone, true)
+	spec := codexSpec(store.StatePending, agentGone, true)
 	r := e.seedRow(t, spec)
 	var mark int
 	e.store.beforeEnded = func() {
@@ -163,7 +163,7 @@ func TestPauseCodexPreCheckLostRace(t *testing.T) {
 	if e.store.endedTries != 1 {
 		t.Errorf("moves to ended attempted = %d; want 1", e.store.endedTries)
 	}
-	pauAssertState(t, e, r.ID, store.StateWorking)
+	pauAssertState(t, e, r.ID, store.StatePending)
 	assertNoTrailSince(t, mark, r.ID)
 	e.assertNoTmuxCall(t)
 }

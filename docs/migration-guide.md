@@ -823,10 +823,11 @@ of a row already `ended` or `missing` are proven gone (`agent_gone`) by
 the migration itself (phase 3 above), not later at its resume, so they
 never read unproven.
 
-`pause` is held as a plain `send-keys` without `--expect-pane-sha256` is,
+Waiting uncovered `pause` is held as a plain `send-keys` without `--expect-pane-sha256` is,
 so each request above that refuses such a `send-keys`, with
 `ErrRelayFallenBack` or `ErrDialogMaybeOpen`, refuses `pause` to its agent
-too. `pause` takes no pane hash, and a pane hash gets a plain `send-keys`
+too. [Busy Codex pause](caller-contract.md#keyless-pause-of-busy-uncovered-codex)
+bypasses these holds. Waiting `pause` takes no pane hash, and a pane hash gets a plain `send-keys`
 past `ErrDialogMaybeOpen` only, never past `ErrRelayFallenBack`. To stop
 such an agent, `kill` it, or have a person or an LLM `read-pane` and first
 close a fallen-back request (`record-pane-answer` as above, or a pane
