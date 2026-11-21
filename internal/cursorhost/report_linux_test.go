@@ -218,7 +218,7 @@ func cursorReportBarrier(event, phase string) bool {
 	if err := os.WriteFile(filepath.Join(dir, "entered"), []byte(event+"/"+phase), 0600); err != nil {
 		return false
 	}
-	until := time.Now().Add(4 * time.Second)
+	until := time.Now().Add(testWaitBudget(4 * time.Second))
 	for time.Now().Before(until) {
 		if _, err := os.Stat(filepath.Join(dir, "release")); err == nil {
 			return true

@@ -186,7 +186,7 @@ func TestCursorTurnEndRefusesQueuedAnswerWithoutFailingTransport(t *testing.T) {
 						return guard()
 					}
 					c.protocol.outgoing <- next
-				case <-time.After(time.Second):
+				case <-time.After(testWaitBudget(time.Second)):
 					t.Fatal("answer was not queued behind barrier")
 				}
 				done = observeQueuedRequest(t, c.protocol)
@@ -202,7 +202,7 @@ func TestCursorTurnEndRefusesQueuedAnswerWithoutFailingTransport(t *testing.T) {
 			release()
 			select {
 			case <-paused:
-			case <-time.After(4 * time.Second):
+			case <-time.After(testWaitBudget(4 * time.Second)):
 				t.Fatalf("turn's end not committed at %s", tc.at)
 			}
 			if !proved || proveErr != nil || (tc.at == "final guard" && guards != 2) {

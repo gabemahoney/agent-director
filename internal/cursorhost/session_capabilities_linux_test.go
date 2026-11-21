@@ -36,7 +36,7 @@ func TestCursorInitializeRefusesBeforeDependentWork(t *testing.T) {
 				} else {
 					c = beginCursorSessionWithOptions(t, Options{InitialPrompt: "never dispatch", RequestedMode: "plan"}, scenario, openTranscript, input.start)
 				}
-				err := c.awaitFailure(t, 3*time.Second)
+				err := c.awaitFailure(t, testWaitBudget(3*time.Second))
 				if strings.Contains(err.Error(), "SYNTHETIC-SECRET") || strings.ContainsAny(err.Error(), "\n\r\x1b") {
 					t.Fatalf("unsafe diagnostic: %q", err)
 				}
@@ -106,14 +106,13 @@ func TestCursorCorrelatedOperationFailureSanitized(t *testing.T) {
 			} else {
 				c = beginConfiguredCursorSession(t, options, scenario, openTranscript, terminalLoop, before)
 			}
-			failureWait := 3 * time.Second
+			failureWait := testWaitBudget(3 * time.Second)
 			if operation == "session/prompt" {
 				// b.ivj D1/D2: one correlated error ends the turn; a second
 				// consecutive error ends the session, with no prompt replay.
-				// b.dcj: race-instrumented report subprocesses need a larger
-				// local progress budget until the shared fixture is repaired.
-				// These waits measure liveness, not a product timing bound.
-				failureWait = 15 * time.Second
+				// Report subprocesses need a larger local progress budget;
+				// these waits measure liveness, not a product timing bound.
+				failureWait = testWaitBudget(15 * time.Second)
 				waitForProgress := func(label string, ready func() bool) {
 					t.Helper()
 					until := time.Now().Add(failureWait)
@@ -478,7 +477,7 @@ func TestCursorCorrelatedModeAdviceAuthority(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := beginCursorSessionWithOptions(t, Options{RequestedMode: "plan", InitialPrompt: "never admit"}, cursorfix.Scenario{Modes: advertisedCursorModes(), ModeReply: json.RawMessage(tc.reply)}, openTranscript, terminalLoop)
-			err := c.awaitFailure(t, 3*time.Second)
+			err := c.awaitFailure(t, testWaitBudget(3*time.Second))
 			if !strings.Contains(err.Error(), "session/set_mode failed:") || !strings.Contains(err.Error(), tc.cause) || strings.Contains(err.Error(), "SYNTHETIC-SECRET") {
 				t.Fatalf("wrong sanitized cause: %v", err)
 			}

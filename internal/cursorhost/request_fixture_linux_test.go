@@ -222,7 +222,7 @@ func nextRequestWake(t *testing.T, c *requestController) requestWake {
 	select {
 	case wake := <-c.events:
 		return wake
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("captured request timer/completion did not deliver its wake")
 		return requestWake{}
 	}
@@ -334,7 +334,7 @@ func observeQueuedRequest(t *testing.T, p *protocol, wrapIssue ...func(func() er
 			done <- err
 		}
 		p.outgoing <- next
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("request was not queued behind barrier")
 	}
 	return done
@@ -345,7 +345,7 @@ func requestCompletion(t *testing.T, done <-chan error) error {
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(4 * time.Second):
+	case <-time.After(testWaitBudget(4 * time.Second)):
 		t.Fatal("request completion missing")
 		return nil
 	}

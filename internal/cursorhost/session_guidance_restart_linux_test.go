@@ -83,7 +83,7 @@ func restartReply(t *testing.T, rpc *protocol, accepted bool) {
 
 func waitRestartFile(t *testing.T, path string) {
 	t.Helper()
-	until := time.Now().Add(time.Second)
+	until := time.Now().Add(testWaitBudget(time.Second))
 	for {
 		if _, err := os.Stat(path); err == nil {
 			return
@@ -111,7 +111,7 @@ func restartUsefulGet(t *testing.T, rpc *protocol, id string) {
 		if _, err := rpc.response(response.frame); err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testWaitBudget(2 * time.Second)):
 		t.Fatal("replacement tool did not complete")
 	}
 }

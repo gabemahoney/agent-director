@@ -444,7 +444,7 @@ func TestCursorExitStoresDeferredProofBeforeTermination(t *testing.T) {
 		if err != nil {
 			t.Fatalf("exit after the writer released: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("exit timed out after the writer released")
 	}
 	flushPaneProof(t, c.e.request(t, token))

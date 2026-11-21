@@ -76,7 +76,7 @@ func TestTerminalCleanupWakesBlockedDecoder(t *testing.T) {
 					if got != prefix {
 						t.Fatalf("actual partial read %q; want %q", got, prefix)
 					}
-				case <-time.After(3 * time.Second):
+				case <-time.After(testWaitBudget(3 * time.Second)):
 					t.Fatal("partial bytes never reached original decoder")
 				}
 				call = terminalPoll(t, polls)
@@ -122,7 +122,7 @@ func terminalPoll(t *testing.T, polls <-chan terminalPollCall) terminalPollCall 
 	select {
 	case call := <-polls:
 		return call
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWaitBudget(3 * time.Second)):
 		t.Fatal("original decoder did not enter poll")
 		return terminalPollCall{}
 	}
@@ -132,7 +132,7 @@ func terminalPoll(t *testing.T, polls <-chan terminalPollCall) terminalPollCall 
 // OS thread actually sleeping in Linux poll, with its return still unobserved.
 func awaitTerminalKernelPoll(t *testing.T, call terminalPollCall) {
 	t.Helper()
-	until := time.Now().Add(3 * time.Second)
+	until := time.Now().Add(testWaitBudget(3 * time.Second))
 	for {
 		select {
 		case <-call.returned:
@@ -271,7 +271,7 @@ func TestTerminalEscapeContinuationWaits(t *testing.T) {
 					if timeout != 80 {
 						t.Fatalf("each empty Escape continuation gets 80ms, got %d", timeout)
 					}
-				case <-time.After(3 * time.Second):
+				case <-time.After(testWaitBudget(3 * time.Second)):
 					t.Fatal("Escape continuation did not wait")
 				}
 				if chunk != "" {
@@ -439,7 +439,7 @@ func awaitTerminalSignal(t *testing.T, signal <-chan struct{}, label string) {
 	t.Helper()
 	select {
 	case <-signal:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWaitBudget(3 * time.Second)):
 		t.Fatal(label + ": timed out")
 	}
 }
@@ -466,7 +466,7 @@ func startTerminalCleanup(restore func(), completed <-chan struct{}) (string, <-
 // sync.Once contenders and output locks. The decoder remains held throughout.
 func awaitTerminalCleanupJoin(t *testing.T, caller string, returned <-chan bool) {
 	t.Helper()
-	until := time.Now().Add(3 * time.Second)
+	until := time.Now().Add(testWaitBudget(3 * time.Second))
 	stack := make([]byte, 1<<20)
 	for {
 		select {
@@ -497,7 +497,7 @@ func awaitTerminalCleanup(t *testing.T, returned <-chan bool) {
 		if !completed {
 			t.Fatal("cleanup returned before held operation completed")
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWaitBudget(3 * time.Second)):
 		t.Fatal("terminal cleanup timed out")
 	}
 }
@@ -550,7 +550,7 @@ func TestTerminalChannelDeliveryCleanup(t *testing.T) {
 			}
 			// A runtime stack observes the actual adapter's blocked select, not
 			// merely a notification just before it might start delivering.
-			until := time.Now().Add(3 * time.Second)
+			until := time.Now().Add(testWaitBudget(3 * time.Second))
 			for {
 				stack := make([]byte, 1<<20)
 				n := runtime.Stack(stack, true)
@@ -622,7 +622,7 @@ func terminalEvent(t *testing.T, events <-chan terminalInput) terminalInput {
 	select {
 	case e := <-events:
 		return e
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("terminal submission unavailable")
 		return terminalInput{}
 	}

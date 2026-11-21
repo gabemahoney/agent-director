@@ -45,7 +45,7 @@ func TestCursorRunReturnsTerminalToOwner(t *testing.T) {
 	var slave *os.File
 	select {
 	case slave = <-ready:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWaitBudget(3 * time.Second)):
 		t.Fatal("real terminal reader did not start")
 	}
 	c.wait(t, "confirmed ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
@@ -455,7 +455,7 @@ func TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss(t *testing.T) {
 					t.Fatal("lost authority reported success")
 				}
 				t.Logf("honest failure: %v", err)
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				t.Fatal("authority loss did not stop session")
 			}
 			raw, err := os.ReadFile(c.e.runtime.Raw)
@@ -506,7 +506,7 @@ func TestCursorProtocolQueuedUnwrittenPromptRetiresBeforeBytes(t *testing.T) {
 		if err != errPromptRetired {
 			t.Fatalf("prewrite retirement became uncertain delivery: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("queued prompt not retired")
 	}
 	if err := completedWrite(t, p); err != nil {
@@ -573,7 +573,7 @@ func TestCursorPromptRetiredAtFinalWriteGuardRemainsKnownUnwritten(t *testing.T)
 	}
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("final write guard not reached")
 	}
 	retired.Store(true)
@@ -587,7 +587,7 @@ func TestCursorPromptRetiredAtFinalWriteGuardRemainsKnownUnwritten(t *testing.T)
 		if err != errPromptRetired {
 			t.Errorf("zero-byte prewrite retirement must remain known unwritten, got %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("final guard did not retire prompt")
 	}
 	if err := p.notify("session/cancel", map[string]string{"sessionId": "synthetic"}); err != nil {
@@ -639,7 +639,7 @@ func TestCursorPromptRetiredDuringDurableIssueRemainsKnownUnwritten(t *testing.T
 			var result error
 			select {
 			case result = <-done:
-			case <-time.After(3 * time.Second):
+			case <-time.After(testWaitBudget(3 * time.Second)):
 				t.Fatal("issue did not return")
 			}
 			if len(wire.bytes()) != 0 {
@@ -700,12 +700,12 @@ func TestCursorBlockedPaneRenderingCannotDelayCancellation(t *testing.T) {
 	c.keys(t, "blocked-pane")
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("pane boundary did not block")
 	}
 	// More than the finite rendering buffer's entries; input remains consumable.
 	c.keys(t, strings.Repeat("x", 100)+"\rqueued-after-render-pressure\r\x03")
-	until := time.Now().Add(time.Second)
+	until := time.Now().Add(testWaitBudget(time.Second))
 	for {
 		cancelled := 0
 		for _, r := range c.records(t) {
@@ -783,7 +783,7 @@ func TestCursorRepeatedExitPathKeepsOneTermination(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				t.Fatal("exit did not terminate")
 			}
 			controls := 0

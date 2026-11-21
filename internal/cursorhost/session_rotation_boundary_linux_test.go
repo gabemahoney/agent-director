@@ -130,7 +130,7 @@ func TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority(t *testing.T)
 			}
 			rotationRelease(t, c.e.runtime.NewRelease)
 			if traffic != "known old" {
-				err := c.awaitFailure(t, 5*time.Second)
+				err := c.awaitFailure(t, testWaitBudget(5*time.Second))
 				t.Logf("fail-closed traffic: %v", err)
 				return
 			}
@@ -343,7 +343,7 @@ func TestCursorRotationExitInterruptAndEligiblePausePreemptPhases(t *testing.T) 
 					if control == "exit" {
 						select {
 						case <-exitConsumed:
-						case <-time.After(time.Second):
+						case <-time.After(testWaitBudget(time.Second)):
 							t.Fatal("exit not consumed")
 						}
 					}
@@ -363,7 +363,7 @@ func TestCursorRotationExitInterruptAndEligiblePausePreemptPhases(t *testing.T) 
 					if control == "interrupt" && err == nil {
 						t.Error("rotation interruption silently resumed")
 					}
-				case <-time.After(5 * time.Second):
+				case <-time.After(testWaitBudget(5 * time.Second)):
 					t.Fatal("control did not terminate gateway")
 				}
 				rotationNoBytes(t, c, "preempt-held")
@@ -412,7 +412,7 @@ func TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld(t *testing.T)
 			c.keys(t, "sync-failed-held\r")
 			c.wait(t, "held", func() bool { return rotationRecordCount(c, t, "input_held") == 1 })
 			rotationRelease(t, c.e.runtime.NewRelease)
-			err := c.awaitFailure(t, 5*time.Second)
+			err := c.awaitFailure(t, testWaitBudget(5*time.Second))
 			expectedFailure := "persistence"
 			if writeFailure {
 				expectedFailure = "write failed"
@@ -534,7 +534,9 @@ func TestCursorRotationRetiresPermissionPlanCallbacksAndChoices(t *testing.T) {
 	c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{permission, plan}, CompleteBeforeAnswers: true, WaitForRelease: true})
 	c.keys(t, "old-request-turn\r")
 	c.wait(t, "two genuine pending requests", func() bool { return rotationRecordCount(c, t, "authorization_admitted") == 2 })
-	oldKeys := regexp.MustCompile(`\[([^]]+)\] Allow once`).FindAllSubmatch(c.pane.bytes(), -1)
+	choice := regexp.MustCompile(`\[([^]]+)\] Allow once`)
+	c.wait(t, "old genuine choice rendered", func() bool { return choice.Match(c.pane.bytes()) })
+	oldKeys := choice.FindAllSubmatch(c.pane.bytes(), -1)
 	if len(oldKeys) != 1 {
 		t.Fatalf("missing old genuine choice: %s", c.pane.bytes())
 	}
@@ -591,7 +593,9 @@ func TestCursorRotationRetiresPermissionPlanCallbacksAndChoices(t *testing.T) {
 	}
 	barrier.unblock()
 	c.wait(t, "current genuine request", func() bool { return rotationRecordCount(c, t, "authorization_admitted") == 3 })
-	keys := regexp.MustCompile(`\[([^]]+)\] Allow once`).FindAllSubmatch(c.pane.bytes(), -1)
+	// b.dcj: admission is recorded before the current choice reaches the pane.
+	c.wait(t, "current genuine choice rendered", func() bool { return len(choice.FindAllSubmatch(c.pane.bytes(), -1)) >= 2 })
+	keys := choice.FindAllSubmatch(c.pane.bytes(), -1)
 	if len(keys) != 2 || string(keys[1][1]) == oldKey {
 		t.Fatalf("retired key reused for current: %v", keys)
 	}

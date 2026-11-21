@@ -63,7 +63,7 @@ func TestCursorSavedProfileNeverStartsRuntime(t *testing.T) {
 				if err == nil || strings.Contains(err.Error(), "synthetic-private-secret") {
 					t.Fatalf("refusal=%v", err)
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(testWaitBudget(3 * time.Second)):
 				t.Fatal("saved profile refusal unbounded")
 			}
 			if _, err := os.Stat(c.e.runtime.PID); !os.IsNotExist(err) {

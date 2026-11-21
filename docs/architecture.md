@@ -1283,6 +1283,14 @@ persistence changes extend the single `internal/cursorhost`
 controller/recorder; do not create parallel pipes, a second input owner,
 screen classification or another transcript format.
 
+### cursorhost progress waits (reusable test helper)
+
+Test-side progress waits in `internal/cursorhost` MUST reuse `testWaitBudget`
+in `timing_fixture_test.go`. It preserves the supplied duration in ordinary
+builds and multiplies it by ten under `-race`; `cursorSession.wait` applies it
+internally. Never apply it to product deadlines or configuration values,
+asserted timing bounds, or negative waits that check something does not happen.
+
 ### cursorfix: synthetic ACP runtime (reusable test fixture)
 
 Process lifecycle tests MUST reuse `cursorfix.TraceLifecycle(t)` for real Linux

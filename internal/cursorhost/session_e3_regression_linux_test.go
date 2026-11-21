@@ -74,7 +74,7 @@ func TestCursorE3ToolUpdateBeforePlanAdmission(t *testing.T) {
 			c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: c.e.binding.SessionID, BeforeRequests: []json.RawMessage{update}, Requests: []json.RawMessage{mustE3JSON(t, frame{JSONRPC: "2.0", ID: plan.ID, Method: plan.Method, Params: plan.Params})}})
 			c.keys(t, "scripted\r")
 			if tc.refused {
-				err := c.awaitFailure(t, 3*time.Second)
+				err := c.awaitFailure(t, testWaitBudget(3*time.Second))
 				if tc.session == "foreign-session" && !strings.Contains(err.Error(), "event session mismatch") {
 					t.Errorf("foreign attribution gate changed: %v", err)
 				}
@@ -176,7 +176,7 @@ func TestCursorE3FatalRunClosesMissing(t *testing.T) {
 				c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: c.e.binding.SessionID, Requests: []json.RawMessage{permission, e3Update(t, c.e.binding.SessionID, "agent_message_chunk", json.RawMessage(`[]`))}})
 			}
 			c.keys(t, mode+"\r")
-			err := c.awaitFailure(t, 3*time.Second)
+			err := c.awaitFailure(t, testWaitBudget(3*time.Second))
 			t.Logf("fatal Run returned: %v", err)
 			b, e := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)
 			if e != nil {
@@ -276,7 +276,7 @@ func TestCursorE3PublicReadsReconcileKilledGateway(t *testing.T) {
 				if err = json.Unmarshal([]byte(line), &receipt); err != nil {
 					t.Fatalf("invalid gateway receipt %q: %v", line, err)
 				}
-			case <-time.After(8 * time.Second):
+			case <-time.After(testWaitBudget(8 * time.Second)):
 				t.Fatalf("gateway readiness budget exceeded: %s", stderr.String())
 			}
 			st, err := store.Open(receipt.DB)

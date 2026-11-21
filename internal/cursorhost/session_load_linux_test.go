@@ -64,7 +64,7 @@ func beginCursorLoadWithOptions(t *testing.T, scenario cursorfix.Scenario, optio
 			master.Write([]byte("\x15/exit\r"))
 			select {
 			case <-c.done:
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				t.Error("load cleanup timed out")
 			}
 		}
@@ -251,7 +251,7 @@ func TestCursorLoadFailureNeverCreatesFresh(t *testing.T) {
 				if err == nil {
 					t.Fatal("invalid load succeeded")
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(testWaitBudget(3 * time.Second)):
 				t.Fatal("load refusal unbounded")
 			}
 			for _, f := range c.e.runtime.Frames(t) {
@@ -546,7 +546,7 @@ func awaitLoadPublicationWriter(t *testing.T, ready <-chan *loadPublicationWrite
 			t.Fatal("load was published before writer boundary")
 		}
 		return w
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWaitBudget(3 * time.Second)):
 		t.Fatal("validated load did not reach publication boundary")
 		return nil
 	}
@@ -670,7 +670,7 @@ func TestCursorLoadPublicationRejectsReplacementWhileWriterHeld(t *testing.T) {
 			if _, err := w.conn.ExecContext(context.Background(), "COMMIT"); err != nil {
 				t.Fatal(err)
 			}
-			c.awaitFailure(t, 3*time.Second)
+			c.awaitFailure(t, testWaitBudget(3*time.Second))
 			c.assertLoadUnpublished(t, input, w.prefix)
 			reader, err := store.Open(c.e.path)
 			if err != nil {
@@ -712,7 +712,7 @@ func TestCursorLoadUnsupportedReplayAuthorizationFailsClosed(t *testing.T) {
 		if err == nil {
 			t.Fatal("unsupported replay authorization succeeded")
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWaitBudget(3 * time.Second)):
 		t.Fatal("replay authorization was unbounded")
 	}
 	for _, f := range c.e.runtime.Frames(t) {

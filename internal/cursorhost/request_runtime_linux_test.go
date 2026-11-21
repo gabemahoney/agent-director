@@ -109,7 +109,7 @@ func TestCursorRuntimeWaitsForIndependentPlanAndPermission(t *testing.T) {
 	if err = completedWrite(t, p); err != nil {
 		t.Fatal(err)
 	}
-	until := time.After(time.Second)
+	until := time.After(testWaitBudget(time.Second))
 	for {
 		select {
 		case f := <-p.frames:
@@ -154,12 +154,12 @@ func TestCursorSessionDirectQuestionDoesNotCancelGenuineRequest(t *testing.T) {
 			slave.Close()
 			select {
 			case <-done:
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				t.Error("session cleanup did not finish")
 			}
 		}
 	})
-	until := time.Now().Add(4 * time.Second)
+	until := time.Now().Add(testWaitBudget(4 * time.Second))
 	var key string
 	keyPattern := regexp.MustCompile(`\[([^]]+)\] Allow once`)
 	for time.Now().Before(until) {
@@ -195,7 +195,7 @@ func TestCursorSessionDirectQuestionDoesNotCancelGenuineRequest(t *testing.T) {
 	if _, err = master.Write([]byte(key)); err != nil {
 		t.Fatal(err)
 	}
-	until = time.Now().Add(3 * time.Second)
+	until = time.Now().Add(testWaitBudget(3 * time.Second))
 	for time.Now().Before(until) {
 		if bytes.Contains(pane.bytes(), []byte("Synthetic reply: scripted")) {
 			break
@@ -214,7 +214,7 @@ func TestCursorSessionDirectQuestionDoesNotCancelGenuineRequest(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("session did not exit")
 	}
 }
@@ -305,12 +305,12 @@ func TestCursorPublicWaitingPromptAdmission(t *testing.T) {
 					if err != nil {
 						t.Errorf("Run exit: %v; pane %s", err, pane.bytes())
 					}
-				case <-time.After(5 * time.Second):
+				case <-time.After(testWaitBudget(5 * time.Second)):
 					slave.Close()
 					t.Error("Run cleanup timed out")
 				}
 			})
-			until := time.Now().Add(3 * time.Second)
+			until := time.Now().Add(testWaitBudget(3 * time.Second))
 			for {
 				if _, err := os.Stat(filepath.Join(dir, "entered")); err == nil {
 					break
@@ -350,7 +350,7 @@ func TestCursorPublicWaitingPromptAdmission(t *testing.T) {
 			}
 			select {
 			case <-consumed:
-			case <-time.After(time.Second):
+			case <-time.After(testWaitBudget(time.Second)):
 				t.Fatal("terminal reader did not consume submitted Enter before hook release")
 			}
 			// Restore authority only after consumption: a refused Enter must never
@@ -370,7 +370,7 @@ func TestCursorPublicWaitingPromptAdmission(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.second {
-				until = time.Now().Add(3 * time.Second)
+				until = time.Now().Add(testWaitBudget(3 * time.Second))
 				for {
 					if _, err := os.Stat(filepath.Join(secondDir, "entered")); err == nil {
 						break
@@ -385,14 +385,14 @@ func TestCursorPublicWaitingPromptAdmission(t *testing.T) {
 				}
 				select {
 				case <-secondConsumed:
-				case <-time.After(time.Second):
+				case <-time.After(testWaitBudget(time.Second)):
 					t.Fatal("second Enter not consumed before first turn completes")
 				}
 				if err := os.WriteFile(filepath.Join(secondDir, "release"), nil, 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			until = time.Now().Add(2 * time.Second)
+			until = time.Now().Add(testWaitBudget(2 * time.Second))
 			for {
 				frames := e.runtime.Frames(t)
 				prompts, typed := 0, false
@@ -422,7 +422,7 @@ func TestCursorPublicWaitingPromptAdmission(t *testing.T) {
 					t.Fatalf("Run ended: %v; pane %s", err, pane.bytes())
 				}
 				ended = true
-			case <-time.After(3 * time.Second):
+			case <-time.After(testWaitBudget(3 * time.Second)):
 				t.Fatal("Run did not process queued submission and exit")
 			}
 			frames := e.runtime.Frames(t)

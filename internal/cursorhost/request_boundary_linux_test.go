@@ -776,11 +776,24 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 				timer := time.AfterFunc(holdFor, unhold)
 				defer timer.Stop()
 			}
-			if tc.loss == "cancel" {
-				cancelTimer := time.AfterFunc(40*time.Millisecond, c.cancel)
-				defer cancelTimer.Stop()
-			}
 			releaseWriter()
+			if tc.loss == "cancel" {
+				select {
+				case <-guardEntered:
+				case <-time.After(transportWriteWait + time.Second):
+					t.Fatal("cancel guard did not enter")
+				}
+				// b.dcj: cancel on the controller's owning goroutine at the same 40 ms loss point.
+				cancelTimer := time.NewTimer(time.Until(started.Add(40 * time.Millisecond)))
+				defer cancelTimer.Stop()
+				<-cancelTimer.C
+				select {
+				case <-releaseStore:
+					t.Fatal("store holder released before cancellation")
+				default:
+				}
+				c.cancel()
+			}
 			if tc.loss == "runtime death" {
 				var guardEntry time.Time
 				select {

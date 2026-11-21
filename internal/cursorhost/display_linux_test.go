@@ -38,7 +38,7 @@ func TestPaneDisplayReportsLossWithoutAnotherProducer(t *testing.T) {
 				write("blocked;")
 				select {
 				case <-entered:
-				case <-time.After(time.Second):
+				case <-time.After(testWaitBudget(time.Second)):
 					t.Fatal("consumer did not reach blocked output")
 				}
 				// Fill the bounded queue while its sole consumer is held, then make
@@ -53,7 +53,7 @@ func TestPaneDisplayReportsLossWithoutAnotherProducer(t *testing.T) {
 			}
 			select {
 			case <-warned:
-			case <-time.After(time.Second):
+			case <-time.After(testWaitBudget(time.Second)):
 				t.Fatal("pending rendering loss was not reported without another producer Write")
 			}
 			// Stop must drain accepted frames and finish the consumer, including
@@ -61,7 +61,7 @@ func TestPaneDisplayReportsLossWithoutAnotherProducer(t *testing.T) {
 			stop()
 			select {
 			case <-d.done:
-			case <-time.After(time.Second):
+			case <-time.After(testWaitBudget(time.Second)):
 				t.Fatal("display did not finish draining")
 			}
 			raw := string(out.bytes())
