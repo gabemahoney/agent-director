@@ -38,6 +38,15 @@ Subagent session events do not change the main session.
 State reads apply the configured [settle time](configuration.md#settle-time-state).
 `ended` is visible immediately.
 
+### Store waits can lose hook reports
+
+`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop` and the idle-prompt
+`Notification` can still be killed by a long store wait before they record
+their result. Their deadlines are not guaranteed. For recovery and the
+lost-turn-end exception, see the
+[caller contract](caller-contract.md#lost-end-of-turn-reports).
+[Maintenance](maintenance.md#scheduling-the-sweeps) covers scheduling recovery.
+
 ### The idle-prompt Notification
 
 Claude Code normally sends `idle_prompt` about 60 s after the main turn ends.
