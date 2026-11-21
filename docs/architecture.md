@@ -3836,12 +3836,13 @@ still the one it read, so it knows the row has not changed since. As built:
     what it closed in request-id order and
     emits nothing; the caller emits once its transaction commits, through
     `closedRequest.emitDeny` (one `ad.row_mutation.committed` per denied
-    request, with the caller's writer). Its four callers run it in the
+    request, with the caller's writer). Its callers run it in the
     transaction of the write that ends the asking agent's launch:
     `MarkMissingIfSameLife` (reason `find_missing`, writer `find_missing`),
     `MarkEndedIfSameLife` (reason `ended`, writer `find_missing`), the
-    hook's ended transition (reason `ended`, writer `hook`) and
-    `MoveToPending` (reason `ended`, writer `resume`). (Reuse's reset
+    hook's ended transition (reason `ended`, writer `hook`),
+    `MoveToPending` (reason `ended`, writer `resume`), and the bounded
+    pause terminal writer ([signal pause](#busy-uncovered-codex-pause)). (Reuse's reset
     deletes the row's requests instead.) A new write that ends a row's
     launch and keeps its requests closes them through it, never with
     statements of its own. The ended write, the mark and the Codex move pass the same `at` to
@@ -4086,15 +4087,15 @@ still the one it read, so it knows the row has not changed since. As built:
     `CondChanged` with nothing written. On apply it closes the row's
     requests with reason `ended` (an undecided one denied, a decided one
     keeping its verdict, every one proven `agent_gone`) and its subagent
-    records at the one `storeNowMillis` instant, the fifth write that closes
+    records at the one `storeNowMillis` instant, one of the writes that closes
     subagent records (see [The liveness close of subagent entries](#the-liveness-close-of-subagent-entries)),
     and after the commit emits per request `ad.row_mutation.committed`
     (writer `find_missing`) and `permission_orphan_closeout` ticks. It
     emits no `ad.spawn.state_transition` and no tick for the move itself:
-    the caller emits the row's tick. **Must use:** every move of a Codex row
-    to `ended` in response to its agent's end goes through this one write,
-    from `markEndedSameLife` (the outcome writer the shared active checks
-    and `pause` share, below); nothing else makes that move. The other
+    the caller emits the row's tick. **Must use:** Codex end-report recovery
+    uses this write through `markEndedSameLife`. Busy Codex signal pause uses
+    that same outcome writer with the bounded terminal adapter described in
+    [busy uncovered Codex pause](#busy-uncovered-codex-pause). The other
     writes of `ended` (a plain spawn ending its own row when its create found the name held,
     the restores after a failed resume or reuse) are outside this rule.
   - `SetLivenessNoteIfSameLife(instanceID, examined, note)`: overwrites
@@ -6373,8 +6374,9 @@ Codex tool hooks write `working`; its `Stop` or `Interrupt` writes `waiting`.
 Codex SessionEnd is an end report without a terminal transition; a
 [shared active check](#shared-active-checks) on a state read or
 `find-missing`, or `pause`, turns a gone process with that report into
-`ended`. Gone processes without that report, or tmux-only absence, are
-marked `missing`. The detailed agent classifier and end-report sections
+`ended`. Recovery marks gone processes without that report, or tmux-only
+absence, `missing`. [Busy uncovered Codex pause](#busy-uncovered-codex-pause)
+records a verified deliberate exit as `ended` without an end report. The detailed agent classifier and end-report sections
 above own these differences.
 
 A Spawn's lifecycle is tracked in the `state` column of `spawns`. Every
@@ -7850,7 +7852,7 @@ the raw history did not hold (`NeverUnsupported`).
 
 **Guards act on the live state.** The settle time is a reporting layer
 only. The raw `state` stays what every guard reads: `send-keys`' and
-`pause`'s state and relay guards (`pause` runs `send-keys`' `relayGuard`,
+`pause`'s state and relay guards (waiting uncovered `pause` runs `send-keys`' `relayGuard`,
 b.zdz; the `state` in either verb's `ErrRelayFallenBack` and
 `ErrDialogMaybeOpen` `err_details` included), `decide` (its
 `ErrRelayFallenBack` `err_details.state` included), `find-missing`'s
@@ -11849,7 +11851,7 @@ token share the launch's writer lock, and launches with native state also
 share its journal.
 Manual sends can also return `ErrSubmissionUnconfirmed` with
 `not_started` when writer ownership or durable manual intent is unavailable.
-`pause` returns `ErrInternal` for those failures before attempting input. No
+Waiting uncovered `pause` returns `ErrInternal` for those failures before attempting input. No
 missing evidence causes a text, Enter or editing-key retry. Caller handling
 is in [Ordinary text submission](caller-contract.md#ordinary-text-submission).
 Cursor sends with Enter also check the [gateway verdict](#cursor-gateway-verdict),
@@ -11994,7 +11996,7 @@ A pane answer must name an open fallen-back request without another sender's
 pending answer. Valid agent-specific proof releases the dialog hold;
 acknowledgement or a pane claim does not. No screen classification supplies
 these facts. A pane answer repeats the guard under the store's write lock;
-`pause` uses it as a plain call without a hash. The public relay guard is
+Waiting uncovered `pause` uses it as a plain call without a hash. The public relay guard is
 skipped for relay-off rows; Cursor's native controller still checks request
 identity, lifetime and arbitration. See [Cursor authorization](#cursor-authorization-dataflow-and-authority)
 and the relay chapter's pane-answer and dialog-hold contracts.
@@ -16533,6 +16535,10 @@ close of a Spawn's requests" under [`internal/store`](#internalstore)):
   the row's requests and subagent records close with it. Its writer is
   `find_missing` even when a state read or `pause` makes the write: the
   writer names the write, not the verb.
+- **Signal pause's deliberate end** (`MarkSignalPauseEndedWithin`), reason
+  `ended`, uses the shared terminal transaction in `markPauseEndedWithin`;
+  see [busy uncovered Codex pause](#busy-uncovered-codex-pause). It closes
+  requests and subagent records without needing an end report.
 - **Resume's move to `pending`** (`MoveToPending`), reason `ended`, writer
   `resume`: a backstop for a request left open on a row that finished
   before the ended close existed (or by any path that missed it).
@@ -16550,7 +16556,7 @@ supplies no awaiting-answer hold on working transitions or repair. Its
 independent dialog hold and visibility in `get.unproven_requests` follow
 [The dialog hold](#the-dialog-hold-step-2c).
 
-The same four writes, and reuse's reset, also close the row's running
+These writes, and reuse's reset, also close the row's running
 subagent entries and claimable launches in that transaction (see
 [The liveness close of subagent entries](#the-liveness-close-of-subagent-entries)).
 
@@ -16566,17 +16572,19 @@ agent-neutral: it reads no payload and names no agent. The tables are under
 hook writes that fill them under [Subagent capture](#subagent-capture); this
 passage is only the close.
 
-**The five writes.** Each calls the one shared step
+**The closing writes.** Each calls the one shared step
 `closeSubagentsAgentGone(q, instanceID, at)` (`internal/store/subagents.go`),
 inside its own `BEGIN IMMEDIATE` transaction and only once its row write
 applied. Family history is refreshed after the close and before commit:
 
 - the terminal SessionEnd's move to `ended` (`applyEndedTransition`);
 - shared recovery's mark (`MarkMissingIfSameLife`);
-- the Codex move to `ended` (`MarkEndedIfSameLife`), made by a shared active
-  check or `pause`;
+- Codex end-report recovery (`MarkEndedIfSameLife`), made by a shared active
+  check or pause's end-report check;
 - resume's move to `pending` (`MoveToPending`);
-- reuse's reset (`ResetForReuse`).
+- reuse's reset (`ResetForReuse`);
+- bounded pause completion (`markPauseEndedWithin`), shared by covered and
+  [busy uncovered Codex pause](#busy-uncovered-codex-pause).
 
 **What it writes.** One UPDATE turns every `running` entry of the row, records
 and observations of every launch and life, `lost` with `close_reason`
@@ -16590,7 +16598,8 @@ liveness and not an entry event, and it emits no trail record.
 **The instants.** `at` is a positive integer of milliseconds; a non-positive
 one is refused with nothing written and no clock fallback.
 
-- The ended write, the mark and the Codex move: the store's clock, read once
+- The ended write, the mark, Codex end-report recovery and bounded pause
+  completion: the store's clock, read once
   (`storeNowMillis`, millisecond precision) inside the transaction after the
   write applied, and shared with the request close (`closeOrphanedRequests`),
   so an entry's `lost_at` equals its row's requests' `closed_at`.
@@ -16633,8 +16642,8 @@ entry changes nothing. A stop of a `lost` entry of the current launch, or a
 **Must use:** `closeSubagentsAgentGone` is the one step that closes entries and
 deletes claimable launches for liveness. Every write that ends a row or begins
 a new launch calls it inside its own transaction after the write applied, with
-the instant above (the ended write, the mark and the Codex move
-`MarkEndedIfSameLife` share the request close's `storeNowMillis` read); no other SQL closes an entry for liveness, and a new write
+the instant above, shared with the request close where applicable; no other
+SQL closes an entry for liveness, and a new write
 of that kind uses it, never an `UPDATE subagents` or a
 `DELETE FROM subagent_launches` of its own.
 
@@ -16824,7 +16833,7 @@ docs/engineering-guide.md).
   whose requests are all proven, has no rule 3 dialog hold
   (`NeverHeldNoRequest`); rules 1 and 2 can still hold a proven request. On
   `ad.send_keys.called` the refusal reads `guard_evaluation` `held` with
-  outcome `ErrDialogMaybeOpen` (`errorName`). `pause`, which types
+  outcome `ErrDialogMaybeOpen` (`errorName`). Waiting uncovered `pause`, which types
   `/exit` and Enter as a plain call without a hash would, runs the same
   guard (`relayGuard` with `SendKeysParams{}`) and is held too, with no
   bypass, since it takes no hash (b.zdz; see [`pause`](#pause)); it
@@ -17681,7 +17690,7 @@ the send failing with the store's error. On `ad.send_keys.called`,
 `guard_evaluation` is `held` for any refusal above and `released` when
 rule 7 let the call through.
 
-**`pause` (b.zdz).** `pause` types `C-u`, `/exit` and Enter, which a
+**`pause` (b.zdz).** Waiting uncovered `pause` types `C-u`, `/exit` and Enter, which a
 plain `send-keys` without `expect_pane_sha256` would type, so on a
 `waiting` row it calls `relayGuard` (`relayGuardStore`: the request read
 and the `hook_gone_at` write, which `SendKeysStore` and `PauseStore` both
@@ -18032,7 +18041,7 @@ process exit). Eligible rows are ordered `decided_at ASC`; the oldest decided
 rows are removed first. A request agent-director's own records read
 closed (acked, answered at the pane, recorded with `record-pane-answer`)
 but that no hook has proven gone can still have its dialog on the pane
-and holds plain `send-keys` and `pause` to its Spawn (`ErrDialogMaybeOpen`, see "The
+and holds plain `send-keys` and waiting uncovered `pause` to its Spawn (`ErrDialogMaybeOpen`, see "The
 dialog hold"); deleting it would end that hold with no proof (b.kxu), so
 it is kept until it is proven or its Spawn finishes. Exempt: for each spawn with a
 request that still awaits an answer, its newest request
@@ -18080,7 +18089,7 @@ must use them, never free-form strings:
 | `operator` | `deny` | `Decide` verb (orchestrator deny; an allow records no reason) |
 | `timeout` | `deny` | the relay hook's `DenyRelayTimeout` or gateway `AckCursorDecision` timeout deny, recording its own `delivered_at` |
 | `find_missing` | `deny` | shared recovery's mark (`MarkMissingIfSameLife`), which denies the marked row's undecided open requests in the mark's own transaction (`closeOrphanedRequests`) |
-| `ended` | `deny` | the terminal SessionEnd's move to `ended` (`applyEndedTransition`) and resume's move to `pending` (`MoveToPending`), which deny the row's undecided open requests in their own transaction (`closeOrphanedRequests`), and the Codex move to `ended` by a shared active check or `pause` (`MarkEndedIfSameLife`), which does the same on a Codex row whose process is gone and that holds an end report |
+| `ended` | `deny` | the terminal SessionEnd (`applyEndedTransition`), resume (`MoveToPending`), Codex end-report recovery (`MarkEndedIfSameLife`), and bounded pause (`MarkKeylessPauseEndedWithin`; [signal writer](#busy-uncovered-codex-pause): `MarkSignalPauseEndedWithin`); each closes undecided open requests in its own transaction (`closeOrphanedRequests`) |
 | `pane` | `allow` or `deny` | `RecordPaneSent` for a public `send-keys` claim, or `ClaimCursorPaneAnswer` for a native Cursor choice (including a matching sent claim) |
 | `pane_outside` | `allow`, `deny` or NULL | `record-pane-answer` (`RecordPaneOutside`): the caller's claim, NULL for `unknown` |
 | `tool_ran` | `allow` or a preserved earlier verdict | validated Cursor execution via `CommitCursorProof` (`Ran=true`), filling a missing reason while preserving an earlier decision; `CloseToolRanRequests` writes it too, but matches no Claude or Codex request (b.wbs) |
@@ -19664,7 +19673,7 @@ answers:
 | Process evidence (`ProcState`) | Outcome |
 | --- | --- |
 | Alive with its recorded start time (`ProcAlive`) | The row stays live whatever tmux shows. A `pending` row whose pane is recorded (or was just adopted) stays `pending` and is noted `unreported`, unless it is already noted `unreported` or `provenance_conflict` (b.kdf; see "The `unreported` note of a live `pending` row" below). On any other row a liveness note it carries is cleared; a row with no note is not written. No tmux call. |
-| Gone: absent, a zombie, or alive with another start time (`ProcGone`) | Marked `missing` with tick reason `proc_absent`, whatever tmux shows, with no tmux call, its open permission requests denied and its running subagent entries closed in the same transaction. A Codex row that holds an end report is moved to `ended` instead, on the same terms (see "The Codex move to `ended`" below). A pane kept by `remain-on-exit` or a respawned pane never keeps the row live. |
+| Gone: absent, a zombie, or alive with another start time (`ProcGone`) | Marked `missing` with tick reason `proc_absent`, whatever tmux shows, with no tmux call, its open permission requests denied and its running subagent entries closed in the same transaction. A Codex row that holds an end report is moved to `ended` instead, on the same terms (see "Codex end-report recovery" below). A pane kept by `remain-on-exit` or a respawned pane never keeps the row live. |
 | Unknown: unreadable, or a pid-only identity that reads alive (`ProcUnknown`) | Decided by the tmux lookup of the row's socket (see [`find-missing`](#find-missing), "The tmux path"), unless its recorded session name cannot be used: then it is left unverified with a note of its own and no tmux call (see "Unusable recorded name" under [`find-missing`](#find-missing)). A pid-only identity that reads gone is marked like any gone process. |
 | Absent: no process identity recorded (`ProcNone`) | Decided by the tmux lookup, as unknown, with the same unusable-name exception. |
 
@@ -19785,13 +19794,13 @@ plus the adoption write before it.
 
 Trail writes are fail-open: a failed one never changes the sweep's result.
 
-**The Codex move to `ended` (SR-6.5; `goneRow`, `markEndedSameLife`).** A
-Codex row's agent that ends reports it (the `SessionEnd` hook records
-`end_reported_at`, and the row's state stays as it was; see [The
-agent-aware hook classifier](#the-agent-aware-hook-classifier)). Nothing
-else tells the row its agent is gone, so a
-[shared active check](#shared-active-checks) (state read or `find-missing`)
-and `pause` make the move once the process is proven gone:
+**Codex end-report recovery (SR-6.5; `goneRow`, `markEndedSameLife`).**
+A Codex `SessionEnd` records `end_reported_at` without changing row state
+(see [The agent-aware hook classifier](#the-agent-aware-hook-classifier)).
+A [shared active check](#shared-active-checks) (state read or `find-missing`)
+or pause's end-report check completes that recovery once the process is proven
+gone. [Busy uncovered Codex pause](#busy-uncovered-codex-pause) instead records
+a deliberate signal exit without an end report. The recovery path is:
 
 - **The rule.** A live Codex row whose agent process is judged `ProcGone`
   and that holds an end report is moved to `ended` in place of `missing`,
@@ -19811,9 +19820,10 @@ and `pause` make the move once the process is proven gone:
   `ad.find_missing.tick` with `prior_state` the state replaced, `new_state`
   `ended`, `reconciliation_reason` `proc_absent` and source selected by
   [Shared active checks](#shared-active-checks). It takes the narrow `EndedMover` interface, which
-  `FindMissingStore` and `PauseStore` both embed, so the verbs make the one
-  write and no other. It makes no tmux call and writes no
-  `ad.spawn.state_transition`.
+  `FindMissingStore` and `PauseStore` both embed. End-report recovery uses
+  `MarkEndedIfSameLife`; [signal pause](#busy-uncovered-codex-pause) adapts the
+  same outcome writer to its bounded terminal transaction. Neither path makes
+  a tmux call or writes `ad.spawn.state_transition`.
 - **The result lists.** The row remains in `checks`, but is in
   neither `ids` nor `count`, nor `unverified_ids`, since it is settled and
   not marked missing. The adopted-pane path keeps its
@@ -19822,9 +19832,10 @@ and `pause` make the move once the process is proven gone:
 - **Writes `ended`, not `missing`, on purpose.** The agent reported the end
   of its session, so the row's last state is the truth; the mark's `missing`
   says the end is unknown. The end report stays set on the row.
-- **Pause's use.** `pause` makes the same move (see [`pause`](#pause), "The
-  Codex end check"): the verb that sends `/exit` is the one a caller waits on, and
-  a stale `waiting` row left by a Codex `/exit` would time it out.
+- **Pause's use.** The waiting Codex `/exit` path uses this end-report
+  recovery before keys and during its wait, so a stale row does not time out
+  after exit. [Busy signal pause](#busy-uncovered-codex-pause) has its own
+  bounded completion without an end report.
 
 **The `unreported` note of a live `pending` row (b.kdf, b.146 rule 10).**
 A `pending` row whose agent runs past the pending grace period has had no
@@ -20218,7 +20229,7 @@ not finish within its bound (nothing was checked), and keeps
 | File | Holds | Must use |
 | --- | --- | --- |
 | `find_missing_lookup.go` | `lookupRow` (SR-11.3's table), `oursRow`, `adoptedPaneRow`, `lookupMarkRow`, `emitRowNameHeld`, `notCalledNote` (each row's `tmux.Launch` comes from the shared `rowLaunch`, `lookup_outcome.go`). | The one mapping from a sweep row's lookup to its mark or note; a sweep never decides a row from a `tmux.Result` another way. |
-| `find_missing_writes.go` | The per-row outcome writers, shared by the process path and the tmux path: `markMissingSameLife` (the pinned marking order: guarded `MarkMissingIfSameLife`, whose transaction also closes the row's open permission requests and running subagent entries, then one `ad.find_missing.tick` with any extra fields the tmux path passes), `markEndedSameLife` (the Codex end: guarded `MarkEndedIfSameLife` through `EndedMover`, whose transaction makes the same closes, then one `ad.find_missing.tick` with `new_state` `ended`, the reason and extra fields the caller passes; not in `ids` or `unverified_ids`; shared by the sweep's two gone-process paths, `goneRow`, and by `pause`), `writeLivenessNote` (skips a note equal to the one read; the guarded `SetLivenessNoteIfSameLife`; the SR-11.4 tick rule in `noteTickReason`, emitted by `emitNoteTick`), `clearLivenessNote` (no write for a row with no note; the guarded `ClearLivenessIfSameLife`, no tick) and `writeUnreportedNote` (b.kdf: no write for a row already noted `unreported`; the guarded `NoteUnreportedIfSameLife`; the same tick rule through `emitNoteTick`; not in `ids` or `unverified_ids`; its caller `aliveRow` never passes a row noted `provenance_conflict`). Each takes the snapshot to guard on (the read one, or the adoption's) and returns a `findMissingWrite`; a changed, absent or failed write ticks nothing and adds to neither list. All selected rows remain in `checks`; store errors are logged through `logFindMissing`. | The only way a sweep marks, notes or clears a row: every mark, Codex move, note write, clear and `unreported` note (process or tmux evidence, adopted or not) goes through these five writers; a Codex row's move to `ended` is made only by `markEndedSameLife`, for a row whose process is proven gone and that holds an end report; never call the guarded store writes, write a tick or deny permission requests for a sweep row another way. |
+| `find_missing_writes.go` | The per-row outcome writers, shared by the process path and the tmux path: `markMissingSameLife` (the pinned marking order: guarded `MarkMissingIfSameLife`, whose transaction also closes the row's open permission requests and running subagent entries, then one `ad.find_missing.tick` with any extra fields the tmux path passes), `markEndedSameLife` (end-report recovery: guarded `MarkEndedIfSameLife` through `EndedMover`, whose transaction makes the same closes, then one `ad.find_missing.tick` with `new_state` `ended`, the reason and extra fields the caller passes; not in `ids` or `unverified_ids`; shared by the sweep's two gone-process paths, `goneRow`, and by pause's end-report check; [signal pause](#busy-uncovered-codex-pause) supplies its bounded adapter), `writeLivenessNote` (skips a note equal to the one read; the guarded `SetLivenessNoteIfSameLife`; the SR-11.4 tick rule in `noteTickReason`, emitted by `emitNoteTick`), `clearLivenessNote` (no write for a row with no note; the guarded `ClearLivenessIfSameLife`, no tick) and `writeUnreportedNote` (b.kdf: no write for a row already noted `unreported`; the guarded `NoteUnreportedIfSameLife`; the same tick rule through `emitNoteTick`; not in `ids` or `unverified_ids`; its caller `aliveRow` never passes a row noted `provenance_conflict`). Each takes the snapshot to guard on (the read one, or the adoption's) and returns a `findMissingWrite`; a changed, absent or failed write ticks nothing and adds to neither list. All selected rows remain in `checks`; store errors are logged through `logFindMissing`. | The only way a sweep marks, notes or clears a row: every mark, Codex move, note write, clear and `unreported` note (process or tmux evidence, adopted or not) goes through these five writers; a sweep's Codex end-report recovery uses `markEndedSameLife` only after proven process exit and an end report; never call the guarded store writes, write a tick or deny permission requests for a sweep row another way. |
 | `sweep_socket.go` | `sweepSockets.forRow(recorded)`: the socket a sweep row's calls use, the caller's resolved at most once per run for rows that record none, creating nothing; a refused resolution gives tmux unavailable, then not called. It implements SR-3.3's socket rule for a sweep (a recorded socket exactly as recorded; none recorded: the caller's socket, resolved as tmux would through `rowSocket` / `spawn.ResolveQuerySocket`, creating nothing, LFR H1), with SR-3.15's stop after a refusal. | The shared no-socket helper: every sweep (`find-missing`, and `expire` for each row that reaches its lookup) takes a row's socket from one `sweepSockets` per run; never resolve a sweep row's socket another way. |
 
 `missing` is a check's judgement on available evidence, not
@@ -21786,7 +21797,7 @@ agent-facing `kill` never takes that path.
 ### `pause`
 
 `pkg/api/pause.go` holds the flow (`Pause`, unexported `pauseRun` and
-`waitEnded`); its relay guard is `send-keys`' `relayGuard`
+`waitEnded`); its waiting uncovered relay guard is `send-keys`' `relayGuard`
 (`pkg/api/sendkeys.go`), and its tmux phase the keys verbs' shared
 `keysRun` (`pkg/api/pane_keys.go`), the same one `send-keys` uses (SRD
 SR-7.1 to SR-7.3). `pause` polls for the ended state; `kill` also polls
@@ -21798,7 +21809,10 @@ for process exit and `decide` for relay delivery or legacy settlement:
    nothing ended; covered → conditional [keyless pause](#keyless-pause).
    **A covered row** (`Spawn.BusySend` `covered`) gets
    [keyless pause](#keyless-pause) instead of every rule below.
-   **The Codex end check** (`endIfGone`), before every rule below. A Codex
+   **Busy uncovered Codex** (`not_covered`, `working`, `check_permission` or
+   `ask_user`) takes [signal pause](#busy-uncovered-codex-pause) before the
+   end-report check, sharing the original call budget even with an end report.
+   **The remaining Codex end check** (`endIfGone`), before every rule below. A Codex
    row in a live state (`pending` included) that holds an end report, whose
    agent process the start-time reader judges `ProcGone` (the process
    `find-missing` selects, judged by its start time; no tmux), is moved to
@@ -21813,8 +21827,9 @@ for process exit and `decide` for relay delivery or legacy settlement:
    session is gone, or `ErrPauseTimeout`).
 2. **Finished row** (`ended` / `missing`) → no-op success, no tmux call,
    no wait.
-3. **Every other live state but `waiting`** (`pending`, `working`,
-   `ask_user`, `check_permission`) → `ErrSpawnNotPausable`, no tmux call.
+3. **Remaining live states but `waiting`** (`pending`, or another uncovered
+   agent's `working`, `ask_user`, `check_permission`) → `ErrSpawnNotPausable`,
+   no tmux call.
    `/exit` is never typed in these states, where the slash would be read
    as input text.
 4. **`waiting` row: the relay guard (b.zdz).**
@@ -21938,8 +21953,8 @@ at the pane. Neither agent's main-agent `Stop` (or Codex `Interrupt`)
 proves a subagent's request, allowed or denied: on a Claude row it holds
 `pause` until that subagent's `SubagentStop` (b.wbs), and on a Codex row,
 or for a Claude subagent that sends none, until the agent-specific close;
-Codex's move to `ended` requires its verified process gone and its end
-report recorded. A
+Codex's end-report path requires its verified process gone and its end
+report recorded; [busy signal pause](#busy-uncovered-codex-pause) needs no report. A
 caller that has read the pane and answered any dialog on it types
 `/exit` itself with a `send-keys` whose `expect_pane_sha256` is the pane
 it judged, which the hold lets through, or ends the Spawn with `kill`
@@ -21954,9 +21969,9 @@ cap, carries only the way past `ErrDialogMaybeOpen`).
 
 An uncovered Claude `pause` never writes the row's state. Its store writes include
 adoption, the relay guard's `hook_gone_at` (on an `ErrRelayFallenBack` refusal)
-and input-journal records. A Codex `pause` may also write the move to `ended` (step 1
+and input-journal records. A waiting Codex `pause` may also write the move to `ended` (step 1
 and the wait's check), through the one guarded write and its records (see
-"The Codex move to `ended`" under [Degraded-mode reconciliation + cron
+"Codex end-report recovery" under [Degraded-mode reconciliation + cron
 user](#degraded-mode-reconciliation--cron-user)): the move's
 `ad.find_missing.tick` and, per denied request,
 `ad.row_mutation.committed` with writer `find_missing`. It adds no call
@@ -21984,7 +21999,7 @@ with them as a prompt. `pause` sends `C-u` as a key, never as typed text,
 through the keys verbs' line clear (`keysRun.clear`); `send-keys` sends
 none.
 
-**The Codex line clear.** A Codex composer's `C-u` clears one line and a
+**The Codex line clear (waiting rows).** A Codex composer's `C-u` clears one line and a
 second press removes the newline before it, so an N-line draft needs 2N-1
 presses. On a Codex row the line clear sends `C-u` `codexLineClearPresses`
 (127) times in one call, `send-keys -t <pane id> -N 127 C-u`
@@ -22032,8 +22047,9 @@ seam or the row has no launch token. Every other row checks caller cancellation
 `signal_sent: false`), before another store call, signal or write. Initial
 connection contention or the query's lock wait can delay this refusal past
 `pause.timeout_seconds`. Subsequent shutdown store waits and exit polls use
-the original budget's remaining time. Uncovered pause retains its existing
-first-read behavior and full post-input wait.
+the original budget's remaining time. Busy uncovered Codex shares this budget;
+waiting uncovered pause retains its existing first-read behavior and full
+post-input wait.
 The remaining covered shutdown is:
 
 1. The captured Launch: `GetBusySendPublishedLaunchWithin` must return the
@@ -22074,7 +22090,8 @@ The remaining covered shutdown is:
    `launch_changed`; an owned process still running at the deadline, or any
    unverifiable process or route at once, gives the judgement's cause.
 5. `Store.MarkKeylessPauseEndedWithin` records immediate `ended`, retaining
-   `session_id`, with process evidence and the shared terminal cleanup. Keyless
+   `session_id`, with process evidence and the shared terminal cleanup through
+   `markPauseEndedWithin` (`internal/store/pause_keyless.go`). Keyless
    completion must use this bounded writer. Under its write lock it rechecks
    the captured Launch, life and agent identity against the current row and
    published Launch, then updates the fresh snapshot. Agent comparison uses
@@ -22104,6 +22121,35 @@ apply); callers act on
 [Keyless pause of a Covered
 Agent](caller-contract.md#keyless-pause-of-a-covered-agent). It signals no
 process but the captured agent and never returns `ErrPauseTimeout`.
+
+#### Busy uncovered Codex pause
+
+`pauseRun.signalPause` (`pkg/api/pause_signal.go`) reuses `agentProcess`,
+`tmux.JudgeProcess`, `pauseTerminate`/`probe.TerminateIdentity`, `signalOutcome`,
+`awaitAgentExit` and `keylessBudget`. It re-reads the row with
+`GetSpawnContext` and checks launch token, life, agent kind, uncovered coverage
+and selected process identity before signalling. A gone process needs no
+signal. It sends no keys and uses no relay guard, input session, tmux call,
+covered Launch protocol or pause claim.
+
+After verified exit, `signalPauseEnd` adapts `markEndedSameLife`/`provenExit`
+to `Store.MarkSignalPauseEndedWithin`. **Must use:** deliberate signal-pause
+completion goes through this bounded writer and the shared end outcome;
+never duplicate terminal cleanup or depend on Codex SessionEnd (Codex sends
+none on SIGTERM). The writer shares `markPauseEndedWithin` with covered pause:
+under one write lock it checks the captured launch and agent against the fresh
+row, records `ended`, retains `session_id`, records process evidence and closes
+requests and subagents and refreshes family and display state atomically. Same-agent
+process-based `missing` is corrected to `ended`; other missing causes and an
+already-ended row stay unchanged. A replacement launch is refused and untouched.
+The shared outcome emits the applied move's recovery tick after commit.
+
+All phases use the remaining original budget, including final `established`.
+Refusals are `ErrSpawnNotPausable` with `NotPausableDetails` (`cause`,
+`signal_sent`): `agent_process_unverifiable`, `signal_unsupported`,
+`signal_uncertain`, `exit_uncertain`, `launch_changed` or `budget_exhausted`;
+never `ErrPauseTimeout`. Waiting/pending Codex and `only_if_waiting` keep their
+existing dispatch; this path does not broaden covered shutdown or other agents.
 
 #### Pause claims
 
@@ -24349,9 +24395,9 @@ kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) include:
   and table, keyed on the id through the bookkeeping table). It also matches
   the cap evictions, a delete of the id's `spawns` row while it still has
   entries or claimable launches (through the foreign keys' cascade: `delete`'s
-  and `expire`'s), the liveness close of the five closing writes (Claude's ended
-  write, `MarkMissingIfSameLife`, the Codex `MarkEndedIfSameLife` used by
-  the shared active checks and `pause`, resume's move and reuse's reset; see
+  and `expire`'s), the liveness close of the closing writes (Claude's ended
+  write, `MarkMissingIfSameLife`, Codex end-report recovery, bounded pause
+  completion, resume's move and reuse's reset; see
   [The liveness close of subagent entries](#the-liveness-close-of-subagent-entries): its UPDATE of a running
   entry and its DELETE of a claimable launch, each trigger firing per affected
   row, so a close fails only when the row has a running entry or a claimable
@@ -28112,6 +28158,13 @@ each file's doc comments carry the detail.
   `api.SetBusySendExitNamespaceForTest` replaces the exit judgement's
   pid-namespace reader; without it a seeded process that records a namespace
   is unverifiable. **Must use** for `pkg/api` tests of keyless pause.
+  Busy uncovered Codex tests reuse `kpEnv` through `newUncoveredPauseEnv`
+  (`pause_uncovered_signal_test.go`), with uncovered coverage, a session id,
+  the same signal/clock/poll hooks and no covered Messages. Reuse
+  `seedUncoveredPauseRelay` for an open live-hook request and
+  `assertUncoveredPauseNoInput` for no tmux or journal writes.
+  `pause_signal_test.go` reuses `kpHookedStore` at the row reads and
+  `signalEndHookStore` after the bounded end write for budget races.
 - **Covered lifecycle helpers** (`busy_send_lifecycle_test.go`), on the kill
   fixture: `e.busyIssue(t, r, helper)` claims a covered row's Held Messages
   at turn end and issues the first prompt through the coordinator's store
@@ -28934,7 +28987,8 @@ and Enter, with `pause`'s `C-u` line clear before its text).
 A `read-pane` or `send-keys` test seeds the row's own labelled session
 into the table first (`runHelper("seed-row-session", ...)`, with
 `capture` for the text `read-pane` must return); without it the lookup is
-Gone. The `pause` smoke cases cover a finished row, a refused state and
+Gone. The `pause` smoke cases cover a finished row, pending refusal,
+busy Codex verified end without keys, and
 the relay hold (b.zdz: `ErrRelayFallenBack`, then `ErrDialogMaybeOpen`
 after `recordPaneAnswer`), none of which makes a tmux call from `pause`;
 the hold case seeds the row's session (`seedFallenBackRelayRow`) for the

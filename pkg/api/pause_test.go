@@ -72,7 +72,14 @@ func TestPauseGuards(t *testing.T) {
 	for _, rowAgent := range []string{"codex", "cursor"} {
 		t.Run(rowAgent, func(t *testing.T) {
 			seeded := func(state string) func(t *testing.T, e *killEnv) killRow {
-				return func(t *testing.T, e *killEnv) killRow { return e.seedRow(t, killRowSpec{State: state}) }
+				return func(t *testing.T, e *killEnv) killRow {
+					spec := killRowSpec{State: state}
+					if rowAgent == store.AgentCodex && (state == store.StateWorking || state == store.StateAskUser || state == store.StateCheckPermission) {
+						// b.y7g: busy Codex now reaches the process guard.
+						spec.Agent = agentUnreadable
+					}
+					return e.seedRow(t, spec)
+				}
 			}
 			cases := []struct {
 				name    string
@@ -106,6 +113,11 @@ func TestPauseGuards(t *testing.T) {
 						t.Fatalf("err = %v; want the no-op success", err)
 					} else if tc.want != "" {
 						assertOneName(t, err, tc.want)
+					}
+					if rowAgent == store.AgentCodex && (tc.name == "working" || tc.name == "ask_user" || tc.name == "check_permission") {
+						if got := jsonOf(t, api.ErrDetails(err)); got != `{"cause":"agent_process_unverifiable","signal_sent":false}` {
+							t.Errorf("err_details = %s; want signal pause's process refusal", got)
+						}
 					}
 					e.assertNoTmuxCall(t)
 					e.assertRowUnchanged(t, r.ID, before)
@@ -324,7 +336,7 @@ func TestPauseTrailNoCallEvent(t *testing.T) {
 		{name: "ended row", seed: sktRow(killRowSpec{State: store.StateEnded, NoSession: true}), outcome: "ok", noLookup: true},
 		{name: "missing row", seed: sktRow(killRowSpec{State: store.StateMissing, NoSession: true}), outcome: "ok", noLookup: true},
 		{name: "pending row", seed: sktRow(killRowSpec{State: store.StatePending}), outcome: "ErrSpawnNotPausable", noLookup: true},
-		{name: "working row", seed: sktRow(killRowSpec{State: store.StateWorking}), outcome: "ErrSpawnNotPausable", noLookup: true},
+		{name: "working row, unverifiable process", seed: sktRow(killRowSpec{State: store.StateWorking, Agent: agentUnreadable}), outcome: "ErrSpawnNotPausable", noLookup: true},
 		{name: "unusable socket directory", seed: ptrUnusableSocket, outcome: "ErrTmuxNotAvailable", noLookup: true,
 			ownTmux: true},
 		{name: "ours, row ends", seed: sktRow(killRowSpec{}, ptrEnds), outcome: "ok"},

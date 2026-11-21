@@ -77,13 +77,23 @@ Codex         == FALSE
 CxEndNow      == FALSE
 PauseOn       == FALSE
 PauseSeesGone == FALSE
+\* b.y7g: optional busy-state refinement and identity-checked, keyless pause.
+BusyPauseOn   == FALSE
+PauseSignalOn == FALSE
 
 VARIABLES row, procs, panes, sess, clock, life, faults, rowViol, killViol, seen,
           pw,   \* b.ssz: pause's wait: "none", or "wait" (/exit typed, waiting for ended)
           ce    \* b.ssz ghost (PauseOn only): the current launch's agent sent its exit
                 \* SessionEnd through the gate
 
-vars == <<row, procs, panes, sess, clock, life, faults, rowViol, killViol, seen, pw, ce>>
+VARIABLES activity, signal, signalViol, keysViol
+NoSignal == [phase |-> "none", tok |-> 0, pid |-> 0, start |-> 0]
+Busy == activity \in {"working", "permission"}
+SignalTarget(p) == p.pid = signal.pid /\ p.st = signal.start /\ p.lau = signal.tok
+Signalled(p) == signal.phase = "sent" /\ SignalTarget(p)
+
+basevars == <<row, procs, panes, sess, clock, life, faults, rowViol, killViol, seen, pw, ce>>
+vars == <<basevars, activity, signal, signalViol, keysViol>>
 
 OldTok == 99                                   \* a leftover's label: an earlier life's token
 \* idw: the launch's identity write is outstanding; rp: the create reply it will write
@@ -96,6 +106,8 @@ Init == /\ row = NoRow /\ procs = {} /\ panes = {} /\ sess = {}
         /\ clock = 0 /\ life = 0 /\ faults = 0
         /\ rowViol = FALSE /\ killViol = FALSE /\ seen = {}
         /\ pw = "none" /\ ce = FALSE
+        /\ activity = "waiting" /\ signal = NoSignal
+        /\ signalViol = FALSE /\ keysViol = FALSE
 
 Note(c, t) == seen' = IF Probes /\ c THEN seen \cup {t} ELSE seen
 Can        == clock < MaxClock
@@ -176,6 +188,7 @@ HookAct(p) ==
 \* gate it records the end report and leaves the state (CxEndNow: ends the row, the control).
 EndKinds == IF Codex THEN BOOLEAN ELSE {TRUE}
 HookEnd(p) ==
+  /\ (~BusyPauseOn \/ ~Busy) /\ ~Signalled(p)
   /\ p.started /\ ~p.ended /\ ~p.ssw /\ row.st # "none"
   /\ \E ex \in EndKinds :
        /\ procs' = (procs \ {p}) \cup {[p EXCEPT !.ended = ex]}
@@ -265,7 +278,7 @@ Leftover ==
 \* A pane main's exit closes its pane (remain-on-exit is off).
 Exit ==
   \E p \in procs :
-    /\ p.ended \/ AllowCrash \/ p.lau = 0
+    /\ p.ended \/ AllowCrash \/ p.lau = 0 \/ Signalled(p)
     /\ LET PNs == {x.pn : x \in {y \in panes : y.main = p.pid /\ y.mst = p.st}}
            P2  == {q \in procs \ {p} : q.pn \notin PNs}
                   \cup {[q EXCEPT !.pn = 0] : q \in {r \in procs \ {p} : r.pn \in PNs /\ r.hup}}
@@ -334,6 +347,7 @@ FM ==
 \* SessionEnd the agent may go on firing ordinary hooks in the old session (real Codex
 \* fires none before the next prompt's SessionStart); er then stays set (README, F2).
 PauseSend ==
+  /\ ~BusyPauseOn \/ ~Busy
   /\ PauseOn /\ pw = "none" /\ row.st = "live" /\ row.pn # 0
   /\ pw' = "wait"
   /\ UNCHANGED <<row, procs, panes, sess, clock, life, faults, rowViol, killViol, seen, ce>>
@@ -355,20 +369,83 @@ PauseWait ==
         /\ UNCHANGED <<row, seen>>
   /\ UNCHANGED <<procs, panes, sess, clock, life, faults, rowViol, killViol, ce>>
 
-Next == \/ \E p \in procs : HookFire(p) \/ HookStartRun(p) \/ HookAct(p) \/ HookEnd(p) \/ Rotate(p)
+BaseNext == \/ \E p \in procs : HookFire(p) \/ HookStartRun(p) \/ HookAct(p) \/ HookEnd(p) \/ Rotate(p)
         \/ Launch \/ RecordIdentity \/ IdentityLate \/ Nested \/ Teammate \/ Stray \/ Leftover \/ Exit
         \/ Adopt \/ Kill \/ FM
         \/ PauseSend \/ PauseWait
+\* b.y7g: split the old live abstraction only when BusyPauseOn is enabled.
+\* BusyLoop can keep alternating working and an open dialog without SessionEnd.
+BusyStep ==
+  /\ BusyPauseOn /\ row.st = "live" /\ AgentAlive
+  /\ activity = "waiting"
+  /\ activity' \in {"working", "permission"}
+  /\ UNCHANGED <<row, procs, panes, sess, clock, life, faults, rowViol, killViol,
+                  seen, pw, ce, signal, signalViol, keysViol>>
+BusyLoop ==
+  /\ BusyPauseOn /\ row.st = "live" /\ AgentAlive /\ Busy
+  /\ activity' = IF activity = "working" THEN "permission" ELSE "working"
+  /\ UNCHANGED <<row, procs, panes, sess, clock, life, faults, rowViol, killViol,
+                  seen, pw, ce, signal, signalViol, keysViol>>
+\* Capture, delivery, Exit and the terminal write are separate steps: recovery,
+\* launch reuse and PID reuse may race between them. No key state changes here.
+PauseSignalRead ==
+  /\ BusyPauseOn /\ PauseOn /\ Codex /\ row.st = "live" /\ Busy
+  /\ row.pn # 0 /\ row.pst # 0 /\ AgentAlive
+  /\ signal.phase = "none"
+  /\ signal' = [phase |-> "read", tok |-> row.tok, pid |-> row.ppid, start |-> row.pst]
+  /\ UNCHANGED <<row, procs, panes, sess, clock, life, faults, rowViol, killViol,
+                  seen, pw, ce, activity, signalViol, keysViol>>
+\* PID-only is the unsafe negative control, overridden only in its cfg.
+SignalPIDOnly(p) == TRUE
+SignalIdentityOK(p) == row.tok = signal.tok /\ p.st = signal.start /\ p.lau = signal.tok
+PauseSignalDeliver ==
+  /\ signal.phase = "read"
+  /\ IF PauseSignalOn /\ row.st = "live" /\
+        \E p \in procs : p.pid = signal.pid /\ SignalIdentityOK(p)
+     THEN /\ signal' = [signal EXCEPT !.phase = "sent"]
+          /\ signalViol' = (signalViol \/
+               (\E p \in procs : p.pid = signal.pid /\
+                  (~SignalTarget(p) \/ row.tok # signal.tok)))
+     ELSE /\ signal' = IF PauseSignalOn /\ row.tok = signal.tok /\
+                         ~\E p \in procs : SignalTarget(p)
+                       THEN [signal EXCEPT !.phase = "wait"] ELSE NoSignal
+          /\ UNCHANGED signalViol
+  /\ UNCHANGED <<row, procs, panes, sess, clock, life, faults, rowViol, killViol,
+                  seen, pw, ce, activity, keysViol>>
+PauseSignalWait ==
+  /\ signal.phase \in {"sent", "wait"}
+  /\ ~\E p \in procs : SignalTarget(p)
+  /\ signal' = NoSignal
+  \* b.y7g correction: process-based recovery of this captured launch may win
+  \* the race to missing; deliberate pause still finishes it as ended (b.nqq).
+  \* Initial terminal rows never enter PauseSignalRead; a changed token is left alone.
+  /\ row' = IF row.tok = signal.tok /\ row.st \in {"live", "missing"}
+            THEN [row EXCEPT !.st = "ended"] ELSE row
+  /\ UNCHANGED <<procs, panes, sess, clock, life, faults, rowViol, killViol,
+                  seen, pw, ce, activity, signalViol, keysViol>>
+Next == \/ /\ BaseNext
+           /\ activity' = IF BusyPauseOn /\ row.tok # row'.tok THEN "waiting" ELSE activity
+           /\ keysViol' = (keysViol \/ (Busy /\ pw = "none" /\ pw' = "wait"))
+           /\ UNCHANGED <<signal, signalViol>>
+        \/ BusyStep \/ BusyLoop \/ PauseSignalRead \/ PauseSignalDeliver \/ PauseSignalWait
+SignalExit == Next /\ (\E p \in procs : Signalled(p))
+                   /\ ~\E p \in procs' : SignalTarget(p)
 Spec     == Init /\ [][Next]_vars
 \* a running hook finishes; a launch's identity write completes or fails. HookFire and
 \* HookAct stay unfair (an agent may sit at a prompt, or idle).
-FairSpec == Spec /\ WF_vars(FM) /\ WF_vars(Adopt) /\ WF_vars(RecordIdentity)
-                 /\ WF_vars(\E p \in procs : HookStartRun(p))
+\* Old actions specify basevars; Next supplies their added observer fields.
+FairSpec == Spec /\ WF_basevars(FM) /\ WF_basevars(Adopt) /\ WF_basevars(RecordIdentity)
+                 /\ WF_basevars(\E p \in procs : HookStartRun(p))
 \* b.ssz: FairSpec plus pause's wait polling.
-FairSpecP == FairSpec /\ WF_vars(PauseWait)
+FairSpecP == FairSpec /\ WF_basevars(PauseWait)
 \* b.ssz: pause's own wait, with find-missing not scheduled during it (FM unfair).
-PauseSpec == Spec /\ WF_vars(Adopt) /\ WF_vars(RecordIdentity)
-                  /\ WF_vars(\E p \in procs : HookStartRun(p)) /\ WF_vars(PauseWait)
+PauseSpec == Spec /\ WF_basevars(Adopt) /\ WF_basevars(RecordIdentity)
+                  /\ WF_basevars(\E p \in procs : HookStartRun(p)) /\ WF_basevars(PauseWait)
+
+\* Only delivered SIGTERM is assumed to cause Exit (the step-0 evidence).
+\* Ordinary HookEnd/Exit, callers choosing pause, and FM remain unfair.
+PauseSignalSpec == PauseSpec /\ WF_vars(PauseSignalDeliver)
+                             /\ WF_vars(PauseSignalWait) /\ WF_vars(SignalExit)
 
 -----------------------------------------------------------------------------
 (* Properties *)
@@ -398,6 +475,25 @@ CxEndResolves == (row.st = "live" /\ row.er /\ ~AgentAlive) ~> (row.st = "ended"
 \* Pause's end: once the agent has answered /exit (its exit SessionEnd went through the
 \* gate) and is gone, the row pause waits on reads ended.
 PauseSeesEnd == (pw = "wait" /\ ce /\ ~AgentAlive) ~> (row.st = "ended")
+
+\* b.y7g: BusyPauseResolves also runs with the signal knob off (red regression).
+\* Any new launch needs a terminal row first, so immediate resume cannot hide
+\* completion, and recovery may win the race by writing missing.
+BusyPauseResolves == (signal.phase = "read" /\ row.tok = signal.tok /\ Busy)
+                      ~> (row.st \in {"ended", "missing"})
+PauseSignalSeesEnd == (signal.phase = "sent" /\ row.tok = signal.tok)
+                       ~> (row.st \in {"ended", "missing"})
+\* Retain the captured launch across wait completion clearing signal: a
+\* recovery-written missing row must reach ended unless that launch is replaced.
+PauseSignalEndsSameLaunch ==
+  \A launch \in 1..MaxLife :
+    (signal.phase \in {"sent", "wait"} /\ signal.tok = launch /\ row.tok = launch /\
+      ~\E p \in procs : SignalTarget(p)) ~> (row.st = "ended" \/ row.tok # launch)
+SignalOnlyLaunch == ~signalViol
+PauseKeysSafe == ~keysViol
+NotSignalSent == signal.phase # "sent"
+NotSignalMissing == ~(signal.phase = "sent" /\ row.st = "missing")
+NotSignalReplaced == ~(signal.phase = "read" /\ row.tok # signal.tok)
 
 \* probes (each must be violated: the case is reachable)
 NotSeen(t) == t \notin seen

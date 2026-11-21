@@ -130,6 +130,9 @@ type CantSendLimit struct {
 // or stands with paused recorded) or, with only_if_waiting, its Launch ended
 // with no claim also gives owned_process_running, signal_sent false, when the
 // recorded agent itself still runs at the deadline.
+// Busy uncovered Codex signal pause uses the same agent_process_unverifiable,
+// launch_changed, signal_unsupported, signal_uncertain, exit_uncertain and
+// budget_exhausted causes and signal facts, without covered Launch exclusion.
 type NotPausableDetails struct {
 	// Cause is the machine-readable cause.
 	Cause string `json:"cause"`

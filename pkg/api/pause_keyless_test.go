@@ -87,6 +87,14 @@ func newKeylessEnv(t *testing.T, spec killRowSpec) *kpEnv {
 		CallerUUID: ptr(busyCaller), DeliveryRequestID: "kp-1"})
 	busyAdmit(t, e.c, api.SendKeysParams{InstanceID: e.r.ID, Text: "  second ✓"})
 	e.woken()
+	e.installPauseHooks(t)
+	return e
+}
+
+// installPauseHooks records signals and drives the shared clock and first-poll
+// barrier. Each poll advances by e.step, defaulting to the poll interval.
+func (e *kpEnv) installPauseHooks(t *testing.T) {
+	t.Helper()
 	t.Cleanup(api.SetPauseTerminateForTest(func(pid int, start string) error {
 		s := kpSignal{pid, start}
 		e.sent = append(e.sent, s)
@@ -108,7 +116,6 @@ func newKeylessEnv(t *testing.T, spec killRowSpec) *kpEnv {
 			e.atSleep()
 		}
 	})
-	return e
 }
 
 // pause runs api.Pause on r with ctx and timeoutSeconds over st (e.st when

@@ -364,7 +364,9 @@ neither rollback nor completion and need not return partial checks.
 For covered Claude, `pause` is keyless in any live state, preserves Held
 Messages for resume, and refuses with structured `NotPausableDetails`. See
 [keyless pause](../../docs/caller-contract.md#keyless-pause-of-a-covered-agent).
-For uncovered agents, shut down a waiting Spawn within `pause.timeout_seconds`.
+For busy uncovered Codex, it uses [keyless signal pause](../../docs/caller-contract.md#keyless-pause-of-busy-uncovered-codex)
+and the same `NotPausableDetails` on shutdown refusal.
+For waiting uncovered agents, it requests exit and waits within `pause.timeout_seconds`.
 A finished Spawn is a no-op, unless a
 [pause claim](../../docs/caller-contract.md#standing-pause-claims) still stands
 or `only_if_waiting` is refused below. Codex exit handling is defined in the
@@ -374,7 +376,7 @@ or `only_if_waiting` is refused below. Codex exit handling is defined in the
 await client.pause({ instance_id: "<id>" });
 ```
 
-`pause` takes no pane hash. On uncovered agents it shares plain `sendKeys` permission and input
+`pause` takes no pane hash. On waiting uncovered agents it shares plain `sendKeys` permission and input
 guards; see [Permission relay](../../docs/caller-contract.md#permission-relay)
 and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
 

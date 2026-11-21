@@ -184,17 +184,17 @@ type pauseRowReader interface {
 }
 
 // readRow is pause's first row read, its wait for the store's connection
-// inside the call's budget b (its deadline, and r.ctx): a covered row's
-// keyless pause then carries what is left of b, never a fresh one. Once it
+// inside the call's budget b (its deadline, and r.ctx): covered keyless pause
+// and busy uncovered Codex signal pause carry what remains, never a fresh one. Once it
 // holds the connection the read is GetSpawn's, unbounded by b: the store's
 // busy timeout for a lock, and GetSpawn's row or error, returned as they are.
 // Coverage is not known until the row is read, so a connection wait the
 // budget or the caller's cancellation cuts short, no SQL run, falls back to
 // the read pause made before keyless pause (GetSpawn, which waits for the
 // connection as every other store call does and does not observe r.ctx). An
-// uncovered row so keeps its legacy first read, with one busy timeout, and its
-// legacy path, with its own full wait after its keys; a covered row read late
-// is refused by keyless with nothing signalled or written (the budget spent,
+// uncovered waiting row keeps its legacy first read, with one busy timeout,
+// and its own full wait after its keys; a row using signal shutdown read late
+// is refused with nothing signalled or written (the budget spent,
 // or the bare cancellation). A store without this read, or a call with no
 // budget (timeoutSeconds 0, which no configured pause passes), reads through
 // GetSpawn as before.

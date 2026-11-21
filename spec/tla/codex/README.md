@@ -1,5 +1,74 @@
 # b.ssz: TLA+ check of the Codex design changes
 
+## b.y7g: busy Codex pause
+
+The runnable [pause-signal-suite.tsv](pause-signal-suite.tsv) uses the current
+`make tla` manifest format; the historical `suite.tsv` below is an inventory
+in its older, incompatible format. Run this focused suite with:
+
+```
+make -j1 tla-parse TMPDIR=<existing directory outside the repo> TLA_JOBSCHED=<absolute jobsched path> TLA_CHANNEL=C0B3X876XSB TLA_SPEC_DIR=spec/tla/codex/src TLA_SUITE=spec/tla/codex/pause-signal-suite.tsv
+make -j1 tla TMPDIR=<same directory> TLA_JOBSCHED=<same path> TLA_CHANNEL=C0B3X876XSB TLA_SPEC_DIR=spec/tla/codex/src TLA_SUITE=spec/tla/codex/pause-signal-suite.tsv TLA_GROUPS="signal-live signal-red signal-safe signal-probes"
+```
+
+`BusyPauseOn` refines the old `live` abstraction into waiting, working and an
+open permission dialog. A busy main agent need never send SessionEnd: its
+working/dialog loop can continue indefinitely. `PauseSignalOn` enables A1's
+keyless busy pause. Both definitions default to FALSE, leaving the existing
+cfgs and their state graphs unchanged (the added variables remain constant).
+`ps_legacy` reruns the existing `hx_P` cfg unchanged.
+
+Pause captures the launch token, PID and readable process start time, then
+checks that identity in a separate signal-delivery step. The recorded signal
+enables `Exit` without SessionEnd or an end report. A separate wait writes
+`ended` only for the same launch, including when process-based recovery marked
+it `missing` during pause (covered parity, b.nqq). A row already terminal before
+pause is a no-op: it cannot enter the live-only capture action. Capture and wait
+survive launch rollover, leaving a changed launch alone, so stale callers race
+with reuse. If another caller kills the agent between capture and delivery,
+pause skips the signal and still performs the proven-exit end write. Completed
+captures are reset to `NoSignal`: all guards and properties inspect the saved
+identity only during read, sent or wait, so merging completed identities loses
+no future observation. The waiting `/exit` path remains separate and cannot run while
+busy. `PauseKeysSafe` observes whether that key path was entered while busy;
+this lifecycle model does not duplicate the relay protocol in `Hold36hCx`.
+
+The green run keeps `BusyPauseResolves`, `PauseSignalSeesEnd` and the existing
+`PauseSeesEnd`, adding `PauseSignalEndsSameLaunch`: once the captured process is
+gone, its row must reach ended unless a new launch replaces it. This explicitly
+covers recovery writing missing before pause completes. It inherits
+`PauseSpec`'s fair adoption, identity recording,
+started-hook completion and pause polling, adding fair signal delivery,
+signalled-process exit and signal-wait completion. Ordinary exits, SessionEnd,
+new caller pauses and recovery remain unfair. Thus completion must come from
+pause itself even if no recovery command runs. Fair signalled exit is the
+environment assumption supported by the real Codex 0.166.0 step-0 probe;
+unverifiable identities, unsupported signals and timeout budgets are covered
+by the implementation tests, not this successful-signal liveness claim.
+
+Safety runs retain `RowOnlyByAgent`, `KillAllGone`, `ClockBound` and
+`CxNoEndedWhileAlive`, adding `SignalOnlyLaunch` and `PauseKeysSafe`. The
+`ps_red` control keeps `PauseSignalOn` off and must violate
+`BusyPauseResolves` even with recovery fair (so the counterexample must keep
+the agent alive); `ps_pidonly` replaces the identity check with PID alone
+and must violate `SignalOnlyLaunch`. Probes require delivery, recovery marking
+missing before pause completes, and launch rollover after capture to be reachable.
+
+Bounds are chosen around the changed mechanism: two launch generations and
+three reusable PIDs allow an old caller and a replacement agent to race.
+The liveness cfg uses three creation/rotation ticks; the safety cfgs use four,
+allowing two agent incarnations and two competing process creations. The
+`ps_safe` actor family includes nested agents and teammates, with HUP survival;
+`ps_alien` includes strays and labelled leftovers. These are complementary
+coverage runs, not a proof of arbitrary mixed populations. Both keep crashes,
+lost identity replies, adoption, session rotation and launch reuse enabled;
+the liveness run disables spontaneous crashes to require a signal to end a
+busy loop. Readable process starts are required by A1. No VIEW, symmetry,
+state constraints or action constraints reduce exploration. Every cfg has
+a 30-minute cap and must complete; finite-instance results are not an
+unbounded proof. Job identities, counts and outcomes are recorded in the
+TW-C report for b.y7g.
+
 The b.ssz verdicts below are historical runs. Bug b.w21 later extended
 `src/B146R5Cx.tla` with default-off legacy-request scenarios and repair
 knobs; the older final-model equivalence claims below describe the submitted

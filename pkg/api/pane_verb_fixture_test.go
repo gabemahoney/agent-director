@@ -958,6 +958,15 @@ func (w *killStore) MarkEndedIfSameLife(id string, examined api.RowSnapshot) (st
 	return w.st.MarkEndedIfSameLife(id, examined)
 }
 
+// MarkSignalPauseEndedWithin delegates busy uncovered Codex's deliberate end.
+func (w *killStore) MarkSignalPauseEndedWithin(ctx context.Context, row api.Spawn, exit store.ProcessExit, wait time.Duration) (string, api.CondResult, error) {
+	return w.st.MarkSignalPauseEndedWithin(ctx, row, exit, wait)
+}
+
+func (w *killStore) GetSpawnContext(ctx context.Context, id string, wait time.Duration) (api.Spawn, error) {
+	return w.st.GetSpawnContext(ctx, id, wait)
+}
+
 // failEndedMove makes every later move to ended return err (errInjectedStore when nil).
 func (w *killStore) failEndedMove(err error) { w.endedErr = orInjected(err) }
 

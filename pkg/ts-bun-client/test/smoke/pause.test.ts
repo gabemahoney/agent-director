@@ -3,7 +3,7 @@
  *
  * Happy path: an ended row is already terminal, so pause is a no-op success
  * with no tmux call. Error paths, on codex rows, whose pause types `/exit`
- * (a claude row's pause is keyless): a working row → ErrSpawnNotPausable; on a
+ * (a claude row's pause is keyless): a pending row → ErrSpawnNotPausable; on a
  * relay-on waiting row pause is held as a plain sendKeys (b.zdz):
  * ErrRelayFallenBack, then ErrDialogMaybeOpen, typing nothing, which sendKeys
  * `/exit` with the pane's hash passes.
@@ -25,9 +25,21 @@ test("pause: happy path — no-op for already-terminal spawn", async () => {
   });
 }, 10_000);
 
-test("pause: error — working spawn is not pausable → ErrSpawnNotPausable", async () => {
+// b.y7g: the seeded agent is already gone, without a SessionEnd report.
+test("pause: busy Codex records a verified end without exit keys", async () => {
   await withTempHome(async (homeDir) => {
-    runHelper("seed-spawn", { store: homeStore(homeDir), state: "working", id: "smoke-pause-err-id", agent: "codex", "create-store": true });
+    const store = homeStore(homeDir);
+    const id = "smoke-pause-busy-codex";
+    runHelper("seed-spawn", { store, state: "working", id, agent: "codex", "create-store": true });
+    using client = await openClient(store);
+    expect(await client.pause({ instance_id: id })).toEqual({});
+    expect((await client.get({ instance_id: id })).state).toBe("ended");
+  });
+}, 10_000);
+
+test("pause: error — pending spawn is not pausable → ErrSpawnNotPausable", async () => {
+  await withTempHome(async (homeDir) => {
+    runHelper("seed-spawn", { store: homeStore(homeDir), state: "pending", id: "smoke-pause-err-id", agent: "codex", "create-store": true });
     using client = await openClient(homeStore(homeDir));
     await expect(client.pause({ instance_id: "smoke-pause-err-id" })).rejects.toBeInstanceOf(ErrSpawnNotPausable);
   });

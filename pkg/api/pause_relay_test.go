@@ -307,7 +307,7 @@ func TestPauseNeverHeldNoRequest(t *testing.T) {
 // failing, pause reads them only on a waiting relay-on row (the store's error,
 // nothing typed, no wait). A relay-off waiting row with an open request still
 // pauses; on a relay-on row the state rules come first: an ended row is the
-// no-op success, a working one ErrSpawnNotPausable (each state's rule is
+// no-op success, a busy Codex row uses signal pause (b.y7g; each state's rule is
 // TestPauseGuards').
 func TestPauseRelayGuardScope(t *testing.T) {
 	t.Parallel()
@@ -320,7 +320,7 @@ func TestPauseRelayGuardScope(t *testing.T) {
 	}{
 		{"relay off, waiting, an open request", killRowSpec{}, nil, true},
 		{"relay on, ended", relayOn(store.StateEnded), nil, false},
-		{"relay on, working", relayOn(store.StateWorking), api.ErrSpawnNotPausable, false},
+		{"relay on, working, agent gone", killRowSpec{State: store.StateWorking, RelayOn: true, Agent: agentGone}, nil, false},
 		{"relay on, waiting", relayOn(store.StateWaiting), errInjectedStore, false},
 	}
 	for _, tc := range cases {
