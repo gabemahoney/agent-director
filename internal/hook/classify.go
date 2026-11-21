@@ -174,6 +174,9 @@ type ClassifyResult struct {
 	// SoftRefresh is true for events that should bump last_seen_at without
 	// changing state — SessionEnd reason=clear|compact, Notification, and unknown events.
 	// An idle-prompt Notification keeps it true as well; see WaitingIfWorking.
+	// A Claude/Codex SessionStart source=compact also sets it: its identity
+	// write keeps working/check_permission/ask_user, but still reports a
+	// pending, ended or missing row in as waiting.
 	SoftRefresh bool
 
 	// WaitingIfWorking is true for the main agent's idle-prompt Notification
@@ -394,7 +397,13 @@ func classifyClaude(p payload) ClassifyResult {
 
 	switch res.EventName {
 	case "SessionStart":
-		res.NewState = store.StateWaiting
+		if p.Source == "compact" {
+			// Compaction continues the turn. The SessionStart identity write
+			// still applies, preserving a live turn's state.
+			res.SoftRefresh = true
+		} else {
+			res.NewState = store.StateWaiting
+		}
 	case "UserPromptSubmit":
 		res.NewState = store.StateWorking
 		if p.AgentID == "" {
@@ -466,7 +475,9 @@ const EventNameInterrupt = "Interrupt"
 // classifyCodex is Codex's table (SR-6.2, MC-6), for payloads shaped like the
 // probe's captures:
 //
-//   - SessionStart → waiting; UserPromptSubmit, PreToolUse and PostToolUse →
+//   - SessionStart → waiting, or a soft refresh for source=compact (the
+//     identity write still reports pending/ended/missing in as waiting);
+//     UserPromptSubmit, PreToolUse and PostToolUse →
 //     working, whatever the tool (`request_user_input` and
 //     `request_user_input_async` included: a Codex row is never ask_user);
 //     Stop → waiting;
@@ -508,7 +519,13 @@ func classifyCodex(p payload) ClassifyResult {
 	}
 
 	switch res.EventName {
-	case "SessionStart", EventNameStop:
+	case "SessionStart":
+		if p.Source == "compact" {
+			res.SoftRefresh = true
+		} else {
+			res.NewState = store.StateWaiting
+		}
+	case EventNameStop:
 		res.NewState = store.StateWaiting
 	case "UserPromptSubmit", EventNamePreToolUse, EventNamePostToolUse:
 		res.NewState = store.StateWorking

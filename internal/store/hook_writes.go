@@ -703,8 +703,9 @@ const clearIdleSinceSQL = `UPDATE spawns
   WHERE instance_id = ? AND idle_since IS NOT NULL AND ` + hookGateSQL
 
 // sessionStartPrior is what a SessionStart write replaces, read at the
-// snapshot the caller examined: the prior state (for the trail) and the
-// outgoing transcript path and life (for the rotation archive).
+// snapshot the caller examined: the prior state (for compact state preservation
+// and the trail) and the outgoing transcript path and life (for the rotation
+// archive).
 type sessionStartPrior struct {
 	agent       string
 	launchToken string
@@ -714,18 +715,20 @@ type sessionStartPrior struct {
 }
 
 // RecordSessionStartIdentity is the gated SessionStart write (SR-22.9,
-// SR-5.3): the row's own agent reporting in. It sets state waiting whatever
-// the prior state, as a hook write (its settle columns by hookWriteStateSet,
-// b.3ie: the move settles, out of pending, missing or ended too), and in the
-// same statement records the payload's Claude
-// session id (gate.SessionID; "" keeps the column), the transcript path under
-// the presence rule, pid and proc_starttime as the hook's parent
+// SR-5.3): the row's own agent reporting in. It sets state waiting as a hook
+// write (its settle columns by hookWriteStateSet, b.3ie: the move settles,
+// out of pending, missing or ended too). With gate.SessionStartSoftRefresh,
+// working/check_permission/ask_user and their state, settle, permission-epoch
+// and observation evidence stay unchanged. In the same statement it records
+// the payload's session id (gate.SessionID; "" keeps the column), the transcript
+// path under the presence rule, pid and proc_starttime as the hook's parent
 // (gate.ParentPID, gate.ParentStart: the pane process, SR-3.8), pane_starttime
 // when NULL; it bumps last_seen_at, clears ended_at, both liveness columns
 // (SessionStart is proof of life, SR-8.2), idle_since (any hook clears it,
 // b.146 problem 3), launch_started_at and end_reported_at (a Codex row's
 // SessionEnd report, which a later SessionStart from the agent supersedes;
-// SR-6.5), and advances row_version by exactly one (SR-5.2).
+// SR-6.5), clears claude_capacity, writes codex_startup under its admission
+// rule, and advances row_version by exactly one (SR-5.2).
 //
 // The statement's WHERE carries the gate (hookGateSQL) and the snapshot
 // condition on gate.Examined (snapshotMatchSQL), so the write applies only
@@ -746,7 +749,8 @@ type sessionStartPrior struct {
 // the snapshot pins them (every write advances row_version). The archive is
 // fail-open: a history error still commits the SessionStart write and emits
 // ad.session.archive_failed. After the commit the write emits
-// ad.spawn.state_transition (prior state to waiting) and, when it archived,
+// ad.spawn.state_transition (prior state to waiting, or a same-state soft
+// refresh for the protected compact states) and, when it archived,
 // ad.session.archived. The transaction's first statement is the write, so it
 // never upgrades a read lock (the SQLITE_BUSY note in recovery.go).
 //
@@ -778,12 +782,22 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	case jsonlPath != "":
 		jsonlSet, jsonlArgs = `jsonl_path = NULL`, nil
 	}
-	// waiting with its settle columns (b.3ie): a hook write, so a move out of
-	// any prior state, pending, missing and ended included, settles.
+	// The prior read is pinned by the UPDATE's snapshot predicate, so compact
+	// can preserve its state without overwriting a concurrent hook's state.
+	// Other SessionStarts still write waiting with its settle columns (b.3ie),
+	// including a move out of pending, missing or ended.
+	softRefresh := gate.SessionStartSoftRefresh &&
+		(prior.state == StateWorking || prior.state == StateCheckPermission || prior.state == StateAskUser)
+	trailNew := StateWaiting
 	stateSet, stateArgs := s.hookWriteStateEvidenceSet(StateWaiting, EvidenceAgentEvent)
+	if softRefresh {
+		stateSet, stateArgs = "", nil
+		trailNew = prior.state
+	} else {
+		stateSet += ",\n             "
+	}
 	q := `UPDATE spawns
-	         SET ` + stateSet + `,
-	             last_seen_at              = CURRENT_TIMESTAMP,
+	         SET ` + stateSet + `last_seen_at              = CURRENT_TIMESTAMP,
 	             ended_at                  = NULL,
 	             session_id                = COALESCE(?, session_id),
 	             codex_startup             = ?,
@@ -849,9 +863,9 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
 		"instance_id":           instanceID,
 		"prior_state":           prior.state,
-		"new_state":             StateWaiting,
+		"new_state":             trailNew,
 		"triggering_event_name": event,
-		"soft_refresh":          false,
+		"soft_refresh":          softRefresh,
 		"source":                "ad_spawn_store",
 	})
 	switch {

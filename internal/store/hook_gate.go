@@ -24,6 +24,12 @@ type HookGate struct {
 	SessionStart bool        // true for SessionStart: Examined must still match (SR-5.3)
 	Examined     RowSnapshot // SessionStart only
 
+	// SessionStartSoftRefresh is a classified Claude/Codex compact
+	// SessionStart: its identity write keeps working/check_permission/ask_user
+	// and their state evidence; other states still report in as waiting.
+	// It changes no gate predicate.
+	SessionStartSoftRefresh bool
+
 	// The Codex turn (b.x72; codex_turn.go). CodexTurn is the turn_id of a
 	// Codex hook from the row's main thread ("" when it carried none).
 	// CodexTurn, CodexTurnStart and CodexTurnEnd are recorded only, never a

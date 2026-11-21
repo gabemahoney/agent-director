@@ -19,7 +19,7 @@ Use the Claude Code version in [Requirements](install.md#requirements).
 
 | Event | Reported state |
 | --- | --- |
-| `SessionStart` | `waiting`; records the current `session_id` |
+| `SessionStart` | `waiting`, except `source: "compact"` keeps `working`, `check_permission` or `ask_user`; records the current `session_id` |
 | `UserPromptSubmit` | `working` |
 | `PreToolUse` | `working`, or `ask_user` for `AskUserQuestion` |
 | `PostToolUse`, `PostToolUseFailure` | `working` |
@@ -156,7 +156,7 @@ hooks to run; see [Codex hook configuration](operator-actions.md#a-codex-row-sta
 
 | Event | Reported state |
 | --- | --- |
-| `SessionStart` | `waiting`; records `session_id` |
+| `SessionStart` | `waiting`, except `source: "compact"` keeps `working`, `check_permission` or `ask_user`; records `session_id` |
 | `UserPromptSubmit` | `working` |
 | `PreToolUse`, `PostToolUse` | `working`, subject to permission holds; a late hook from an ended main turn leaves state unchanged |
 | `Stop`, main-agent `Interrupt` | `waiting` |
@@ -184,7 +184,9 @@ Recovery of `waiting` is not proof that a permission dialog is gone; see
 ### The session
 
 Codex sends its first `SessionStart` at the first prompt, not when the screen
-opens. Until then the spawn stays `pending`.
+opens. Until then the spawn stays `pending`. A `source: "compact"`
+SessionStart can also arrive mid-turn: it refreshes session information and
+keeps the active state shown above.
 
 `/clear`, `/new`, `/fork` and `/resume` start another session in the same
 process. Its identity is recorded at the next prompt. Until then, including

@@ -1421,6 +1421,7 @@ func TestClaudeForcedWakeBoundaries(t *testing.T) {
 			eventAt: 16 * time.Second, touch: true, outcome: store.BusySendForceHandedOver, reason: store.BusySendForceAdmitted, held: 1},
 		{name: "the caller lost, then a sighting within the call", at: time.Second, keep: -1, wrote: first, event: "sighting",
 			eventAt: 14 * time.Second, outcome: store.BusySendForceRunning},
+		// b.n9q: compact still finishes an overdue force and returns its watch path.
 		{name: "the caller lost, then a SessionStart past the call's deadline", at: time.Second, keep: -1, wrote: first, event: "SessionStart",
 			eventAt: 16 * time.Second, touch: true, outcome: store.BusySendForcePending, reason: store.BusySendForceAwaitingAdmission, held: 1,
 			awaiting: 1},
@@ -1496,9 +1497,15 @@ func TestClaudeForcedWakeBoundaries(t *testing.T) {
 					payload = e.payload(t, "session-start-compact.json", nil)
 				}
 				var stderr bytes.Buffer
-				if out, err := e.handle(context.Background(), e.parent, payload, &stderr); err != nil || stderr.Len() != 0 ||
-					tc.event == "sighting" && out != "" {
-					t.Errorf("%s = stdout %q, stderr %q, %v; want no output but SessionStart's watch path", tc.event, out, stderr.String(), err)
+				want := ""
+				if tc.event == "SessionStart" {
+					want = `{"hookSpecificOutput":{"hookEventName":"SessionStart","watchPaths":["` + e.endpoint + `"]}}` + "\n"
+				}
+				if out, err := e.handle(context.Background(), e.parent, payload, &stderr); err != nil || stderr.Len() != 0 || out != want {
+					t.Errorf("%s = stdout %q, stderr %q, %v; want %q and no stderr", tc.event, out, stderr.String(), err, want)
+				}
+				if tc.event == "SessionStart" && mustGetSpawn(t, e.st, e.id).State != store.StateWorking {
+					t.Error("compact moved an active force's working row to waiting")
 				}
 				if got := touched(); got != tc.touch {
 					t.Errorf("%s touched the wake: %t; want %t", tc.event, got, tc.touch)
@@ -1943,6 +1950,66 @@ func TestClaudeSessionStartWatchPath(t *testing.T) {
 				if dir, err := os.Stat(filepath.Dir(wake)); err != nil || dir.Mode().Perm() != 0o700 {
 					t.Errorf("launch directory = %v, %v; want mode 0700", dir, err)
 				}
+			}
+		})
+	}
+}
+
+// b.n9q: compact retains watchPaths and the finite startup hint, without
+// allowing an owned FileChanged to deliver Held Messages into a turn/Dialog.
+func TestClaudeCompactSessionStartKeepsHeld(t *testing.T) {
+	for _, state := range []string{store.StateWorking, store.StateCheckPermission, store.StateAskUser} {
+		t.Run(state, func(t *testing.T) {
+			e := newWakeEnv(t, state, apitest.WithRawAgentArgs(`["--model","opus"]`))
+			e.admit(t, "held", "keep this held")
+			before := e.result(t, "held")
+			if before.Class != store.BusySendClassHeld {
+				t.Fatalf("setup result = %+v; want Held", before)
+			}
+			now := time.Now()
+			clock := &advancingClock{now: &now}
+			hc := hookConfig(envHook(e.id, ""), e.parent)
+			hc.Now, hc.Self = clock.Now, wakeHelper
+			var jobs []hook.ClaudeStartupWake
+			hc.ScheduleClaudeStartupWake = func(job hook.ClaudeStartupWake) error {
+				jobs = append(jobs, job)
+				return nil
+			}
+			payload := e.payload(t, "session-start-compact.json", map[string]any{"transcript_path": writeTranscript(t, wakeSession)})
+			want := `{"hookSpecificOutput":{"hookEventName":"SessionStart","watchPaths":["` + e.endpoint + `"]}}` + "\n"
+			if got := ssgHandleWith(t, e.st, hc, string(payload), newSilentLogger()); got != want {
+				t.Errorf("compact stdout = %q; want %q", got, want)
+			}
+			if got := mustGetSpawn(t, e.st, e.id).State; got != state {
+				t.Errorf("compact state = %q; want %q", got, state)
+			}
+			if len(jobs) != 1 {
+				t.Fatalf("compact scheduled %d startup hints; want one", len(jobs))
+			}
+			touched := e.wakeMtime(t)
+			if err := hook.RunClaudeStartupWake(context.Background(), e.st, jobs[0], func() bool { return true }, clock, clock.Now, newSilentLogger()); err != nil {
+				t.Fatal(err)
+			}
+			if !touched() {
+				t.Error("compact's finite startup hint did not touch its endpoint")
+			}
+			if after := e.result(t, "held"); !reflect.DeepEqual(after, before) {
+				t.Errorf("startup hint changed Held result: %+v; want %+v", after, before)
+			}
+			if got := e.wake(t); got != "" {
+				t.Errorf("FileChanged delivered into %s: %q", state, got)
+			}
+			if after := e.result(t, "held"); !reflect.DeepEqual(after, before) {
+				t.Errorf("FileChanged changed Held result: %+v; want %+v", after, before)
+			}
+			if o := e.observe(t); o.HeldCount != 1 || o.HandoverCount != 0 || o.AwaitingTurnStart != 0 {
+				t.Errorf("delivery facts = %+v; want one Held and no handover/awaiting", o)
+			}
+			if got := mustGetSpawn(t, e.st, e.id).State; got != state {
+				t.Errorf("state after startup hint/FileChanged = %q; want %q", got, state)
+			}
+			if n := storefix.ReadBusySendCounts(t, e.db).Forces; n != 0 {
+				t.Errorf("compact/wake created %d forces; want none", n)
 			}
 		})
 	}

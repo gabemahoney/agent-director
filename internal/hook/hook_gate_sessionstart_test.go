@@ -193,30 +193,56 @@ func ssgHistory(t *testing.T, dbPath, id string) []ssgArchived {
 
 // TestSessionStartGateApplied: the row's own agent's SessionStart applies for
 // every source and row state, a pending row find-missing noted unreported
-// included (b.kdf), moves it to waiting, records the new session, archives the
-// old pair, records the parent as pid/proc_starttime and clears any liveness
+// included (b.kdf), reports in or refreshes its active state (b.n9q), records
+// the new session, archives the old pair, records the parent as pid/proc_starttime and clears any liveness
 // note (SR-22.9, AC-HOOK-02). The resumed row's covered Claude Launch,
 // whose resume recorded its route, also names its wake endpoint to watch
 // (SR-3.4); the seeded rows record none, so they write nothing.
 func TestSessionStartGateApplied(t *testing.T) {
 	outgoing := []ssgArchived{{ssgOutgoing, "/x/" + ssgOutgoing + ".jsonl", 2}}
-	cases := []struct {
-		name, source string
-		seed         func(*testing.T, string) (*store.Store, string)
-		archived     []ssgArchived
-	}{
+	type gateCase struct {
+		name, source     string
+		seed             func(*testing.T, string) (*store.Store, string)
+		archived         []ssgArchived
+		agent, wantState string // empty: Claude, waiting
+	}
+	cases := []gateCase{
 		{"fresh spawn's pending row", "startup", func(t *testing.T, id string) (*store.Store, string) {
 			return ssgSeed(t, id, store.StatePending, "", apitest.WithLaunchIdentity(ssgFreshPane))
-		}, nil},
+		}, nil, "", ""},
 		{"fresh spawn's pending row, pane start unread at the create", "startup", func(t *testing.T, id string) (*store.Store, string) {
 			return ssgSeed(t, id, store.StatePending, "") // pane TestPanePID, pane_starttime NULL
-		}, nil},
-		{"resumed pending row, kept session id and new pane", "resume", ssgResumed, nil},
-		{"row marked missing before its agent reported in", "startup", ssgMissingBeforeReport, nil},
-		{"pending row noted unreported before its agent reported in", "startup", ssgNotedBeforeReport, nil},
-		{"live row, /clear", "clear", ssgLive(store.StateWorking), outgoing},
-		{"live row, in-session /resume", "resume", ssgLive(store.StateWaiting), outgoing},
-		{"live row, compaction", "compact", ssgLive(store.StateAskUser), outgoing},
+		}, nil, "", ""},
+		{"resumed pending row, kept session id and new pane", "resume", ssgResumed, nil, "", ""},
+		{"row marked missing before its agent reported in", "startup", ssgMissingBeforeReport, nil, "", ""},
+		{"pending row noted unreported before its agent reported in", "startup", ssgNotedBeforeReport, nil, "", ""},
+		{"live row, /clear", "clear", ssgLive(store.StateWorking), outgoing, "", ""},
+		{"live row, in-session /resume", "resume", ssgLive(store.StateWaiting), outgoing, "", ""},
+	}
+	// b.n9q: both agents preserve active states on compact, but still report in
+	// from pending/terminal states; startup on working remains an idle boundary.
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+		for _, state := range []string{store.StateWorking, store.StateCheckPermission, store.StateAskUser, store.StateWaiting, store.StatePending, store.StateEnded, store.StateMissing} {
+			want := store.StateWaiting
+			if state == store.StateWorking || state == store.StateCheckPermission || state == store.StateAskUser {
+				want = state
+			}
+			cases = append(cases, gateCase{agent + "/compact/" + state, "compact", func(t *testing.T, id string) (*store.Store, string) {
+				st, db := ssgSeed(t, id, state, ssgOutgoing, apitest.WithAgent(agent),
+					apitest.WithJsonlPath("/x/"+ssgOutgoing+".jsonl"), apitest.WithLifeNumber(2),
+					apitest.WithLaunchIdentity(ssgFreshPane), apitest.WithLastSeenAt(time.Unix(100, 0)),
+					apitest.WithLivenessNote("unreported"), apitest.WithLivenessUnverifiedSince("2000-01-01 00:00:00"),
+					apitest.WithLaunchStartedAt(123), apitest.WithEndReportedAt(456), apitest.WithPermissionEpoch(7))
+				if err := apitest.SetSettle(db, id, store.StateWaiting, 789); err != nil {
+					t.Fatal(err)
+				}
+				return st, db
+			}, outgoing, agent, want})
+		}
+		cases = append(cases, gateCase{agent + "/startup/working", "startup", func(t *testing.T, id string) (*store.Store, string) {
+			return ssgSeed(t, id, store.StateWorking, ssgOutgoing, apitest.WithAgent(agent),
+				apitest.WithLifeNumber(2), apitest.WithJsonlPath("/x/"+ssgOutgoing+".jsonl"), apitest.WithLaunchIdentity(ssgFreshPane))
+		}, outgoing, agent, store.StateWaiting})
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -224,7 +250,33 @@ func TestSessionStartGateApplied(t *testing.T) {
 			st, dbPath := tc.seed(t, id)
 			payload, sessionID, path := ssgPayload(t, tc.source)
 			agent := agentParent(t, st, id)
+			if tc.agent == store.AgentCodex {
+				raw, sid, rollout := codexPayload(t, "session-start-"+tc.source+".json", true, nil)
+				payload, sessionID, path = string(raw), sid, rollout
+				agent = codexParent(agent)
+			}
 			prior := mustGetSpawn(t, st, id)
+			wantState := tc.wantState
+			if wantState == "" {
+				wantState = store.StateWaiting
+			}
+			preserved := tc.source == "compact" && wantState != store.StateWaiting
+			var permission store.PermissionRow
+			if preserved && prior.State == store.StateCheckPermission {
+				seed, err := apitest.SeedPermissionRequest(dbPath, id, "Bash")
+				if err != nil {
+					t.Fatal(err)
+				}
+				permission, err = st.GetPermissionRequest(id, seed.RequestToken)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			prior = mustGetSpawn(t, st, id)
+			settledBefore, stampBefore, err := apitest.ReadSettle(dbPath, id)
+			if err != nil {
+				t.Fatal(err)
+			}
 			before := len(readTrailLines(t, trailFile()))
 
 			want := ""
@@ -240,9 +292,41 @@ func TestSessionStartGateApplied(t *testing.T) {
 			}
 
 			row := mustGetSpawn(t, st, id)
-			if row.State != store.StateWaiting || row.EndedAt != nil {
-				t.Errorf("state/ended_at = %q/%v; want waiting/NULL (from %q)", row.State, row.EndedAt, prior.State)
+			if row.State != wantState || row.EndedAt != nil {
+				t.Errorf("state/ended_at = %q/%v; want %s/NULL (from %q)", row.State, row.EndedAt, wantState, prior.State)
 			}
+			if !row.LastSeenAt.After(prior.LastSeenAt) && tc.source == "compact" {
+				t.Errorf("last_seen_at = %v; want newer than %v", row.LastSeenAt, prior.LastSeenAt)
+			}
+			if row.LaunchStartedAtMillis != 0 || row.EndReportedAtMillis != 0 {
+				t.Errorf("launch start/end report = %d/%d; want both cleared", row.LaunchStartedAtMillis, row.EndReportedAtMillis)
+			}
+			if preserved {
+				settled, stamp, err := apitest.ReadSettle(dbPath, id)
+				if err != nil || settled != settledBefore || stamp != stampBefore || row.PermissionEpoch != prior.PermissionEpoch ||
+					row.StateEvidence != prior.StateEvidence || row.SettledStateEvidence != prior.SettledStateEvidence {
+					t.Errorf("compact changed state metadata: settled %q/%d -> %q/%d, epoch %d -> %d, evidence %q -> %q, settled evidence %q -> %q (%v)",
+						settledBefore, stampBefore, settled, stamp, prior.PermissionEpoch, row.PermissionEpoch,
+						prior.StateEvidence, row.StateEvidence, prior.SettledStateEvidence, row.SettledStateEvidence, err)
+				}
+				if prior.State == store.StateCheckPermission {
+					got, err := st.GetPermissionRequest(id, permission.RequestToken)
+					if err != nil || !reflect.DeepEqual(got, permission) {
+						t.Errorf("compact changed permission: got %+v, want %+v (%v)", got, permission, err)
+					}
+				}
+			}
+			transitions := linesAfter(t, before, "ad.spawn.state_transition", id)
+			if len(transitions) != 1 {
+				t.Fatalf("state transitions = %v; want exactly one", transitions)
+			}
+			assertStr(t, transitions[0], "prior_state", prior.State)
+			assertStr(t, transitions[0], "new_state", wantState)
+			assertStr(t, transitions[0], "triggering_event_name", "SessionStart")
+			if transitions[0]["soft_refresh"] != preserved {
+				t.Errorf("soft_refresh = %v; want %v", transitions[0]["soft_refresh"], preserved)
+			}
+			assertStr(t, oneFired(t, before, id), "upsert_outcome", string(store.UpsertUpdated))
 			if row.SessionID != sessionID || row.JSONLPath != path {
 				t.Errorf("session/path = %q/%q; want the payload's %q/%q", row.SessionID, row.JSONLPath, sessionID, path)
 			}
