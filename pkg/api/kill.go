@@ -557,8 +557,8 @@ func sessionProcesses(pc ProcChecker, panes []tmux.Pane, agentPID int, sessionID
 // Kill never changes the row's state: a recovery check (a state read or
 // Sweep) marks the row once its agent process is gone. Kill never signals a process itself, so success
 // means the agent process exited, not every process it started. Kill writes
-// no log lines: the returned error is the report, and the ad.kill.called
-// trail event is the audit.
+// no log lines: the returned error is the report. Calls past the Client's
+// closed and empty-ID checks also emit ad.kill.called as the audit.
 //
 // Success is judged per call: Kill succeeds when the agent process and every
 // other process it found in the panes of the agent's session are gone. If
@@ -596,6 +596,7 @@ func sessionProcesses(pc ProcChecker, panes []tmux.Pane, agentPID int, sessionID
 // CLI: agent-director kill
 //
 // Errors:
+//   - [ErrInvalidFlags]: instance_id is empty; no row is read or kill sent.
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
 //     not accessible to this user, or this is not the tmux server the agent
@@ -616,6 +617,9 @@ func sessionProcesses(pc ProcChecker, panes []tmux.Pane, agentPID int, sessionID
 func (c *Client) Kill(params KillParams) (KillResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return KillResult{}, err
+	}
+	if params.InstanceID == "" {
+		return KillResult{}, fmt.Errorf("%w: kill: instance_id is required", ErrInvalidFlags)
 	}
 	t := c.cfg.Tmux
 	return Kill(c.st, c.tmuxClient, c.procChecker, t.EffectiveStartingSession(), t.EffectiveStoppingWindow(),

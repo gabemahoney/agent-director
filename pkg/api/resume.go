@@ -1101,8 +1101,8 @@ func launchInProgressError(row Spawn) error {
 // CLI: agent-director resume
 //
 // Errors:
-//   - [ErrInvalidFlags]: SendMode is neither wait_turn nor steer_turn;
-//     nothing was read, written or launched.
+//   - [ErrInvalidFlags]: instance_id is empty, or SendMode is neither
+//     wait_turn nor steer_turn; nothing was read, written or launched.
 //   - [ErrCantSend]: SendMode, ConfirmedDelivery or ConfirmFromTranscripts is
 //     set and busy send would not cover the resumed Launch (the published
 //     conversation's recorded coverage, raised by the row's agent kind):
@@ -1233,6 +1233,9 @@ func launchInProgressError(row Spawn) error {
 func (c *Client) Resume(params ResumeParams) (ResumeResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ResumeResult{}, err
+	}
+	if params.InstanceID == "" {
+		return ResumeResult{}, fmt.Errorf("%w: resume: instance_id is required", ErrInvalidFlags)
 	}
 	call := c.newResumeCall()
 	return resumeImpl(c.st, c.tmuxClient, c.procChecker, c.cfg, c.st.StoreID(), c.now, c.logger, params, call)

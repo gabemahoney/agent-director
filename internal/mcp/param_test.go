@@ -36,6 +36,43 @@ const (
 	paramToken = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
 )
 
+// Regression b.2ix: required instance IDs are checked through the served
+// tools/call path, for both an omitted field and an explicit empty string.
+func TestMCPRequiredInstanceID(t *testing.T) {
+	e := newEnv(t)
+	for _, verb := range []string{"decide", "status", "get", "send-keys", "read-pane", "kill", "pause", "resume", "list-subagents"} {
+		t.Run(verb, func(t *testing.T) {
+			for _, form := range []string{"omitted", "empty"} {
+				t.Run(form, func(t *testing.T) {
+					args := map[string]any{}
+					if verb == "decide" {
+						args["request_token"], args["decision"] = paramToken, "allow"
+					}
+					if verb == "send-keys" {
+						args["text"] = "hi"
+					}
+					if form == "empty" {
+						args["instance_id"] = ""
+					}
+					data := toolErrorData(t, callTool(t, e.d, mcp.ToolName(verb), paramJSON(t, args)))
+					want := "ErrInvalidFlags: " + verb + ": instance_id is required"
+					if data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
+						t.Errorf("error = %s: %q; want ErrInvalidFlags: %q", data.ErrName, data.ErrDescription, want)
+					}
+				})
+			}
+		})
+	}
+	t.Run("decide/unknown", func(t *testing.T) {
+		args := map[string]any{"instance_id": "no-such-id", "request_token": paramToken, "decision": "allow"}
+		data := toolErrorData(t, callTool(t, e.d, "decide", paramJSON(t, args)))
+		if data.ErrName != "ErrSpawnNotFound" || data.ErrDescription != "ErrSpawnNotFound: no-such-id" {
+			t.Errorf("error = %s: %q; want ErrSpawnNotFound: no-such-id", data.ErrName, data.ErrDescription)
+		}
+	})
+	assertNothingCreated(t, e.d, e.rec)
+}
+
 // paramRequiredArgs seeds paramRow and returns v's required params with
 // values that let the call run.
 func paramRequiredArgs(t *testing.T, e *mcpEnv, v manifest.VerbDef) map[string]any {

@@ -113,6 +113,7 @@ Check row; state: pending/waiting/working/ask_user/check_permission/ended/missin
 
 ### Errors
 
+- `ErrInvalidFlags`
 - `ErrSpawnNotFound`
 - `ErrStoreBusy`
 
@@ -168,6 +169,7 @@ Check identity, state, session, tmux socket.
 
 ### Errors
 
+- `ErrInvalidFlags`
 - `ErrSpawnNotFound`
 - `ErrStoreBusy`
 
@@ -338,6 +340,7 @@ End the agent of a live row's current launch (pending included): kill ends the a
 
 ### Errors
 
+- `ErrInvalidFlags`
 - `ErrSpawnNotFound`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxKillFailed`
@@ -627,6 +630,7 @@ Agent's subagent records; tracked status.
 
 ### Errors
 
+- `ErrInvalidFlags`
 - `ErrSpawnNotFound`
 
 ## pause
@@ -644,6 +648,7 @@ _None._
 
 ### Errors
 
+- `ErrInvalidFlags`
 - `ErrAgentCapabilityUnsupported`
 - `ErrSpawnNotFound`
 - `ErrSpawnNotPausable`

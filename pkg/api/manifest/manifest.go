@@ -707,6 +707,7 @@ var Verbs = []VerbDef{
 			agentDefaultsField, deliveryField,
 		},
 		ErrorNames: []string{
+			"ErrInvalidFlags",
 			"ErrSpawnNotFound",
 			"ErrStoreBusy",
 		},
@@ -763,6 +764,7 @@ var Verbs = []VerbDef{
 			{Name: "prior_sessions", Type: "[]object", Description: "Archived prior sessions of the current life, newest first, excluding the row's current session id. Same-agent reuse retains session history; an agent switch or switch back starts a new life, hiding earlier lives. Resume continues only the current session; older sessions are listed for inspection only. A failed reuse's applied restore returns the pre-reuse life's history. Always a non-null array ([] when empty). Each element: session_id (string) — archived session id; jsonl_path (string) — archived transcript path (may be empty); recorded_at (timestamp) — when the archive was written (the rotation moment).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
+			"ErrInvalidFlags",
 			"ErrSpawnNotFound",
 			"ErrStoreBusy",
 		},
@@ -1053,6 +1055,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ErrorNames: []string{
+			"ErrInvalidFlags",
 			"ErrSpawnNotFound",
 			"ErrTmuxNotAvailable",
 			"ErrTmuxKillFailed",
@@ -1521,6 +1524,7 @@ var Verbs = []VerbDef{
 			{Name: "subagents", Type: "[]object", Description: subagentsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
+			"ErrInvalidFlags",
 			"ErrSpawnNotFound",
 		},
 	},
@@ -1543,6 +1547,7 @@ var Verbs = []VerbDef{
 		},
 		ResultFields: []FieldDef{},
 		ErrorNames: []string{
+			"ErrInvalidFlags",
 			"ErrAgentCapabilityUnsupported",
 			"ErrSpawnNotFound",
 			"ErrSpawnNotPausable",

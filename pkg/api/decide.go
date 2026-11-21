@@ -858,7 +858,8 @@ func decideOutcome(err error) string {
 //   - [ErrAgentCapabilityUnsupported]: the row's agent is pane-only and
 //     does not support relayed decisions; nothing is recorded.
 //   - [ErrMissingRequestToken]: RequestToken is empty.
-//   - [ErrInvalidFlags]: MaxWaitMs is negative.
+//   - [ErrInvalidFlags]: instance_id is empty or MaxWaitMs is negative;
+//     no row is read or decision recorded.
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrRelayModeOff]: the Spawn's relay_mode is not "on".
 //   - [ErrNoOpenPermissionRequest]: no such request exists, or the request is
@@ -893,11 +894,14 @@ func decideOutcome(err error) string {
 // Nondeterminism: the delivery facts depend on the clock and on whether the
 // relay hook acks within the wait.
 func (c *Client) Decide(params DecideParams) (DecideResult, error) {
-	ctx, cancel := decideContext(params)
-	defer cancel()
 	if err := c.checkClosed(); err != nil {
 		return DecideResult{}, err
 	}
+	if params.InstanceID == "" {
+		return DecideResult{}, fmt.Errorf("%w: decide: instance_id is required", ErrInvalidFlags)
+	}
+	ctx, cancel := decideContext(params)
+	defer cancel()
 
 	// Collect caller identity once at entry — must come from inside AD, not
 	// from caller-asserted params (SR-A-2.4).
@@ -908,10 +912,9 @@ func (c *Client) Decide(params DecideParams) (DecideResult, error) {
 		if errors.Is(callErr, ErrAgentCapabilityUnsupported) {
 			return
 		}
-		// Emit exactly one ad.decide.called per invocation, on every return
-		// path admitted by the capability gate, including ErrAlreadyDecided
-		// no-ops (SR-A-2.4). Fail-open per
-		// SR-A-3.2: a trail-emit failure is silently discarded.
+		// Emit exactly one ad.decide.called per Client call past the closed,
+		// empty-ID and capability checks, including ErrAlreadyDecided no-ops
+		// (SR-A-2.4). Fail-open per SR-A-3.2: a trail-emit failure is discarded.
 		_ = trail.Emit(ctx, "ad.decide.called", map[string]any{
 			"instance_id":               params.InstanceID,
 			"request_token":             params.RequestToken,

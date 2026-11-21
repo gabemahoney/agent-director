@@ -18,6 +18,10 @@ error:
 - A situation that needs a human is in [Operator actions](operator-actions.md);
   never perform those steps. A `spawn` whose tmux session name is held returns
   an error naming the holder and ends its new row: leave the holder to a human.
+- MCP and Go Client calls to `decide`, `status`, `get`, `send-keys`, `read-pane`,
+  `kill`, `pause`, `resume` and `list-subagents` with an omitted or empty
+  `instance_id` return `ErrInvalidFlags` naming `instance_id`, before any row
+  is read or action taken. An unknown non-empty id returns `ErrSpawnNotFound`.
 - A call refused before anything was written or sent is safe to re-issue. Retry
   `ErrTmuxUnresponsive` and `ErrTmuxKillFailed` with backoff and a cap, and
   alert at the cap, but not a timed-out `spawn` or `resume`, nor a `send-keys`

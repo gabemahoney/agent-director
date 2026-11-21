@@ -316,12 +316,15 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 //     an `older_than` that is in neither duration form, has a leading + or
 //     -, or whose day count is above 106751 (expire), with a description
 //     naming the param and the expected form (b.anw, b.hxn, b.sgw, b.c4n).
-//   - The shared verb layer, for spawn, read-pane, list, decide, send-keys,
-//     get-many, record-pane-answer, resume, force-delivery, get-force and
-//     get-delivery, so the CLI, MCP, the Go client and the TypeScript client
-//     all return it: spawn, resume and send-keys for a send_mode other than
-//     wait_turn or steer_turn, and send-keys for a caller_uuid that is not a
-//     hyphenated hexadecimal UUID; force-delivery for an empty instance id;
+//   - The shared verb layer, for verb-specific input checks (see each
+//     Client method's Errors list): the Client methods Decide, Status, Get,
+//     SendKeys (including SendKeysContext), ReadPane, Kill, Pause, Resume
+//     and ListSubagents refuse an empty instance_id before any store read
+//     or side effect. The CLI refuses it at flag parsing first. Other causes
+//     include spawn, resume and send-keys for a send_mode other than wait_turn
+//     or steer_turn, and
+//     send-keys for a caller_uuid that is not a hyphenated hexadecimal UUID;
+//     force-delivery for an empty instance id;
 //     get-force for a force_id and get-delivery for a caller_uuid that is not
 //     one, or an empty or non-UTF-8 delivery_request_id (SR-1.3);
 //     runSpawn returns it (wrapped) when an
@@ -343,13 +346,9 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 //     older_than with ParseOlderThan, which refuses a negative value first
 //     (the CLI flag-parse and MCP argument sources above).
 //
-// So spawn's, read-pane's, list's, decide's, send-keys', get-many's,
-// record-pane-answer's, resume's, force-delivery's, get-force's and
-// get-delivery's manifest ErrorNames list it; no other callable verb
-// lists it, because the CLI flag-parse and MCP argument emissions are not
-// verb-specific and the expire verb's surfaces never reach Expire's refusal:
-// only a Go caller passing Client.Expire a negative olderThan does. (The
-// internal, non-callable trail-emit verb also lists it.)
+// Manifest ErrorNames list verb-specific shared-layer refusals. Generic CLI
+// flag parsing and MCP argument checking do not require every verb to list
+// this error. The internal, non-callable trail-emit verb also lists it.
 // It stays in five-way coherence check 3's exceptions per SR-1.7; while a
 // callable verb lists it, that listing already satisfies check 3, so the
 // exception changes nothing.
