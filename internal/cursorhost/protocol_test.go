@@ -17,7 +17,7 @@ func completedWrite(t *testing.T, p *protocol) error {
 	select {
 	case err := <-p.writes:
 		return err
-	case <-time.After(4 * time.Second):
+	case <-time.After(testWaitBudget(4 * time.Second)):
 		t.Fatal("no protocol write completion")
 		return nil
 	}
@@ -27,7 +27,7 @@ func nextFrame(t *testing.T, p *protocol) incoming {
 	select {
 	case f := <-p.frames:
 		return f
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("no protocol frame")
 		return incoming{}
 	}
@@ -96,7 +96,7 @@ func TestProtocolNotificationSaturationPreservesOrder(t *testing.T) {
 	case <-saturated:
 	case err := <-sent:
 		t.Fatalf("producer ended before saturation: %v", err)
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("producer did not reach the bounded channel")
 	}
 	if len(p.frames) != cap(p.frames) {
@@ -321,7 +321,7 @@ func TestProtocolCloseCompletesAcceptedFramesExactlyOnce(t *testing.T) {
 			enqueue(0)
 			select {
 			case <-wire.entered:
-			case <-time.After(time.Second):
+			case <-time.After(testWaitBudget(time.Second)):
 				t.Fatal("active frame did not reach transport")
 			}
 			enqueue(1)
@@ -356,7 +356,7 @@ func TestProtocolCloseCompletesAcceptedFramesExactlyOnce(t *testing.T) {
 						t.Fatalf("invalid completion %+v, accepted %v, seen %v", got, accepted[got.id], seen[got.id])
 					}
 					seen[got.id] = true
-				case <-time.After(time.Second):
+				case <-time.After(testWaitBudget(time.Second)):
 					t.Fatalf("completed %d of %d accepted frames", len(seen), want)
 				}
 			}

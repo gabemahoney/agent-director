@@ -83,7 +83,7 @@ func TestCursorGuidanceActualScopedToolsIgnoreAmbientStoreAndSocket(t *testing.T
 		t.Fatal(err)
 	}
 	c := &cursorSession{e: e}
-	until := time.Now().Add(3 * time.Second)
+	until := time.Now().Add(testWaitBudget(3 * time.Second))
 	var results []string
 	for time.Now().Before(until) {
 		results = nil
@@ -537,7 +537,7 @@ func TestCursorGuidanceProtectedRecordFailurePreventsPublication(t *testing.T) {
 		return tr, err
 	}
 	c := beginConfiguredCursorSession(t, Options{InitialPrompt: "never dispatch", mcpExecutable: guidanceCLI(t)}, scenario, opener, terminalLoop, func(e *requestEnv) { enableGuidance(t, e) })
-	c.awaitFailure(t, 3*time.Second)
+	c.awaitFailure(t, testWaitBudget(3*time.Second))
 	if len(rotationPrompts(c, t)) != 0 {
 		t.Fatal("failed guidance record admitted prompt")
 	}

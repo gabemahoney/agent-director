@@ -119,7 +119,7 @@ func TestCursorEligiblePublicPauseCancelsAcceptedQueue(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("pause success without gateway completion")
 	}
 	after, err := c.e.s.GetSpawn(row.InstanceID)

@@ -74,7 +74,7 @@ func TestOwnedRuntimeReapsNormalDescendantsBeforeTermination(t *testing.T) {
 			}
 		case err := <-p.done:
 			t.Fatalf("accepting root exited before normal descendant waits: %v", err)
-		case <-time.After(5 * time.Second):
+		case <-time.After(testWaitBudget(5 * time.Second)):
 			t.Fatalf("owned root did not complete %q before termination", exchange.request)
 		}
 	}
@@ -123,7 +123,7 @@ func TestOwnedRuntimeForkVforkAndNonleaderExec(t *testing.T) {
 				if !ok || err != nil {
 					t.Fatalf("terminal result=%v open=%t", err, ok)
 				}
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				t.Fatal("real trace events did not drain to completion")
 			}
 			awaitProcessGone(t, p.pid)
@@ -158,7 +158,7 @@ func ownedProcessLine(t *testing.T, lines <-chan string) string {
 			t.Fatal("tracee output closed before its receipt")
 		}
 		return line
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("tracee did not reach its event barrier")
 		return ""
 	}
@@ -251,7 +251,7 @@ func TestOwnedWaitCannotConsumeSiblingThreadChild(t *testing.T) {
 		if got.pid > 0 || got.err != unix.ECHILD {
 			t.Errorf("unrelated child status crossed owner threads: %+v", got)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("exact owner wait did not return")
 	}
 	if err := child.Wait(); err == nil || child.ProcessState == nil || child.ProcessState.ExitCode() != 23 {
@@ -330,7 +330,7 @@ func TestOwnedRuntimeCausalForkAndExecRaces(t *testing.T) {
 				if observed.err != nil || observed.child <= 0 {
 					t.Fatalf("event identity: %+v", observed)
 				}
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				t.Fatal("real event barrier not reached")
 			}
 			switch mode {
@@ -381,7 +381,7 @@ func TestOwnedRuntimeCausalForkAndExecRaces(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				t.Fatal("causal statuses stranded the owner")
 			}
 			if !terminals[p.pid] || !terminals[observed.child] {
@@ -451,7 +451,7 @@ func TestOwnedRuntimeProcEvidenceScope(t *testing.T) {
 					if got := p.terminate(); got != failure {
 						t.Fatalf("consumed terminal result lost failure: %v want %v", got, failure)
 					}
-				case <-time.After(5 * time.Second):
+				case <-time.After(testWaitBudget(5 * time.Second)):
 					t.Fatal("required evidence failure did not retire owner")
 				}
 			}
@@ -642,7 +642,7 @@ func TestOwnedDrainCoalescedAndLateHints(t *testing.T) {
 				close(wake)
 				select {
 				case <-joined:
-				case <-time.After(5 * time.Second):
+				case <-time.After(testWaitBudget(5 * time.Second)):
 					t.Error("owner did not retire after test cleanup wake")
 				}
 			}()
@@ -650,7 +650,7 @@ func TestOwnedDrainCoalescedAndLateHints(t *testing.T) {
 				var first [3]int
 				select {
 				case first = <-checkpoints:
-				case <-time.After(5 * time.Second):
+				case <-time.After(testWaitBudget(5 * time.Second)):
 					t.Fatal("exit stop did not drain to idle")
 				}
 				select {
@@ -662,7 +662,7 @@ func TestOwnedDrainCoalescedAndLateHints(t *testing.T) {
 				var second [3]int
 				select {
 				case second = <-checkpoints:
-				case <-time.After(5 * time.Second):
+				case <-time.After(testWaitBudget(5 * time.Second)):
 					t.Fatal("duplicate hint did not return to idle")
 				}
 				if second != [3]int{first[0] + 1, first[1], 0} {
@@ -682,7 +682,7 @@ func TestOwnedDrainCoalescedAndLateHints(t *testing.T) {
 			}
 			select {
 			case <-joined:
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				t.Fatal("available exact statuses needed a nonexistent additional wake")
 			}
 			err := <-p.done
@@ -1029,7 +1029,7 @@ func TestOwnedRealIdleDoesNotProbeAndStopWakes(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		select {
 		case <-blocked:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testWaitBudget(5 * time.Second)):
 			t.Fatal("startup SIGCHLD did not drain to the idle select")
 		}
 	}
@@ -1058,7 +1058,7 @@ func TestOwnedRealIdleDoesNotProbeAndStopWakes(t *testing.T) {
 	}
 	select {
 	case <-retired:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("real owner did not retire its subscription")
 	}
 	if terminals.Load() != 1 || terminalPID.Load() != int64(p.pid) || terminalStatus.Load() != int64(unix.SIGKILL) || signals.Load() != 1 || subscriptions.Load() != 0 {
@@ -1133,13 +1133,13 @@ func TestOwnedIdleDoesNotProbeAndStopWakes(t *testing.T) {
 		close(wake)
 		select {
 		case <-joined:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testWaitBudget(5 * time.Second)):
 			t.Error("owner did not retire after cleanup wake")
 		}
 	}()
 	select {
 	case <-blocked:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("owner did not drain to its idle select")
 	}
 	counts := func() [4]int64 { return [4]int64{waits.Load(), scans.Load(), signals.Load(), statuses.Load()} }
@@ -1265,7 +1265,7 @@ func TestOwnedStartupFailureReapsChildAndClosesPipes(t *testing.T) {
 	}
 	select {
 	case <-retired:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("failed protected startup retained its subscription")
 	}
 	if got := strings.Join(lifecycle, ","); got != "subscribed,launch,unsubscribed" {
@@ -1322,7 +1322,7 @@ func TestOwnedTerminationDeadlinesAndAbandonedCaller(t *testing.T) {
 						t.Fatalf("termination allowance=%s want %s", got.duration, want)
 					}
 					return got
-				case <-time.After(5 * time.Second):
+				case <-time.After(testWaitBudget(5 * time.Second)):
 					t.Fatal("termination did not reach timer boundary")
 					return timer{}
 				}
@@ -1379,7 +1379,7 @@ func TestOwnedTerminationDeadlinesAndAbandonedCaller(t *testing.T) {
 			unblock()
 			select {
 			case <-retired: // owner replied to the abandoned caller and released its subscription
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				t.Fatal("abandoned caller blocked terminal publication or owner disposal")
 			}
 			if got := strings.Join(lifecycle, ","); got != "subscribed,launch,unsubscribed" || signals.Load() != 1 {
@@ -1417,7 +1417,7 @@ func TestOwnedTerminationDeadlinesAndAbandonedCaller(t *testing.T) {
 	}
 	select {
 	case <-retired:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("failed startup retained its signal subscription")
 	}
 	if got := strings.Join(lifecycle, ","); got != "subscribed,launch,unsubscribed" {
@@ -1427,7 +1427,7 @@ func TestOwnedTerminationDeadlinesAndAbandonedCaller(t *testing.T) {
 
 func awaitProcessGone(t *testing.T, pid int) {
 	t.Helper()
-	until := time.Now().Add(5 * time.Second)
+	until := time.Now().Add(testWaitBudget(5 * time.Second))
 	for time.Now().Before(until) {
 		raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 		if os.IsNotExist(err) {
@@ -1520,13 +1520,13 @@ func TestOwnedRuntimeUnexpectedDeathAndTransportEOF(t *testing.T) {
 				}
 				select {
 				case <-p.done:
-				case <-time.After(3 * time.Second):
+				case <-time.After(testWaitBudget(3 * time.Second)):
 					t.Fatal("open pipe concealed child death")
 				}
 			} else if mode == "exit" {
 				select {
 				case <-p.done:
-				case <-time.After(3 * time.Second):
+				case <-time.After(testWaitBudget(3 * time.Second)):
 					t.Fatal("child loss not detected")
 				}
 			} else {
@@ -1571,7 +1571,7 @@ func TestGatewayLossKillsProtectedRuntime(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("gateway helper did not establish protection")
 	}
 	if err = cmd.Process.Kill(); err != nil {
@@ -1616,7 +1616,7 @@ func TestSecondACPOwnerRefusedAndSentinelSurvives(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "second ACP owner") {
 			t.Fatalf("second pipe owner not refused: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("second ACP owner remained live")
 	}
 	terminalErr := err
@@ -1626,7 +1626,7 @@ func TestSecondACPOwnerRefusedAndSentinelSurvives(t *testing.T) {
 		if open {
 			t.Fatal("supervisor published more than one terminal result")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("supervisor did not close terminal notification")
 	}
 	for i := 0; i < 3; i++ {
@@ -1731,7 +1731,7 @@ func TestIndependentCursorWorkerSurvivesRuntimeTermination(t *testing.T) {
 
 func ownedWorkerPID(t *testing.T, r cursorfix.Runtime) int {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(testWaitBudget(5 * time.Second))
 	workerPID := 0
 	for time.Now().Before(deadline) {
 		raw, e := os.ReadFile(r.WorkerPID)
