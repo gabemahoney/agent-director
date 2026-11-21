@@ -759,19 +759,46 @@ set|[store]\nbusy_timeout_ms = 1_234 # ms|1234
 crlf-beside-db-path|[store]\r\ndb_path = "~/.config/agent-director/state.db"\r\nbusy_timeout_ms = 2500\r|2500
 EOF
 
-# With busy_timeout_ms = 1, the upgrade's first read gives up on a briefly held
-# store lock that the default waits out (locked-store above): the install stops
-# at step 2 (exit 5), authorizing nothing (b.c7f).
+# The step-2 runtime read gives up on a held lock with busy_timeout_ms = 1
+# (b.c7f). Stage the store past preflight: the agent-rename gate shares that
+# budget as a whole-snapshot deadline (b.ubd).
 older_store busy-timeout-short-locked
 with_config '[store]\nbusy_timeout_ms = 1'
+short_locked_store="$(mktemp -d "$ROOT/short-locked-store.XXXXXX")" || die "stage short-timeout store"
+for suffix in '' -wal -shm; do
+    if [[ -e "$db$suffix" ]]; then
+        mv "$db$suffix" "$short_locked_store/state.db$suffix" || die "stage $db$suffix"
+    fi
+done
 rm -f "$ROOT/locks.log"
 locking_sqlite3 "$db"
+{
+    printf '#!/bin/bash\nMV=%q STAGED=%q DB=%q TARGET=%q\n' \
+        "$(type -P mv)" "$short_locked_store" "$db" "$H/.config/agent-director/admin/agent-director-admin"
+    cat <<'EOF'
+"$MV" "$@" || exit "$?"
+if [[ "$#" -eq 2 && "$1" == "$TARGET".tmp.* && "$2" == "$TARGET" && ! -e "$STAGED/restored" ]]; then
+    for suffix in '' -wal -shm; do
+        if [[ -e "$STAGED/state.db$suffix" ]]; then
+            "$MV" "$STAGED/state.db$suffix" "$DB$suffix" || exit "$?"
+        fi
+    done
+    : >"$STAGED/restored"
+fi
+EOF
+} >"$ROOT/locking/mv"
+chmod 0755 "$ROOT/locking/mv"
 PATH_PREFIX="$ROOT/locking"
 local_install
 PATH_PREFIX=""
 report busy-timeout-short-locked-exit-code "$RC" "5"
 report busy-timeout-short-locked-first-stderr-line "$(head -n 1 "$ERR")" "install.sh: reading state.db's schema version FAILED"
 report busy-timeout-short-locked-reads "$(sed 's/ [0-9]*$//' "$ROOT/locks.log" | paste -sd,)" "held"
+report busy-timeout-short-locked-step2-failure "$(grep -cxF '  failed, so the install could not tell whether state.db needs a migration.' "$ERR")" "1"
+report busy-timeout-short-locked-no-migration-authorized "$(grep -cxF '  No migration was authorized.' "$ERR")" "1"
+report busy-timeout-short-locked-no-gate-failure "$(grep -cxF '  failed, so the install could not tell whether config.toml and the templates need the agent-rename migration.' "$ERR")" "0"
+report busy-timeout-short-locked-preflight-ok "$(grep -cxF 'install.sh: pre-flight OK' "$OUT")" "1"
+report busy-timeout-short-locked-store-restored "$(test -f "$short_locked_store/restored" && echo yes)" "yes"
 report busy-timeout-short-locked-nothing-authorized "$(ls -A "$H/.config/agent-director" | grep '^migrate-authorized')" ""
 # The stand-in has reaped its holder; the refused read changed no schema.
 report busy-timeout-short-locked-user-version "$(sqlite3 -cmd '.timeout 5000' "$db" 'PRAGMA user_version;')" "$PRE_CUTOVER_SCHEMA"
