@@ -21,6 +21,7 @@ import (
 func init() { cursorReportHelper = runCursorReportHelper }
 
 // prepareCursorReportHelper selects the existing direct-child reporting seam.
+// Tests selecting direct-child reporting must reuse this helper.
 func prepareCursorReportHelper(t *testing.T, path string) {
 	t.Helper()
 	// b.dcj: keep race-built helpers' default exit sleeps out of product control

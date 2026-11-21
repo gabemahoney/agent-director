@@ -1291,6 +1291,14 @@ builds and multiplies it by ten under `-race`; `cursorSession.wait` applies it
 internally. Never apply it to product deadlines or configuration values,
 asserted timing bounds, or negative waits that check something does not happen.
 
+### cursorhost report setup (reusable test helper)
+
+Tests selecting direct-child reporting MUST reuse `prepareCursorReportHelper`
+in `internal/cursorhost/report_linux_test.go`. It selects the reporting seam
+and store, and appends `atexit_sleep_ms=0` to `GORACE` for report-helper
+re-execs, keeping race-detector exit sleeps out of product control windows.
+Product deadlines and the current process's initialized detector are unchanged.
+
 ### cursorfix: synthetic ACP runtime (reusable test fixture)
 
 Process lifecycle tests MUST reuse `cursorfix.TraceLifecycle(t)` for real Linux
