@@ -32,7 +32,7 @@ func toolEvents(t *testing.T, e *requestEnv, kind string) []map[string]json.RawM
 
 func waitToolEvent(t *testing.T, e *requestEnv, kind string, count int, budget time.Duration) []map[string]json.RawMessage {
 	t.Helper()
-	until := time.Now().Add(budget)
+	until := time.Now().Add(testWaitBudget(budget))
 	for {
 		events := toolEvents(t, e, kind)
 		if len(events) >= count {

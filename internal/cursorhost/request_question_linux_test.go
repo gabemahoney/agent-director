@@ -217,7 +217,7 @@ func TestCursorConcurrentAPIPaneArbitration(t *testing.T) {
 	}
 	// A competing transaction may make the final authority check fail closed.
 	// Guard rejection completes through the request callback, without a pipe write.
-	until := time.Now().Add(4 * time.Second)
+	until := time.Now().Add(testWaitBudget(4 * time.Second))
 	for !r.sent.Load() && (!r.terminal.Load() || !bytes.Contains(pane.bytes(), []byte("response failed or retired"))) && time.Now().Before(until) {
 		time.Sleep(time.Millisecond)
 	}

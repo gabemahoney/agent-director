@@ -63,7 +63,7 @@ func finishFailedRun(t *testing.T, c *cursorSession, release func()) {
 		if err == nil {
 			t.Fatal("failed Run reported success")
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(testWaitBudget(10 * time.Second)):
 		t.Fatal("Run cleanup did not finish after the writer released")
 	}
 }
@@ -81,7 +81,7 @@ func killCursorRuntime(t *testing.T, c *cursorSession) {
 	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
 		t.Fatal(err)
 	}
-	until := time.Now().Add(3 * time.Second)
+	until := time.Now().Add(testWaitBudget(3 * time.Second))
 	for syscall.Kill(pid, 0) == nil {
 		if time.Now().After(until) {
 			t.Fatal("runtime not reaped after SIGKILL")
@@ -103,7 +103,7 @@ func TestCursorExitAfterRuntimeDeathMakesOneFlushAttempt(t *testing.T) {
 	c.keys(t, "\x15/exit\r")
 	select {
 	case <-barrier.entered:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWaitBudget(3 * time.Second)):
 		t.Fatal("exit control record not reached")
 	}
 	// The held record keeps await from completing, so it selects the runtime's

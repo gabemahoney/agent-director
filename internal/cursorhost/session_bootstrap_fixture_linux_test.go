@@ -102,7 +102,7 @@ func postBootstrapCursorSessionWithOptions(t *testing.T, options Options, relay,
 			select {
 			case c.endErr = <-c.done:
 				c.ended = true
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				slave.Close()
 				t.Error("session cleanup timed out")
 			}

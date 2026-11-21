@@ -44,7 +44,7 @@ func TestCursorModeAcknowledgementBeforePrompt(t *testing.T) {
 			var protectedPath string
 			select {
 			case protectedPath = <-opened:
-			case <-time.After(3 * time.Second):
+			case <-time.After(testWaitBudget(3 * time.Second)):
 				t.Fatal("protected transcript not opened")
 			}
 			c.wait(t, "mode request", func() bool {
@@ -124,7 +124,7 @@ func TestCursorModeRefusalNeverAdmitsInitial(t *testing.T) {
 				before = func(e *requestEnv) { enableGuidance(t, e) }
 			}
 			c := beginConfiguredCursorSession(t, options, cursorfix.Scenario{Modes: tc.modes, ModeReply: tc.reply, BeforeModeReply: tc.before}, openTranscript, terminalLoop, before)
-			err := c.awaitFailure(t, 3*time.Second)
+			err := c.awaitFailure(t, testWaitBudget(3*time.Second))
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("mode refusal=%v; want %q", err, tc.want)
 			}
@@ -290,7 +290,7 @@ func TestCursorPlanRetirementExpiryKeepsMissingWithoutRequestProof(t *testing.T)
 	c.keys(t, "\x15/exit\r")
 	select {
 	case <-entered:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWaitBudget(3 * time.Second)):
 		t.Fatal("actual runtime retirement not reached")
 	}
 	b, err := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)

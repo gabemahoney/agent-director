@@ -60,7 +60,7 @@ func TestCursorProofFlushWaitsOutBriefContention(t *testing.T) {
 		if err != nil {
 			t.Fatalf("flush after the writer released: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("flush never finished after the writer released")
 	}
 	if shell.proof == nil || mcp.proof == nil {
@@ -365,14 +365,14 @@ func TestCursorLateCommitCannotDisposeNewerFlush(t *testing.T) {
 			go func() { done <- old.write(time.Time{}) }()
 			select {
 			case <-entered:
-			case <-time.After(3 * time.Second):
+			case <-time.After(testWaitBudget(3 * time.Second)):
 				t.Fatal("actual proof COMMIT did not reach its result barrier")
 			}
 			old.abandon()
 			var result error
 			select {
 			case result = <-done:
-			case <-time.After(3 * time.Second):
+			case <-time.After(testWaitBudget(3 * time.Second)):
 				t.Fatal("abandoned observer waited for native COMMIT response")
 			}
 			if result == nil || !strings.Contains(result.Error(), "unconfirmed") || old.proofs[0].stored {

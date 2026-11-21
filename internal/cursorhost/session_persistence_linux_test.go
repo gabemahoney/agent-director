@@ -70,7 +70,7 @@ func TestCursorRecoveryCompletionCannotRestartCancellationDeadline(t *testing.T)
 	}
 	select {
 	case <-completed:
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("actual recovery report did not complete before superseding control")
 	}
 	// Deliberately spend part of the original budget at the post-await barrier.
@@ -83,7 +83,7 @@ func TestCursorRecoveryCompletionCannotRestartCancellationDeadline(t *testing.T)
 	close(resume)
 	select {
 	case <-barrier.entered:
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("superseding control did not reach protected Sync")
 	}
 	err := c.awaitFailure(t, time.Until(first.Add(cancelWait+time.Second)))
@@ -164,7 +164,7 @@ func TestCursorControlDeadlineSupervisesBlockedTranscriptSync(t *testing.T) {
 			}
 			select {
 			case <-barrier.entered:
-			case <-time.After(time.Second):
+			case <-time.After(testWaitBudget(time.Second)):
 				t.Fatal("real protected Sync did not block")
 			}
 			started := time.Now()
@@ -240,7 +240,7 @@ func TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking(t *testin
 			defer barrier.unblock()
 			select {
 			case <-barrier.entered:
-			case <-time.After(3 * time.Second):
+			case <-time.After(testWaitBudget(3 * time.Second)):
 				t.Fatal("initial acceptance not persisted")
 			}
 			if failure == "UserPromptSubmit" {
@@ -270,7 +270,7 @@ func TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking(t *testin
 					t.Fatal(err)
 				}
 			}
-			t.Logf("initial pre-active failure: %v", c.awaitFailure(t, 4*time.Second))
+			t.Logf("initial pre-active failure: %v", c.awaitFailure(t, testWaitBudget(4*time.Second)))
 			accepted, disposed := map[string]bool{}, map[string]int{}
 			userInputs := 0
 			for _, r := range c.records(t) {
@@ -383,7 +383,7 @@ func TestCursorStartRecordGateRetiresWithoutBytesAndAllowsExplicitInput(t *testi
 	c.keys(t, "retire-at-start-record\r")
 	select {
 	case <-barrier.entered:
-	case <-time.After(time.Second):
+	case <-time.After(testWaitBudget(time.Second)):
 		t.Fatal("protected start Sync not reached")
 	}
 	raw, err := os.ReadFile(c.e.runtime.Raw)
@@ -434,7 +434,7 @@ func TestCursorInitialPromptIndividualByteBoundary(t *testing.T) {
 			text := strings.Repeat("🦋", size/4) + strings.Repeat("x", size%4)
 			c := beginCursorSession(t, text, openTranscript)
 			if size > 1024*1024 {
-				if err := c.awaitFailure(t, time.Second); !strings.Contains(err.Error(), "input exceeds limit") {
+				if err := c.awaitFailure(t, testWaitBudget(time.Second)); !strings.Contains(err.Error(), "input exceeds limit") {
 					t.Fatal(err)
 				}
 				if got := c.prompts(t); len(got) != 0 {

@@ -189,7 +189,7 @@ func beginConfiguredCursorSession(t *testing.T, options Options, scenario cursor
 			master.Write([]byte("\x15/exit\r"))
 			select {
 			case <-c.done:
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				slave.Close()
 				t.Error("session cleanup timed out")
 			}
@@ -200,7 +200,7 @@ func beginConfiguredCursorSession(t *testing.T, options Options, scenario cursor
 
 func (c *cursorSession) wait(t *testing.T, label string, predicate func() bool) {
 	t.Helper()
-	until := time.Now().Add(3 * time.Second)
+	until := time.Now().Add(testWaitBudget(3 * time.Second))
 	for !predicate() {
 		select {
 		case err := <-c.done:
@@ -325,7 +325,7 @@ func (c *cursorSession) stop(t *testing.T) {
 		if err != nil {
 			t.Fatalf("exit: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("exit timed out")
 	}
 }
@@ -518,7 +518,7 @@ func (b *saveBarrier) wait(t *testing.T, c *cursorSession) {
 	case c.endErr = <-c.done:
 		c.ended = true
 		t.Fatalf("gateway ended before the save blocked: %v", c.endErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("save did not block")
 	}
 }
@@ -542,7 +542,7 @@ func (b *saveBarrier) control(t *testing.T, c *cursorSession, keys, followUp str
 	select {
 	case c.endErr = <-c.done:
 		c.ended = true
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("exit did not stop the gateway")
 	}
 	if c.endErr != nil {
@@ -570,7 +570,7 @@ func (b *saveBarrier) fatal(t *testing.T, c *cursorSession, text string) {
 		t.Fatal(err)
 	}
 	b.open()
-	c.awaitFailure(t, 5*time.Second)
+	c.awaitFailure(t, testWaitBudget(5*time.Second))
 	if _, err := c.controllerResult(); err == nil || err.Error() != "Cursor input persistence unconfirmed; no replay: ACP input binding changed" {
 		t.Fatalf("controller error = %v; want the save's unconfirmed persistence", err)
 	}

@@ -151,7 +151,7 @@ func TestCursorRotationPromptFailurePreservesFailureStreak(t *testing.T) {
 		t.Fatalf("rotation did not publish in the same runtime connection: before=%+v after=%+v err=%v", before, after, err)
 	}
 	c.keys(t, "failure after rotation\r")
-	if err := c.awaitFailure(t, 3*time.Second); err.Error() != cursorPromptFailureReason {
+	if err := c.awaitFailure(t, testWaitBudget(3*time.Second)); err.Error() != cursorPromptFailureReason {
 		t.Fatalf("second consecutive failure returned %v", err)
 	}
 	cursorFailureView(t, c, store.StateMissing, cursorPromptFailureReason)
@@ -339,7 +339,7 @@ func TestCursorRotationPublicationAndEveryHoldPrecedePromotion(t *testing.T) {
 	})
 	select {
 	case <-barrier.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("held input record did not block")
 	}
 	for _, r := range c.records(t) {
@@ -423,7 +423,7 @@ func TestCursorUnrecordedHeldInputRefusalCarriesTextDigest(t *testing.T) {
 			select {
 			case c.endErr = <-c.done:
 				c.ended = true
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				t.Fatal("control did not stop the gateway")
 			}
 			var refused []submissionRecord
@@ -518,7 +518,7 @@ func TestCursorUnclaimableInputRecordsKeepCapture(t *testing.T) {
 		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
 			t.Fatal(err)
 		}
-		c.awaitFailure(t, 5*time.Second)
+		c.awaitFailure(t, testWaitBudget(5*time.Second))
 		var observed []submissionRecord
 		cancelled := map[string]bool{}
 		for _, r := range c.records(t) {
@@ -586,7 +586,7 @@ func TestCursorControlDuringHeldPromotionIsActedOn(t *testing.T) {
 			rotationRelease(t, c.e.runtime.NewRelease)
 			select {
 			case <-barrier.entered:
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				t.Fatal("promotion record did not block")
 			}
 			// The blocked record's await is the only reader of the control's wake.
@@ -600,7 +600,7 @@ func TestCursorControlDuringHeldPromotionIsActedOn(t *testing.T) {
 			select {
 			case c.endErr = <-c.done:
 				c.ended = true
-			case <-time.After(5 * time.Second):
+			case <-time.After(testWaitBudget(5 * time.Second)):
 				t.Fatal("exit did not stop the gateway")
 			}
 			if c.endErr != nil {
@@ -753,7 +753,7 @@ func TestCursorPromptRetiredDuringControlRecordIsActedOn(t *testing.T) {
 	c.keys(t, "retired-unwritten\r")
 	select {
 	case <-start.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("start record did not block")
 	}
 	// The blocked start record's await consumes the interrupt; its write guard
@@ -766,7 +766,7 @@ func TestCursorPromptRetiredDuringControlRecordIsActedOn(t *testing.T) {
 		if kind != "prompt retired" {
 			t.Fatalf("await consumed %q; want the retired prompt", kind)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWaitBudget(5 * time.Second)):
 		t.Fatal("await did not consume the retired prompt")
 	}
 	control.unblock()
@@ -847,7 +847,7 @@ func TestCursorRotationFailureRefusesEveryHeldInput(t *testing.T) {
 				}
 			}
 			rotationRelease(t, c.e.runtime.NewRelease)
-			err := c.awaitFailure(t, 5*time.Second)
+			err := c.awaitFailure(t, testWaitBudget(5*time.Second))
 			t.Logf("causal failure: %v", err)
 			for _, text := range []string{"refuse-held-one", "refuse-held-two"} {
 				rotationNoBytes(t, c, text)
@@ -968,7 +968,7 @@ func TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome(t *testi
 			} else {
 				select {
 				case <-barrier.entered:
-				case <-time.After(time.Second):
+				case <-time.After(testWaitBudget(time.Second)):
 					t.Fatal("real start record did not block")
 				}
 			}
