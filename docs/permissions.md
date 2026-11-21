@@ -380,7 +380,9 @@ exit it at the pane:
 1. Read the pane. Close any fallen-back request with a token-specific
    pane answer, or `record-pane-answer` if already answered. Answer any
    remaining dialog after inspecting it.
-2. Read the pane again and check that the agent's prompt is empty.
+2. For a working Codex row, follow the
+   [known Codex limit](caller-contract.md#permission-relay) first.
+   Read the pane again and check that the agent's prompt is empty.
    `send-keys` does not clear a draft before appending `/exit`.
 3. Send `/exit` with that read's `pane_sha256`:
 
@@ -473,6 +475,9 @@ Enter. Use the key shown for that request, especially on Cursor.
 not an `ansi` read. agent-director compares the bytes, not the screen's
 meaning. `--as` is your claim. Cursor also checks that a sent claim
 matches the selected option before answering the runtime.
+
+For the known limit on inspected sends while Codex is working after a
+relay allow, follow [Permission relay](caller-contract.md#permission-relay).
 
 An attached Cursor menu choice is recorded automatically. If an outside
 answer has genuinely not been recorded, record it without typing anything:

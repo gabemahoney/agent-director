@@ -2553,7 +2553,8 @@ with:
 
 - `ErrPaneChanged`: the pane changed since you read it. Read it again; the
   error does not carry the new hash. Volatile lines, such as a spinner or a
-  clock, can cause it.
+  clock, can cause it. See the known Codex limit below before retrying on a
+  working Codex row.
 - `ErrPaneAnswerInProgress`: another pane answer to this request is still
   being sent, or its sender cannot be checked and `not_before` has not
   passed. Do nothing. A sender that died leaves `pane_answer` `intent`, its
@@ -2634,13 +2635,25 @@ hooks show the request's dialog gone. Follow the request's proof and delivery
 fields. Apart from a Cursor turn's end (below), completing or interrupting the
 main turn does not release a child or unknown-origin request, even when its
 child id is null. See [The dialog hold](permissions.md#the-dialog-hold).
-Nothing is sent. Keep the keys and retry later. If it is still held after
-some seconds, have a person or an LLM read the pane and, having looked, send with that read's
+Nothing is sent. Keep the keys and retry later. When the pane is stable,
+have a person or an LLM read it and, having looked, send with that read's
 `pane_sha256`: a matching hash passes the API's dialog hold, and a changed pane
 is `ErrPaneChanged`. Every other refusal still applies. On Cursor the gateway
 can still refuse the prompt with `gateway_refused`; follow
 [Cursor input outcomes](#cursor-input-outcomes). Never pass
 `--expect-pane-sha256` from an automatic flow.
+
+Known Codex limit: after a relay allow, the row usually continues working,
+but the request stays unproven until the turn ends. Only `turn_end` or
+`agent_gone` proves a Codex request gone; its hooks give no earlier proof.
+Until then, plain `send-keys` gets `ErrDialogMaybeOpen`. The inspected way
+through is unusable while Codex is working: its status line
+(`Working (Ns • esc to interrupt)`, with elapsed time and a spinner) changes
+every second. The hash is stale before a person or an LLM can send it, so
+the send gets `ErrPaneChanged`. Wait for the turn end (`waiting` or its
+`turn_end` proof), then send. A `waiting` state recovered after an error
+does not prove requests gone; see
+[A Codex turn that ends in an error](#a-codex-turn-that-ends-in-an-error).
 
 A matching hash does not close every race: the pane can change between
 capture and key, a key already in flight can land on a dialog that appears
