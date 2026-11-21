@@ -956,12 +956,14 @@ func TestRelayWritePrecondition(t *testing.T) {
 	}
 	cases := []struct {
 		name     string
+		maxWait  time.Duration
 		held     bool  // another process holds the write lock past the write's wait
 		checkErr error // the precondition's answer
 	}{
-		{"lock held past the wait", true, nil},
-		{"precondition fails", false, errParent},
-		{"precondition holds", false, nil},
+		{"lock held past the wait", 150 * time.Millisecond, true, nil},
+		// b.d33: allow slow synchronous=FULL commits without leaving the bounded path.
+		{"precondition fails", 5 * time.Second, false, errParent},
+		{"precondition holds", 5 * time.Second, false, nil},
 	}
 	for _, w := range writes {
 		for _, tc := range cases {
@@ -982,7 +984,7 @@ func TestRelayWritePrecondition(t *testing.T) {
 					release = holdStoreLock(t, path)
 				}
 
-				done, err := w.write(s, 150*time.Millisecond, check)
+				done, err := w.write(s, tc.maxWait, check)
 				release()
 
 				switch {
