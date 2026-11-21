@@ -13,6 +13,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/layout"
 	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/resumedelegate"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -85,6 +86,15 @@ type Client struct {
 	tmuxClient TmuxClient
 	cfg        config.Config
 	logger     *log.Logger
+	// Immutable construction references for cross-version resume. The child
+	// reloads this config path; it never receives this version's parsed cfg.
+	home            string
+	homeErr         error
+	configPath      string
+	tmuxCommand     string
+	resumeRunner    resumeDelegateRunner
+	resumeVersions  resumeDelegateDiscovery
+	delegatedResume *resumedelegate.Request
 	// now is the Client's clock, time.Now in production (Appendix F.5); the
 	// spawn's launch start, kill's process wait, find-missing's pending
 	// grace period and the relay verdicts of send-keys and decide read it.
@@ -235,6 +245,16 @@ func New(opts Options) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("api: expand config path: %w", err)
 	}
+	cfgPath, err = filepath.Abs(cfgPath)
+	if err != nil {
+		return nil, fmt.Errorf("api: resolve config path: %w", err)
+	}
+	// Explicit config/store paths work without HOME. Retain any failure for
+	// delegation, the only path that needs this additional home reference.
+	home, homeErr := os.UserHomeDir()
+	if homeErr == nil {
+		home, homeErr = filepath.Abs(home)
+	}
 
 	// Step 1b — resolve Logger default.
 	logger := opts.Logger
@@ -296,14 +316,19 @@ func New(opts Options) (*Client, error) {
 	}
 
 	c := &Client{
-		st:          st,
-		tmuxClient:  tc,
-		cfg:         cfg,
-		logger:      logger,
-		now:         time.Now,
-		procChecker: probe.NewProcChecker(),
-		sleep:       time.Sleep,
-		selfPIDNS:   probe.SelfPIDNamespace,
+		home:         home,
+		homeErr:      homeErr,
+		configPath:   cfgPath,
+		tmuxCommand:  opts.TmuxCommand,
+		resumeRunner: runResumeDelegate,
+		st:           st,
+		tmuxClient:   tc,
+		cfg:          cfg,
+		logger:       logger,
+		now:          time.Now,
+		procChecker:  probe.NewProcChecker(),
+		sleep:        time.Sleep,
+		selfPIDNS:    probe.SelfPIDNamespace,
 	}
 	c.paneSelf = func() ProcessIdentity { return selfIdentity(c.procChecker, c.selfPIDNS) }
 	return c, nil

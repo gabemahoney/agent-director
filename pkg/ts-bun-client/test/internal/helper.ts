@@ -3,14 +3,17 @@
  * with a fallen-back request, seedFallenBackRelayRow), Clients over the in-repo
  * CLI, process env and cwd scoping, the fake-tmux log (its send-keys calls,
  * paneSends), spawnClaude and makeTemplateClaude (the agent every spawn names),
- * and .claude.json pre-trust fixtures. setup.ts (the preload) sets
+ * .claude.json pre-trust fixtures and the agent_not_covered refusal check
+ * (expectAgentNotCovered). setup.ts (the preload) sets
  * TS_HELPER_PATH, FAKE_TMUX_DIR and CLI_PATH.
  */
 
+import { expect } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { Client, type ClientOptions } from "../../src/client.js";
+import { ErrCantSend } from "../../src/errors.js";
 
 /** The fake-tmux binary setup.ts builds, for a Client's tmuxCommand. */
 export const FAKE_TMUX_BIN = path.join(
@@ -80,6 +83,17 @@ export function thrownBy(fn: () => unknown): unknown {
     return e;
   }
   throw new Error("expected a throw, but the call returned");
+}
+
+/**
+ * Checks err is SR-9.2's refusal for an agent busy send does not cover: ErrCantSend with exactly
+ * agent_not_covered's errDetails, naming `options` (the options the call set, in parameter order).
+ */
+export function expectAgentNotCovered(err: unknown, options: string): void {
+  expect(err).toBeInstanceOf(ErrCantSend);
+  const e = err as ErrCantSend;
+  expect(e.errDetails).toEqual({ class: "cant_send", reason: "agent_not_covered", resend_safe: true, retry_with: "new_send" });
+  expect(e.errDescription).toContain(`so ${options} cannot apply`);
 }
 
 /** What promise rejects with; fails the test when it resolves. */
@@ -166,12 +180,12 @@ export function paneSends(logPath: string): string[][] {
  * Seeds, in homeDir's store (created if missing), relay-on row `id` in `state` on a private tmux socket under
  * homeDir, with one Bash permission request past its relay window (fallen back), its relay hook gone a minute
  * ago, and the row's own labelled session in the fake-tmux table, its pane showing "answered at tmux". Returns
- * the request's token and the pane's id. writerPID optionally keeps the caller
+ * the request's token and the pane's id. agent is the row's (claude by default). writerPID optionally keeps the caller
  * alive across active reads while retaining the command's owned pane fixture.
  */
-export function seedFallenBackRelayRow(homeDir: string, id: string, state: string, writerPID?: number): { token: string; paneId: string } {
+export function seedFallenBackRelayRow(homeDir: string, id: string, state: string, writerPID?: number, agent = "claude"): { token: string; paneId: string } {
   const store = homeStore(homeDir);
-  runHelper("seed-spawn", { store, state, id, "relay-mode": "on", "create-store": true, socket: privateTmuxSocket(homeDir),
+  runHelper("seed-spawn", { store, state, id, agent, "relay-mode": "on", "create-store": true, socket: privateTmuxSocket(homeDir),
     ...(writerPID === undefined ? {} : { "writer-pid": String(writerPID), "writer-keep-pane": true as const }) });
   const token = runHelper("seed-permission-request", { store, "spawn-id": id, tool: "Bash",
     "created-ago-seconds": "172800", "hook-gone-ago-seconds": "60" })["request_token"] as string;

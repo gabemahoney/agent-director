@@ -105,17 +105,6 @@ func SeedErrSpawnNotFound(t *testing.T) (*store.Store, string) {
 	return openErrStore(t)
 }
 
-// SeedErrSpawnNotInteractive returns a store with one ended-state spawn
-// (id="id-err-ni-1"). Invoking send-keys on this spawn triggers
-// ErrSpawnNotInteractive because the state is not a live conversational
-// state.
-func SeedErrSpawnNotInteractive(t *testing.T) (*store.Store, string) {
-	t.Helper()
-	s, dbPath := openErrStore(t)
-	insertErrRow(t, s, "id-err-ni-1", store.StateEnded, "off")
-	return s, dbPath
-}
-
 // SeedErrJsonlMissing returns a store with one ended spawn whose current session
 // has a NULL jsonl_path AND a non-empty visible history — one ARCHIVED prior
 // session of the row's current life under a different session id (also with no

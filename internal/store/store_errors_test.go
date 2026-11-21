@@ -40,7 +40,7 @@ func TestWritesFailClosed(t *testing.T) {
 			return result{res}, err
 		}},
 		{"MoveToPending on a closed store", store.StateEnded, 0, func(s *store.Store, id string, sp store.Spawn) (result, error) {
-			res, v, err := s.MoveToPending(id, sp.Snapshot, launchStart, goodToken, "/tmp/ad-fail-sock", "", store.LaunchOwner{})
+			res, v, err := s.MoveToPendingWithExit(id, sp.Snapshot, launchStart, goodToken, "/tmp/ad-fail-sock", "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, s, id))
 			return result{res, v}, err
 		}},
 		{"RestoreAfterFailedResume on a closed store", store.StatePending, 0, func(s *store.Store, id string, sp store.Spawn) (result, error) {
@@ -197,7 +197,7 @@ func TestClosingWritesFailWhole(t *testing.T) {
 			return result{prior, res}, err
 		}},
 		{"resume's move to pending", store.StateEnded, nil, func(t *testing.T, f *v5Store, id string, sp store.Spawn) (result, error) {
-			res, v, err := f.s.MoveToPending(id, sp.Snapshot, moveLaunchMillis, moveToken, moveSocket, "", store.LaunchOwner{})
+			res, v, err := f.s.MoveToPendingWithExit(id, sp.Snapshot, moveLaunchMillis, moveToken, moveSocket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, id))
 			return result{res, v}, err
 		}},
 	}

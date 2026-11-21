@@ -176,14 +176,7 @@ func moveBuildShared() (*moveShared, error) {
 	}
 
 	build := func(dir, name, flags, pkg string) (string, error) {
-		out := filepath.Join(root, dir, name)
-		cmd := exec.Command("go", "build", "-ldflags", flags, "-o", out, pkg)
-		cmd.Dir = repo
-		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-		if b, err := cmd.CombinedOutput(); err != nil {
-			return "", fmt.Errorf("go build %s: %v\n%s", pkg, err, b)
-		}
-		return out, nil
+		return moveBuildBinary(repo, filepath.Join(root, dir, name), flags, pkg)
 	}
 	real := fmt.Sprintf("-X %s.Version=%s -X %s.Commit=%s", moveVersPkg, moveVersion, moveVersPkg, moveCommit)
 	standin := func(dir, configDir string) (string, error) {
@@ -212,6 +205,19 @@ func moveBuildShared() (*moveShared, error) {
 	s.ScheduleProbe = movePair{probe, s.Current.Admin}
 
 	return s, moveBuildToolbox(s.Toolbox)
+}
+
+// moveBuildBinary is the shared builder for the normal pair and cached
+// distinct-stamp publication pairs. Optional Go flags supply test-only overlays.
+func moveBuildBinary(repo, out, flags, pkg string, extra ...string) (string, error) {
+	args := append([]string{"build", "-ldflags", flags, "-o", out}, extra...)
+	cmd := exec.Command("go", append(args, pkg)...)
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("go build %s: %v\n%s", pkg, err, b)
+	}
+	return out, nil
 }
 
 // moveFakeFile describes ELF the way file(1) does, enough for install.sh's
@@ -285,7 +291,8 @@ type moveHome struct {
 	// string names one as {name}, and {HOME} is Home.
 	Vars map[string]string
 
-	release []func()
+	stagedRuntime *stagedProcess // optional case-owned process watched by the staged installer observer
+	release       []func()
 }
 
 // newMoveHome makes a case's HOME (empty) and its tools dir and TMPDIR.
@@ -308,6 +315,19 @@ func newMoveHome(t *testing.T) *moveHome {
 	h.Cwd = h.Home
 	t.Cleanup(h.Release)
 	return h
+}
+
+// BuildLegacyCurrent makes a current-schema install without publication evidence,
+// so tests of exempt non-crossing behavior do not become later-install tests.
+func (h *moveHome) BuildLegacyCurrent() {
+	h.t.Helper()
+	h.Copy(h.Pair.Main, filepath.Join(h.New, "bin", "agent-director"), 0o755)
+	h.Copy(h.Pair.Admin, filepath.Join(h.New, "admin", "agent-director-admin"), 0o700)
+	h.Write(filepath.Join(h.New, "config.toml"), moveOldConfig, 0o600)
+	res := h.Run(filepath.Join(h.New, "bin", "agent-director"), "list")
+	if res.Code != 0 {
+		h.t.Fatalf("create legacy current-schema store: %+v", res)
+	}
 }
 
 // OnRelease registers a function Release runs (last registered first).

@@ -62,7 +62,7 @@ reports in, the shared recovery checks can note it `unreported` (see
 A Codex agent reports in at its first prompt, not when its screen opens, so
 its row stays `pending` until someone prompts it. Until then `pause` and
 `send-keys` without `allow_pending` (`--allow-pending` on the CLI) are
-refused, as for any `pending` row (once the agent has exited with an end
+refused on uncovered agents (once the agent has exited with an end
 report, `pause` ends the row instead; see the
 [caller contract](caller-contract.md#when-a-codex-agent-exits)). Pass the first prompt in the `spawn`
 arguments, or read the pane with `read-pane` and then type with
@@ -98,6 +98,90 @@ observe it; nothing samples between calls. Its separate
 the display actually returned, including no display. The fields, filtering
 and what to do are in the
 [caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
+
+## Send Modes
+
+Claude Code is covered by busy send. Every `send-keys` stores a nonempty
+ordinary Message, including while the agent works or starts; it types no keys.
+Codex, Cursor and the experimental agents keep their existing input paths.
+Read `get.busy_send` for the current launch's coverage.
+
+Claude offers two Send Modes, which decide when a Message reaches a working
+agent:
+
+- `wait_turn` waits for the agent's turn to end.
+- `steer_turn` goes into the running turn at the main agent's next tool
+  boundary, once its current batch of tool calls finishes. Use it to redirect
+  an agent while it works.
+
+While the agent is idle, either goes in as soon as it safely can. Neither
+interrupts or cancels the turn or answers a Dialog. The model sees
+`[agent-director: message N of M]` before each Message body. Batching, order,
+timing, risks and limits are in
+[Wait Turn delivery and waits](caller-contract.md#wait-turn-delivery-and-waits)
+and [Steer Turn delivery](caller-contract.md#steer-turn-delivery).
+
+Delivered means the message was passed to the harness, but not necessarily confirmed received by the LLM.
+`queued` is not Delivered.
+
+For a worker, send a confirmed Message with your own Caller UUID and Message ID,
+then read its actual Result:
+
+```sh
+id=$(agent-director spawn --agent claude --cwd "$PWD" | jq -r '.instance_id')
+caller=7af00f9e-f42d-4a24-9cc1-c9697d17c261
+message=review-1
+agent-director send-keys --instance-id "$id" --text 'Review the project entry points' \
+    --send-mode wait_turn --confirmed-delivery --caller-uuid "$caller" \
+    --delivery-request-id "$message"
+agent-director get-delivery --caller-uuid "$caller" --delivery-request-id "$message"
+```
+
+A bot that steers its agent can make Steer Turn and Confirmed Delivery the
+agent's [Agent Defaults](#agent-defaults), so each send names only its pair:
+
+```sh
+id=$(agent-director spawn --agent claude --cwd "$PWD" --send-mode steer_turn \
+    --confirmed-delivery | jq -r '.instance_id')
+agent-director send-keys --instance-id "$id" --text 'Finish this step, then report' \
+    --caller-uuid "$caller" --delivery-request-id status-1
+agent-director get-delivery --caller-uuid "$caller" --delivery-request-id status-1
+```
+
+Keep the pair for that Message; use a fresh Message ID for each new one.
+Repeating the same pair and text reads its Result without sending twice.
+An unconfirmed send has no lookup: never automatically resend after a lost
+reply. Result handling belongs in the
+[caller contract](caller-contract.md#message-results).
+
+### Force delivery
+
+To hand an agent's Held Messages over without waiting for its turn to end, a
+Dialog or compaction, force them. The call blocks for up to about 15 seconds.
+Keep the `force_id` to read the attempt again:
+
+```sh
+force=$(agent-director force-delivery --instance-id "$id" | jq -r '.force_result.force_id')
+agent-director get-force --force-id "$force"
+```
+
+`send-keys --force` sends a Message and forces in one call; its result adds a
+`force_result` beside the Message's Result. Outcomes, reasons and recovery
+are in [Stored force attempts](caller-contract.md#stored-force-attempts);
+what a force returns in each agent state, and its limits, are in
+[Claude Code force capability](caller-contract.md#claude-code-force-capability).
+
+## Agent Defaults
+
+Covered Messages default to `send_mode: wait_turn` and
+`confirmed_delivery: false`. `spawn` and `make-template` accept
+`--send-mode` and `--confirmed-delivery`; each send can override them.
+`resume` keeps the conversation's defaults unless it supplies replacements.
+See [Agent Defaults](caller-contract.md#agent-defaults) for precedence.
+
+For reconnection, see [Pause and resume](#pause-and-resume). For the experimental
+`confirm_from_transcripts` setting, see
+[Confirm From Transcripts](caller-contract.md#confirm-from-transcripts).
 
 ## Family state
 
@@ -732,6 +816,9 @@ reason to look at the pane: its dialog may still be there.
 
 ## Answer a request at the pane
 
+For covered Claude, use [direct tmux and `record-pane-answer`](permissions.md#answering-at-the-pane).
+The `send-keys` key and hash examples below apply to uncovered agents.
+
 For a connected Cursor request, use its displayed key, without Enter. Each
 menu names its `request_token` and supplies distinct keys; match that token
 and option to the request you inspected. At the attached pane a deliberate
@@ -789,7 +876,7 @@ A Codex pane's keys and an example are in
 closed request keeps `delivery` `fallen_back`; its `pane_answer` (`sent`,
 `outside` or `tool_ran`) says how it was closed.
 
-For plain typing, `send-keys` also accepts `--no-enter`, `--key` and
+For plain typing on uncovered agents, `send-keys` also accepts `--no-enter`, `--key` and
 `--expect-pane-sha256`. Permission holds and stopping a held agent are in
 the [caller contract](caller-contract.md#permission-relay). Never pass a
 pane hash from an automatic flow: it means a person or an LLM judged that
@@ -815,7 +902,10 @@ and latest-session resume. Fresh reuse and switches follow the
 [life rules](#naming-the-agent); recovery rules are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries).
 
-`pause` asks a `waiting` agent to exit and keeps its row. `resume` relaunches
+For covered Claude, `pause` is keyless in any live state; see
+[keyless pause](caller-contract.md#keyless-pause-of-a-covered-agent).
+On uncovered agents, `pause` asks a `waiting` agent to exit. Both keep the row.
+`resume` relaunches
 it under the same id with the last agent's latest reported session, so the
 conversation carries on if that agent can reopen it. `resume` accepts no
 agent or session choice. Older sessions of the current life remain inspectable
@@ -837,8 +927,11 @@ not manufacture `waiting`. Transient queued, provisionally held and
 editable draft text are not restored. Session-selector filtering is defined in
 the [Cursor caller contract](caller-contract.md#cursor-operation-boundaries).
 
-For Claude and Codex, continue a resumed conversation with `send-keys` using its literal input
-fallback. Native confirmed
+For Claude, `send-keys` continues through busy send, carrying Held Messages in
+accepted order. The resumed launch's startup wakes an idle agent to receive
+them without another send; see [startup delivery](caller-contract.md#launch-end-resume-and-reuse).
+A migrated Claude launch without a route holds
+`route_unavailable` until reconnected. For Codex, `send-keys` uses its input fallback. Native confirmed
 [ordinary text submission](caller-contract.md#ordinary-text-submission)
 requires a fresh supported launch with an empty composer; `allow_pending`
 does not extend native confirmation to resumed conversations.
@@ -876,12 +969,18 @@ only at its first prompt, so it reads `pending` until then and `pause` and
 `pause` ends the row instead, see the
 [caller contract](caller-contract.md#when-a-codex-agent-exits)).
 
+To reconnect covered Claude without ending a turn it started after you looked,
+pause it only if it is waiting, and resume only once that pause succeeds:
+
 ```sh
-agent-director pause --instance-id "$id"
-agent-director resume --instance-id "$id"
+agent-director pause --instance-id "$id" --only-if-waiting &&
+    agent-director resume --instance-id "$id"
 ```
 
-Run `resume` after `pause` succeeds. If exit is not confirmed, follow the
+An error is never permission to resume: act on its
+[cause](caller-contract.md#keyless-pause-of-a-covered-agent). For other
+agents, use `pause` without `--only-if-waiting` and run `resume` once `get`
+shows `ended` or `missing`; on a timeout, follow the
 [pause timeout procedure](caller-contract.md#when-pause-cannot-confirm-exit).
 
 On a Codex row `pause` clears a draft of up to 64 lines before it types

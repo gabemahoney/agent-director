@@ -19,6 +19,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -193,7 +194,7 @@ func TestResumeLaunch(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newResumeEnv(t)
-			opts, socket := []apitest.SpawnOption{apitest.WithStartedAt(pendStartedAt)}, e.socket
+			opts, socket := []apitest.SpawnOption{apitest.WithStartedAt(pendStartedAt), apitest.WithTurnStarts(6)}, e.socket
 			switch tc.socket {
 			case "vanished":
 				socket = vanishedUserSocket(t)
@@ -202,6 +203,7 @@ func TestResumeLaunch(t *testing.T) {
 				opts = append(opts, apitest.WithNoLaunchToken())
 			}
 			r := e.seedRow(t, resumableSpec{State: tc.state, Opts: opts})
+			priorBusy := seedBusyCoveredConversation(t, e.dbPath, r.ID)
 			parent := ""
 			if tc.parent {
 				parent = pendParent(t, e)
@@ -221,12 +223,23 @@ func TestResumeLaunch(t *testing.T) {
 			wantStart, mark := e.moveStart().UnixMilli(), trailMark(t)
 			var moved apitest.SpawnColumns
 			var atMove []tmux.Call
-			e.store.afterMove(func() { moved, atMove = e.columns(t, r.ID), pendCallKinds(e.rec) })
+			e.store.afterMove(func() {
+				moved, atMove = e.columns(t, r.ID), pendCallKinds(e.rec)
+				assertBusyProjection(t, e.dbPath, r.ID, priorBusy)
+				assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "candidate", store.BusySendCovered)
+			})
 
 			res, err := e.resume(r.ID)
 
 			if err != nil || res.InstanceID != r.ID {
 				t.Fatalf("Resume = %+v, %v; want %s launched", res, err, r.ID)
+			}
+			assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "current", store.BusySendCovered)
+			if facts := busyFacts(t, e.dbPath, r.ID); facts.Binding != priorBusy.Binding || facts.Coverage != store.BusySendCovered {
+				t.Fatal("resume lost conversation or coverage")
+			}
+			if cols := e.columns(t, r.ID); cols.TurnStarts != int64(0) {
+				t.Fatalf("resume counter=%v", cols.TurnStarts)
 			}
 			calls := []tmux.Call{tmux.CallLookup, tmux.CallCreate}
 			if tc.labelByID {
@@ -312,6 +325,150 @@ func TestResumeLaunch(t *testing.T) {
 	}
 }
 
+// F1: publication uncertainty must preserve the baseline lost-reply success,
+// independently of covered authority; never restore or recreate the launch.
+func TestResumeLostReplyPublicationPreservesSuccess(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		agent    string
+		coverage store.BusySendCoverage
+	}{
+		{"claude", store.BusySendCovered},
+		{"codex", store.BusySendNotCovered},
+	} {
+		for _, replaced := range []bool{false, true} {
+			t.Run(tc.agent+"/"+map[bool]string{false: "publication error", true: "candidate replaced"}[replaced], func(t *testing.T) {
+				e := newResumeEnv(t)
+				opts := []apitest.SpawnOption{apitest.WithNoPreTrust()}
+				if tc.agent == "codex" {
+					opts = append(opts, codexRowOpts(seedCodexFolder(t, t.TempDir()).env())...)
+				}
+				r := e.seedResumable(t, store.StateEnded, opts...)
+				prior := busyFacts(t, e.dbPath, r.ID)
+				if tc.coverage == store.BusySendCovered {
+					prior = seedBusyCoveredConversation(t, e.dbPath, r.ID)
+				}
+				e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 0, Applied: true}, tmux.CallCreate)
+				var replacement apitest.BusySendFacts
+				var replacementRow apitest.SpawnColumns
+				if !replaced {
+					e.store.failPublication(nil)
+				}
+				e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) {
+					if !replaced {
+						return
+					}
+					row, err := e.st.GetSpawn(r.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, res, err := e.st.MarkMissingIfSameLife(r.ID, row.Snapshot); err != nil || res != store.CondApplied {
+						t.Fatalf("finish replaced launch=%v,%v", res, err)
+					}
+					row, err = e.st.GetSpawn(r.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if res, _, err := e.st.MoveToPendingWithExit(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), "1122334455667788", e.socket, "", store.LaunchOwner{},
+						store.BusySendDefaultsChoice{}, exitEvidenceFor(t, e.st, r.ID)); err != nil || res != store.CondApplied {
+						t.Fatalf("stage replacement=%v,%v", res, err)
+					}
+					replacement, replacementRow = busyFacts(t, e.dbPath, r.ID), e.columns(t, r.ID)
+				})
+
+				result, err := e.resume(r.ID)
+				if err != nil || result.InstanceID != r.ID || result.PreTrust != "skipped" {
+					t.Fatalf("lost-reply resume=%+v,%v; want baseline instance_id/pre_trust success", result, err)
+				}
+
+				if replaced {
+					if facts := busyFacts(t, e.dbPath, r.ID); !reflect.DeepEqual(facts, replacement) || !reflect.DeepEqual(e.columns(t, r.ID), replacementRow) {
+						t.Fatal("obsolete creator changed replacement facts or row")
+					}
+				} else {
+					if logs := e.logs.String(); !strings.Contains(logs, "WARN") || !strings.Contains(logs, r.ID) || !strings.Contains(logs, errInjectedStore.Error()) {
+						t.Fatalf("publication store error was not warned: %q", logs)
+					}
+					assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "uncertain", tc.coverage)
+				}
+				assertBusyProjection(t, e.dbPath, r.ID, prior)
+				facts := busyFacts(t, e.dbPath, r.ID)
+				wantLaunches := 2
+				if replaced {
+					wantLaunches++
+				}
+				if len(facts.Launches) != wantLaunches || len(facts.Conversations) != 1 {
+					t.Fatalf("post-create core facts=%+v", facts)
+				}
+				for _, launch := range facts.Launches {
+					want := prior.Launches[0]
+					if launch.ID == want.ID && tc.coverage == store.BusySendCovered {
+						// A covered resume's staging records the earlier Launch's
+						// End with its exit evidence (SR-6.2); the creator adds nothing.
+						if launch.EndCause.String != "process_exited" || !launch.EndedAt.Valid || launch.Revision != want.Revision+1 {
+							t.Fatalf("staging left the earlier Launch's End unrecorded: %+v", launch)
+						}
+						want.EndCause, want.EndedAt, want.Revision = launch.EndCause, launch.EndedAt, launch.Revision
+					}
+					if launch.ID == want.ID && !reflect.DeepEqual(launch, want) {
+						t.Fatalf("creator changed the earlier published Launch: %+v", launch)
+					}
+					if !replaced && launch.Kind == "resume" && (launch.Token.String != e.store.moveToken || launch.Conversation != prior.Binding || launch.EndCause.Valid || launch.EndedAt.Valid) {
+						t.Fatalf("failed publication lost exact candidate facts: %+v", launch)
+					}
+				}
+				cols := e.columns(t, r.ID)
+				if cols.State != store.StatePending || cols.LaunchOwnerPID != nil || cols.LaunchOwnerStarttime != nil || cols.LaunchOwnerPIDNS != nil {
+					t.Fatalf("post-create row restored or owner retained: %+v", cols)
+				}
+				if e.store.restores != 0 || e.store.publications != 1 {
+					t.Fatalf("restores=%d, publications=%d; want 0,1", e.store.restores, e.store.publications)
+				}
+				if got := callKinds(e.rec); !reflect.DeepEqual(got, []tmux.Call{tmux.CallLookup, tmux.CallCreate}) {
+					t.Fatalf("post-create calls=%v; want one lookup and one create", got)
+				}
+				created := rplSessionNamed(t, e.rec, e.socket, r.Name)
+				create := rstOneCreate(t, e)
+				if created.Label != tmuxfix.Valid(create.Token, r.ID, e.storeID) || created.Panes[0].AdPane != create.Token {
+					t.Fatal("failed publication lost the possibly running session")
+				}
+				if !replaced {
+					adviceAssertManifest(t, "resume", "", "Lost tmux reply: success; no restore/retry.")
+					adviceAssertManifest(t, "resume", "instance_id", "Successful creation with a lost tmux create reply returns instance_id and pre_trust for every agent, with no restoration or retry.")
+					srv, _ := e.rec.Server(e.socket)
+					e.pc.Set(srv.PID, procfix.Alive(apitest.LinuxProcStarttime))
+					e.pc.Set(created.Panes[0].PID, procfix.Alive(apitest.DarwinProcStarttime))
+					e.rec.SetCapture(e.socket, created.Panes[0].ID, "launch awaiting report-in")
+					if got, err := api.Get(e.st, api.RelayView{}, r.ID); err != nil || got.State != store.StatePending {
+						t.Fatalf("inspection get=%+v,%v", got, err)
+					}
+					if got, err := e.c.ReadPane(api.ReadPaneParams{InstanceID: r.ID}); err != nil || got.Pane != "launch awaiting report-in" {
+						t.Fatalf("inspection read-pane=%+v,%v", got, err)
+					}
+					assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "uncertain", tc.coverage)
+					row, err := e.st.GetSpawn(r.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					identity := store.LaunchIdentity{Token: create.Token, Socket: e.socket,
+						ServerPID: srv.PID, ServerStart: srv.Start, ServerStarttime: apitest.LinuxProcStarttime,
+						PaneID: created.Panes[0].ID, PanePID: created.Panes[0].PID, PaneStarttime: apitest.DarwinProcStarttime}
+					if res, err := e.st.AdoptIdentityIfUnchanged(r.ID, row.Snapshot, identity); err != nil || res != store.CondApplied {
+						t.Fatalf("later guarded adoption=%v,%v", res, err)
+					}
+					assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "current", tc.coverage)
+					if _, err := e.resume(r.ID); !errors.Is(err, api.ErrSpawnNotResumable) {
+						t.Fatalf("pending launch retry=%v; want refusal", err)
+					}
+					if len(e.rec.SocketCallsOf(tmux.CallCreate)) != 1 || e.store.restores != 0 {
+						t.Fatal("inspection/retry restored or duplicated the running launch")
+					}
+				}
+			})
+		}
+	}
+}
+
 // TestResumeMoveNotApplied (SR-8.3, SR-8.6, SR-5.8; AC-RES-09, AC-RES-11):
 // when a competing resume before or after this call's lookup changed the row,
 // or the row was removed, or the move fails in the store, resume returns its
@@ -344,7 +501,7 @@ func TestResumeMoveNotApplied(t *testing.T) {
 			lostRace, true},
 		{"a competing resume moved it after the lookup", competing, true, "ErrSpawnNotResumable", lostRace, false},
 		{"the row removed", func(t *testing.T, e *resumeEnv, id string) {
-			if err := e.st.DeleteSpawn(id); err != nil {
+			if err := storefix.DeleteWithExit(t, e.st, id); err != nil {
 				t.Errorf("DeleteSpawn: %v", err)
 			}
 		}, false, "ErrSpawnNotFound", apitest.DescCase{Name: "ErrSpawnNotFound, removed before the move"}, false},
@@ -416,11 +573,12 @@ func TestResumeMoveNotApplied(t *testing.T) {
 // TestResumeRestore (SR-8.5, SR-5.8, SR-13.2 path (i), SR-14; AC-RES-06,
 // AC-RES-07, AC-RES-12): an unresponsive create leaves the row pending; any
 // other failure gets one restore, which applied puts the row back but for the
-// move's parent (a second resume then launches), after another write or the
-// row's removal writes nothing, and on a store error leaves it pending with
-// one WARN. The error carries its sentence, the trail records it, and the call
-// charges Q + C plus A per label or kill; a Codex row (SR-7.7) is charged the
-// same.
+// move's parent, the earlier Launch's Turn Start counter included, which only
+// resume's prior carries (b.7si SR-1.4; a second resume then launches), after
+// another write or the row's removal writes nothing, and on a store error
+// leaves it pending, counter 0, with one WARN. The error carries its sentence,
+// the trail records it, and the call charges Q + C plus A per label or kill; a
+// Codex row (SR-7.7) is charged the same.
 func TestResumeRestore(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	create, label, kill := tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession
@@ -482,8 +640,20 @@ func TestResumeRestore(t *testing.T) {
 			}, onCreate: true, want: "ErrTmuxSessionCreate", desc: createFailed, outcome: apitest.RestoreRowChanged},
 		{name: "row removed after the move", prior: store.StateEnded, scripts: map[tmux.Call]tmuxfix.Script{create: fails},
 			write: func(t *testing.T, e *resumeEnv, id string) {
-				if err := e.st.DeleteSpawn(id); err != nil {
-					t.Errorf("DeleteSpawn: %v", err)
+				// Its conversation is covered: deleted as administrator
+				// deletion does, with the test judging every owned process gone.
+				row, err := e.st.GetSpawn(id)
+				if err != nil {
+					t.Errorf("GetSpawn: %v", err)
+					return
+				}
+				scope, err := e.st.ReadBusySendExitScope(id)
+				if err != nil {
+					t.Errorf("ReadBusySendExitScope: %v", err)
+					return
+				}
+				if res, err := e.st.DeleteBusySendCovered(id, row.Snapshot, store.BusySendExitEvidence{Scope: scope}); err != nil || res != store.CondApplied {
+					t.Errorf("DeleteBusySendCovered = %v, %v; want applied", res, err)
 				}
 			}, want: "ErrTmuxSessionCreate", desc: createFailed, outcome: apitest.RestoreRowRemoved},
 		{name: "restore store error", prior: store.StateEnded, scripts: map[tmux.Call]tmuxfix.Script{create: fails},
@@ -501,13 +671,21 @@ func TestResumeRestore(t *testing.T) {
 			e := newResumeEnv(t)
 			parent := pendParent(t, e)
 			t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", parent)
-			var opts []apitest.SpawnOption
+			opts := []apitest.SpawnOption{apitest.WithTurnStarts(4)} // the earlier Launch's counter, which the move resets
 			if tc.codex {
 				home := t.TempDir()
 				t.Setenv("HOME", home)
-				opts = codexRowOpts(seedCodexFolder(t, filepath.Join(home, "codex")).env())
+				opts = append(opts, codexRowOpts(seedCodexFolder(t, filepath.Join(home, "codex")).env())...)
 			}
 			r := e.seedResumable(t, tc.prior, opts...)
+			// These exercise local restore: Codex stays uncovered; a covered
+			// Codex conversation would require a separate covering recipient.
+			priorBusy := busyFacts(t, e.dbPath, r.ID)
+			resumeCoverage := store.BusySendNotCovered
+			if !tc.codex {
+				priorBusy = seedBusyCoveredConversation(t, e.dbPath, r.ID)
+				resumeCoverage = store.BusySendCovered
+			}
 			for call, s := range tc.scripts {
 				e.rec.Script(tmuxfix.AnySocket, s, call)
 			}
@@ -534,6 +712,14 @@ func TestResumeRestore(t *testing.T) {
 
 			_, err := e.resume(r.ID)
 
+			if tc.outcome != apitest.RestoreRowRemoved {
+				assertBusyProjection(t, e.dbPath, r.ID, priorBusy)
+				phase := "failed"
+				if tc.noRestore || tc.outcome == apitest.RestoreRowChanged || tc.failRestore {
+					phase = "uncertain"
+				}
+				assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", phase, resumeCoverage)
+			}
 			assertOneName(t, err, tc.want)
 			if got, want := callKinds(e.rec), append([]tmux.Call{tmux.CallLookup, create}, tc.calls...); !reflect.DeepEqual(got, want) {
 				t.Errorf("tmux calls = %v; want %v", got, want)
@@ -602,6 +788,10 @@ func TestResumeRestore(t *testing.T) {
 				}
 				if st, n := e.columns(t, r.ID).State, len(e.rec.SocketCallsOf(create)); st != store.StatePending || n != 2 {
 					t.Errorf("after the second resume: state %v, creates %d; want pending, 2", st, n)
+				}
+				assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "current", resumeCoverage)
+				if facts := busyFacts(t, e.dbPath, r.ID); facts.Binding != priorBusy.Binding || facts.Coverage != resumeCoverage {
+					t.Fatalf("retry lost retained conversation coverage: %+v", facts)
 				}
 			}
 		})

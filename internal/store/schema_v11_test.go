@@ -60,7 +60,7 @@ func TestV11MigrationEligibilityPreservation(t *testing.T) {
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
-			after := dbDump(t, path)
+			after := dumpBeforeV21(t, path)
 			if got := readQuotedRows(t, path, "permission_requests", "pre", "request_id", priorCols); !reflect.DeepEqual(got, priorRequests) {
 				t.Fatal("migration changed preexisting request columns")
 			}

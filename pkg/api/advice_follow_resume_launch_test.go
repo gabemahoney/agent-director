@@ -12,6 +12,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -173,10 +174,10 @@ type advResumeRestore struct {
 }
 
 // advResumeOnCreate runs write once, when the next create returns.
-func advResumeOnCreate(write func(e *killEnv, id, other string) error) func(*testing.T, *killEnv, *hookedResumeStore, string, string) {
+func advResumeOnCreate(write func(t *testing.T, e *killEnv, id, other string) error) func(*testing.T, *killEnv, *hookedResumeStore, string, string) {
 	return func(t *testing.T, e *killEnv, _ *hookedResumeStore, id, other string) {
 		adviceOnceAfter(e.rec, tmux.CallCreate, func() {
-			if err := write(e, id, other); err != nil {
+			if err := write(t, e, id, other); err != nil {
 				t.Errorf("write as the create returned: %v", err)
 			}
 		})
@@ -187,9 +188,9 @@ func advResumeOnCreate(write func(e *killEnv, id, other string) error) func(*tes
 func advResumeRestores(prior string) []advResumeRestore {
 	return []advResumeRestore{
 		{"restored", nil, "the row was restored to its prior state, " + prior, prior, "retry later"},
-		{"changed", advResumeOnCreate(func(e *killEnv, id, other string) error { return e.st.SetParentID(id, other) }),
+		{"changed", advResumeOnCreate(func(_ *testing.T, e *killEnv, id, other string) error { return e.st.SetParentID(id, other) }),
 			"the row changed after resume moved it to pending and was left as it is", store.StatePending, advResumeWaitRule},
-		{"removed", advResumeOnCreate(func(e *killEnv, id, _ string) error { return e.st.DeleteSpawn(id) }),
+		{"removed", advResumeOnCreate(func(t *testing.T, e *killEnv, id, _ string) error { return storefix.DeleteWithExit(t, e.st, id) }),
 			"the row was removed after resume moved it to pending, so nothing was restored", "", advResumeRemovedRetry},
 		{"stays pending", func(_ *testing.T, _ *killEnv, s *hookedResumeStore, _, _ string) { s.failRestore(nil) },
 			"the row could not be restored and stays pending", store.StatePending, advResumeWaitRule},

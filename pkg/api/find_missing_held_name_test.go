@@ -348,7 +348,7 @@ func TestFindMissingHeldNameGuard(t *testing.T) {
 	}{
 		{"deleted after the lookup", func(t *testing.T, e *hnEnv, r hnRow) {
 			e.rec.AfterCall(tmux.CallLookup, func(tmuxfix.SocketCall, error) {
-				if err := e.s.DeleteSpawn(r.id); err != nil {
+				if err := storefix.DeleteWithExit(t, e.s, r.id); err != nil {
 					t.Errorf("DeleteSpawn: %v", err)
 				}
 			})

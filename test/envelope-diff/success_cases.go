@@ -98,8 +98,9 @@ type successCase struct {
 }
 
 // successCases is the authoritative per-verb fixture table, with expire's
-// cases (expireSuccessCases, success_expire.go) and list-subagents' cases
-// (listSubagentsSuccessCases, success_subagents.go) appended.
+// cases (expireSuccessCases, success_expire.go), list-subagents' cases
+// (listSubagentsSuccessCases, success_subagents.go) and busy send's
+// (busySendSuccessCases, success_busy_send.go) appended.
 // The init() guard below ensures every callable verb is represented at least
 // once, no verb and name pair twice, and that no non-callable verb sneaks in.
 var successCases = append([]successCase{
@@ -148,11 +149,15 @@ var successCases = append([]successCase{
 	// ── get ───────────────────────────────────────────────────────────────
 	{
 		verb: "get",
+		want: map[string]any{"busy_send": "covered"},
 		seed: func(t *testing.T) (string, map[string]any) {
 			t.Helper()
 			_, dbPath := apitest.OpenStoreWithRow(t,
 				"id-get-1", "cd-get-1", store.StateWaiting, "off")
 			if _, err := apitest.BindReadSurfaceProcess(dbPath, "id-get-1", os.Getpid()); err != nil {
+				t.Fatal(err)
+			}
+			if err := apitest.SeedBusySendCoverage(dbPath, "id-get-1", store.BusySendCovered, store.BusySendCovered); err != nil {
 				t.Fatal(err)
 			}
 			return filepath.Dir(dbPath), map[string]any{"id": "id-get-1"}
@@ -186,14 +191,15 @@ var successCases = append([]successCase{
 	},
 
 	// ── send-keys ─────────────────────────────────────────────────────────
-	// A waiting row on a socket of its own; each run's fake table holds the
-	// row's own labelled session and @ad_pane-tagged pane (Ours, agent's pane
-	// found), so both runners send the text and Enter to that pane by its id
-	// (success_pane.go; SR-7.2, SR-3.7). The result is empty ({}).
+	// A waiting Claude row on a socket of its own, whose launch recorded no
+	// route: both runners admit the text as a Message Held route_unavailable
+	// and type nothing (SR-3.9), so both print the same Result but for its
+	// wait's since.
 	{
 		verb:      "send-keys",
 		seed:      seedSendKeys,
 		tmuxTable: writePaneRowTable,
+		want:      map[string]any{"class": "held", "reason": "route_unavailable"},
 		params: func(ctx map[string]any) map[string]any {
 			return map[string]any{
 				"instance_id": ctx["id"],
@@ -512,7 +518,7 @@ var successCases = append([]successCase{
 			return []string{"version"}
 		},
 	},
-}, append(expireSuccessCases, listSubagentsSuccessCases...)...)
+}, append(append(expireSuccessCases, listSubagentsSuccessCases...), busySendSuccessCases...)...)
 
 // ── completeness guard ────────────────────────────────────────────────────────
 

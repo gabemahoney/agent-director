@@ -277,14 +277,23 @@ func (s *server) killSession(args []string) (int, error) {
 }
 
 func (s *server) sendKeys(args []string) (int, error) {
-	o, rest, t, err := target(args, "", "l")
-	if err != nil || len(rest) == 0 || (o.has('l') && len(rest) != 1) {
+	o, rest, t, err := target(args, "N", "l")
+	if err != nil || len(rest) == 0 || (o.has('l') && len(rest) != 1) || !repeatCount(o['N']) {
 		return 0, errBadArgv
 	}
 	if _, _, ok := s.findPane(t); !ok {
 		return s.reply(s.catalogued("reply/cant-find-pane")), nil
 	}
 	return 0, nil
+}
+
+// repeatCount reports whether n is send-keys' -N: absent, or one positive count.
+func repeatCount(n []string) bool {
+	if len(n) == 0 {
+		return true
+	}
+	c, err := strconv.Atoi(n[0])
+	return len(n) == 1 && err == nil && c > 0
 }
 
 // buffer supports the b.qcr paste transport using the existing per-socket

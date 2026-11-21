@@ -70,7 +70,7 @@ func TestPlainSendKeysHeldUntilProven(t *testing.T) {
 		"claude": {{"its tool's PostToolUse", func() store.RequestProof { return toolRan(paToolUseID) }}, {"the main agent's Stop", turnEnd}},
 		"codex":  {{"the main agent's Interrupt", turnEnd}},
 	}
-	for _, ag := range paAgents {
+	for _, ag := range paInputAgents {
 		for _, c := range holdClosures {
 			for _, pf := range proofsOf[ag.name] {
 				t.Run(ag.label(c.name+"/"+pf.name), func(t *testing.T) {
@@ -128,28 +128,33 @@ func TestPlainSendKeysHeldUntilProven(t *testing.T) {
 
 // TestDialogMaybeOpenNamesTheOldest (b.146 step 2c rule 2): with A and B
 // acked and C acked and proven, ErrDialogMaybeOpen names A, the oldest, with
-// B, and not C, in unproven_requests; once A is proven it names B.
+// B, and not C, in unproven_requests; once A is proven it names B. On a
+// Cursor row, whose requests carry a tool_use_id: busy send covers Claude,
+// whose plain send-keys admits a Message and is never held.
 func TestDialogMaybeOpenNamesTheOldest(t *testing.T) {
 	t.Parallel()
 	tokA, tokB, tokC := storefix.TestRequestTokenA, storefix.TestRequestTokenB, storefix.TestRequestTokenC
-	p := newPAEnv(t)
+	p := newPAEnvAgent(t, store.AgentCursor, "")
 	p.seedRequest(t, tokB, "toolu_01B", relayEnvHook)
 	p.seedRequest(t, tokC, "toolu_01C", relayEnvHook)
 	for _, tok := range []string{tokA, tokB, tokC} {
-		if ok, err := p.st.DecideRelayRequest(p.r.ID, tok, "allow", "", store.WriterProcessDecide, time.Time{}, store.DefaultLockWait); err != nil || !ok {
-			t.Fatalf("decide %s = %v, %v", tok, ok, err)
-		}
-		if _, _, ok, err := p.st.AckRelayDecision(p.r.ID, tok, p.now, store.DefaultLockWait, nil); err != nil || !ok {
-			t.Fatalf("ack %s = %v, %v", tok, ok, err)
-		}
+		p.withPermissionWriter(t, func() {
+			if ok, err := p.st.DecideRelayRequest(p.r.ID, tok, "allow", "", store.WriterProcessDecide, time.Time{}, store.DefaultLockWait); err != nil || !ok {
+				t.Fatalf("decide %s = %v, %v", tok, ok, err)
+			}
+			if _, _, ok, err := p.st.AckRelayDecision(p.r.ID, tok, p.now, store.DefaultLockWait, nil); err != nil || !ok {
+				t.Fatalf("ack %s = %v, %v", tok, ok, err)
+			}
+		})
 	}
-	p.prove(t, toolRan("toolu_01C"))
+	p.proveCursorTool(t, tokC, "toolu_01C")
+	state := p.columns(t, p.r.ID).State.(string) // the acked verdicts moved the Cursor row on
 
-	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tokA, store.StateCheckPermission, tokB)
+	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tokA, state, tokB)
 	adviceAssertPhrase(t, p.sendKeys(p.plain("hi")), "1 other request(s) of the spawn still hold the dialog")
 
-	p.prove(t, toolRan(paToolUseID))
-	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tokB, store.StateCheckPermission)
+	p.proveCursorTool(t, tokA, paToolUseID)
+	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tokB, state)
 }
 
 // TestPlainSendKeysHashPassesTheHold (b.146 step 2c rule 3): a plain send-keys
@@ -182,7 +187,7 @@ func TestPlainSendKeysHashPassesTheHold(t *testing.T) {
 		{"A's relay hook alive, the pane's hash", []r7Step{r7HookAlive}, "pane", api.ErrSendKeysWhileRelayed, nil},
 		{"A fallen back, the pane's hash", nil, "pane", api.ErrRelayFallenBack, nil},
 	}
-	for _, ag := range paAgents {
+	for _, ag := range paInputAgents {
 		for _, tc := range cases {
 			t.Run(ag.label(tc.name), func(t *testing.T) {
 				t.Parallel()
@@ -221,30 +226,32 @@ func TestPlainSendKeysHashPassesTheHold(t *testing.T) {
 
 // TestNoPermissionRequestNeverHeld (b.146 step 2c rule 5, NeverHeldNoRequest):
 // a relay-on row with no permission request is never held, in any live state;
-// nor is one whose every request is proven gone.
+// nor is one whose every request is proven gone. On Codex rows, whose plain
+// text goes by guarded paste: a covered Claude row's admits a Message.
 func TestNoPermissionRequestNeverHeld(t *testing.T) {
 	t.Parallel()
 	for _, state := range []string{store.StateWaiting, store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
 		t.Run("no request, "+state, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex
 			r := e.seedRow(t, killRowSpec{State: state, RelayOn: true})
 
 			run := runVerb(e, func() (api.SendKeysResult, error) {
 				return e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "go"})
 			})
 
-			if run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
+			if run.err != nil || !slices.Equal(paKinds(run.calls), codexPasteCalls) {
 				t.Errorf("send-keys = %v, calls %v; want it typed", run.err, paKinds(run.calls))
 			}
 		})
 	}
 	t.Run("every request proven gone", func(t *testing.T) {
 		t.Parallel()
-		p := newPAEnv(t)
+		p := newCodexPAEnv(t)
 		r7Acked(t, p)
 		p.prove(t, turnEnd())
-		if run := p.sendKeysRun(p.plain("go")); run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
+		if run := p.sendKeysRun(p.plain("go")); run.err != nil || !slices.Equal(paKinds(run.calls), codexPasteCalls) {
 			t.Errorf("send-keys = %v, calls %v; want it typed", run.err, paKinds(run.calls))
 		}
 	})
@@ -253,7 +260,9 @@ func TestNoPermissionRequestNeverHeld(t *testing.T) {
 // Unknown origin uses a NULL child ID and explicit false; closed records never upgrade it.
 func TestUnknownOriginHoldAfterReopen(t *testing.T) {
 	// Serial: deadline-sensitive real authenticated synthetic proof is not a concurrency requirement.
-	for _, agent := range []string{"claude", "cursor"} {
+	// Cursor rows: busy send covers Claude, whose send-keys and pause type
+	// nothing, and a Codex request has no tool_use_id for the proofs below.
+	for _, agent := range []string{"cursor"} {
 		for _, closure := range holdClosures {
 			t.Run(agent+"/"+closure.name, func(t *testing.T) {
 				no := false

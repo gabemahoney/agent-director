@@ -71,6 +71,9 @@ func (s *Store) InsertCursorRequest(b CursorRuntime, req RelayRequest, cap int, 
 		if _, e = conn.ExecContext(ctx, `UPDATE spawns SET `+set+`, last_seen_at=CURRENT_TIMESTAMP, ended_at=NULL, `+launchStartClear+`, `+idleClear+`, liveness_unverified_since=NULL,liveness_note=NULL, `+rowVersionAdvance+` WHERE instance_id=?`, args...); e != nil {
 			return e
 		}
+		if e := publishBusySendReportedLaunch(ctx, conn, b.InstanceID); e != nil {
+			return e
+		}
 		args = []any{b.InstanceID, req.RequestToken, req.ToolName, req.ToolInput, nil, nil, nil, req.ToolUseID, nil, millisArg(req.SettledAt), false, b.InstanceID}
 		result, e := conn.ExecContext(ctx, relayInsertSQL, args...)
 		if e != nil {
@@ -380,6 +383,9 @@ func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran, turnOp
 			return e
 		}
 		moved = true
+		if e := publishBusySendReportedLaunch(ctx, conn, b.InstanceID); e != nil {
+			return e
+		}
 		return s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, StateCheckPermission, StateWorking)
 	})
 	if err == nil && written {

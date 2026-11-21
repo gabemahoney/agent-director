@@ -41,6 +41,31 @@
 #                      limited to [A-Za-z0-9_./:@%+,=-] because it is typed
 #                      into a shell.
 #   --timeout <secs>   bound on the wait (default 20).
+#   --executable PATH use this captured runtime executable for the hook.
+#   --observe-commit DIR  supply DIR/plan.json, release and events on fd
+#                      198/199/200 to a build-only mixed-hook adapter.
+#   --stream-fifo PATH give the selected --stderr-pipe/--stdout-pipe stream
+#                      directly to a test-owned FIFO. Its reader controls when
+#                      actual buffered hook bytes are consumed, even after exit.
+#   --background       with --no-wait and --stream-fifo, start the hook as a
+#                      direct background child so the pane can run another
+#                      hook. --wait later asks that same pane to reap its PID.
+#   --stderr-pipe      give the hook a pipe for stderr, as Claude Code does,
+#                      instead of the err file: the typed line is
+#                      `agent-director hook < <dir>/payload.json 2>&1 > <dir>/out | cat > <dir>/err;
+#                      echo ${PIPESTATUS[0]} > <dir>/rc`. The hook is still the
+#                      pane shell's direct child (a pipeline's simple command is
+#                      exec'd from the shell's fork), rc is written once cat has
+#                      written all of err, and the pane's shell must be bash.
+#                      Busy send's owned wake needs it: a regular file takes no
+#                      write deadline, so the hook writes nothing there.
+#   --stdout-pipe      the same for stdout, which busy send's owned
+#                      PostToolBatch steer writes to: the typed line is
+#                      `agent-director hook < <dir>/payload.json 2> <dir>/err | cat > <dir>/out;
+#                      echo ${PIPESTATUS[0]} > <dir>/rc`, and rc is written once
+#                      cat has written all of out. Only one stream can be a
+#                      pipe while the hook stays the shell's direct child, so
+#                      it excludes --stderr-pipe.
 #
 # The pane and socket come from one read-only SELECT of the row's pane_id
 # and tmux_socket in $PANE_HOOK_DB (default $HOME/.config/agent-director/state.db),
@@ -68,10 +93,20 @@ pane=""
 job=""
 envs=()
 agent=claude
+stderr_pipe=""
+stdout_pipe=""
+executable=agent-director
+observe_commit=""
+stream_fifo=""
+background=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --pane) [[ $# -ge 2 ]] || die 2 "--pane needs a target"; pane="$2"; shift 2 ;;
+        --executable) [[ $# -ge 2 ]] || die 2 "--executable needs a path"; executable="$2"; shift 2 ;;
+        --observe-commit) [[ $# -ge 2 ]] || die 2 "--observe-commit needs a directory"; observe_commit="$2"; shift 2 ;;
+        --stream-fifo) [[ $# -ge 2 ]] || die 2 "--stream-fifo needs a path"; stream_fifo="$2"; shift 2 ;;
+        --background) background=1; shift ;;
         --agent)
             [[ $# -ge 2 && ( "$2" == claude || "$2" == codex ) ]] || die 2 "--agent needs claude or codex"
             agent="$2"; shift 2 ;;
@@ -84,6 +119,8 @@ while [[ $# -gt 0 ]]; do
             [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || die 2 "--timeout needs whole seconds"
             timeout_s="$2"; shift 2 ;;
         --no-wait) mode=nowait; shift ;;
+        --stderr-pipe) stderr_pipe=1; shift ;;
+        --stdout-pipe) stdout_pipe=1; shift ;;
         --wait) [[ $# -ge 2 ]] || die 2 "--wait needs a job directory"; mode=join; job="$2"; shift 2 ;;
         --) shift; break ;;
         -*) die 2 "unknown option $1" ;;
@@ -94,12 +131,20 @@ done
 # finish waits for job's rc file, then prints the hook's stdout, copies its
 # stderr and exits with its status.
 finish() {
-    local dir="$1" rc="" i
+    local dir="$1" rc="" i wait_sent="" pid sock tgt
     for ((i = 0; i < timeout_s * 10; i++)); do
         if [[ -s "$dir/rc" ]]; then
             rc="$(<"$dir/rc")"
             [[ "$rc" =~ ^[0-9]+$ ]] && break
             rc=""
+        fi
+        if [[ -z "$wait_sent" && -f "$dir/background" && -s "$dir/pid" ]]; then
+            pid="$(<"$dir/pid")"
+            [[ "$pid" =~ ^[1-9][0-9]*$ ]] || die 3 "invalid background hook PID"
+            { read -r sock; read -r tgt; } <"$dir/target"
+            tmux ${sock:+-S "$sock"} send-keys -t "$tgt" -l -- "wait $pid; echo \$? > $dir/rc"
+            tmux ${sock:+-S "$sock"} send-keys -t "$tgt" Enter
+            wait_sent=1
         fi
         sleep 0.1
     done
@@ -125,7 +170,15 @@ if [[ "$mode" == join ]]; then
     finish "$job"
 fi
 
-[[ $# -eq 2 ]] || die 2 "usage: pane-hook.sh [--agent claude|codex] [--pane <target>] [--env K=V]... [--timeout <secs>] [--no-wait] <instance-id> <payload-json | ->"
+[[ $# -eq 2 ]] || die 2 "usage: pane-hook.sh [--agent claude|codex] [--pane <target>] [--env K=V]... [--timeout <secs>] [--stderr-pipe | --stdout-pipe] [--no-wait] <instance-id> <payload-json | ->"
+[[ -z "$stderr_pipe" || -z "$stdout_pipe" ]] || die 2 "--stderr-pipe and --stdout-pipe exclude each other"
+[[ -z "$background" || ( "$mode" == nowait && -n "$stream_fifo" ) ]] || die 2 "--background requires --no-wait and --stream-fifo"
+if [[ -n "$stream_fifo" ]]; then
+    [[ -p "$stream_fifo" && ( -n "$stderr_pipe" || -n "$stdout_pipe" ) ]] || die 2 "--stream-fifo requires a FIFO and one pipe stream"
+fi
+if [[ -n "$observe_commit" ]]; then
+    [[ -f "$observe_commit/plan.json" && -p "$observe_commit/release" && -p "$observe_commit/events" ]] || die 2 "--observe-commit requires plan.json and release/events FIFOs"
+fi
 id="$1"
 payload="$2"
 
@@ -157,9 +210,36 @@ line=""
 for kv in "${envs[@]}"; do
     line+="$kv "
 done
-hook_cmd="agent-director hook"
+printf -v hook_cmd '%q hook' "$executable"
 [[ "$agent" == claude ]] || hook_cmd+=" --agent $agent"
-line+="$hook_cmd < $job/payload.json > $job/out 2> $job/err; echo \$? > $job/rc"
+if [[ -n "$observe_commit" ]]; then
+    printf -v descriptors ' 198< %q 199< %q 200> %q' "$observe_commit/plan.json" "$observe_commit/release" "$observe_commit/events"
+    hook_cmd+="$descriptors"
+fi
+if [[ -n "$stream_fifo" ]]; then
+    # The controlled stream has no spool writer. Keep collection's empty
+    # spool separate from the FIFO, which only its test-owned reader drains.
+    : > "$job/out"
+    : > "$job/err"
+    printf -v quoted_fifo '%q' "$stream_fifo"
+    if [[ -n "$stderr_pipe" ]]; then
+        line+="$hook_cmd < $job/payload.json > $job/out 2> $quoted_fifo"
+    else
+        line+="$hook_cmd < $job/payload.json > $quoted_fifo 2> $job/err"
+    fi
+    if [[ -n "$background" ]]; then
+        : > "$job/background"
+        line+=" & printf '%s\\n' \$! > $job/pid"
+    else
+        line+="; echo \$? > $job/rc"
+    fi
+elif [[ -n "$stderr_pipe" ]]; then
+    line+="$hook_cmd < $job/payload.json 2>&1 > $job/out | cat > $job/err; echo \${PIPESTATUS[0]} > $job/rc"
+elif [[ -n "$stdout_pipe" ]]; then
+    line+="$hook_cmd < $job/payload.json 2> $job/err | cat > $job/out; echo \${PIPESTATUS[0]} > $job/rc"
+else
+    line+="$hook_cmd < $job/payload.json > $job/out 2> $job/err; echo \$? > $job/rc"
+fi
 
 tmux ${socket:+-S "$socket"} send-keys -t "$pane" -l -- "$line"
 tmux ${socket:+-S "$socket"} send-keys -t "$pane" Enter

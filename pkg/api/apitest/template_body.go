@@ -23,6 +23,12 @@ type TemplateFields struct {
 	Labels      map[string]string           // [labels]
 	Permissions *config.TemplatePermissions // [permissions] allow, deny and ask
 
+	// The busy-send Agent Defaults and confirm_from_transcripts: nil leaves
+	// the key out; any value, false and "" included, is written.
+	SendMode               *string // send_mode
+	ConfirmedDelivery      *bool   // confirmed_delivery
+	ConfirmFromTranscripts *bool   // confirm_from_transcripts
+
 	// RawKeys are written verbatim, one per line, ahead of the encoded fields,
 	// for hand-edited shapes the encoder cannot produce: an old key
 	// (`claude_args = ["--x"]`), both an old and a new name, a mis-cased key, a
@@ -55,6 +61,10 @@ func TemplateBody(f TemplateFields) string {
 		ExtraEnv:            f.ExtraEnv,
 		AgentDirectorLabels: f.Labels,
 		Permissions:         f.Permissions,
+
+		SendMode:               f.SendMode,
+		ConfirmedDelivery:      f.ConfirmedDelivery,
+		ConfirmFromTranscripts: f.ConfirmFromTranscripts,
 	}
 	var buf bytes.Buffer
 	for _, line := range f.RawKeys {

@@ -3,6 +3,8 @@ package spawn
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -11,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/installversion"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 )
 
 // withStubExe redirects executablePath for the duration of a test so JSON
@@ -75,7 +79,7 @@ func TestHelpHookBinPathUnderConfigDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("synthesizeSettings: %v", err)
 	}
-	assertExecFormSettings(t, settings, "/opt/ad/bin/agent-director", want+" help", cfg)
+	assertExecFormSettings(t, settings, "/opt/ad/bin/agent-director", want+" help", cfg, false)
 }
 
 // settingsShape is the part of the synthesized settings the permission tests read.
@@ -208,7 +212,7 @@ func TestSynthesizeSettingsRelayTimeout(t *testing.T) {
 		if got := cfg.Relay.EffectiveTimeoutSeconds(); got != tc.want || float64(got)*1000 > math.MaxInt32 {
 			t.Errorf("timeout_seconds %d: effective %d; want %d, within a 32-bit millisecond timer", tc.configured, got, tc.want)
 		}
-		assertExecFormSettings(t, synthSettings(t, Resolved{}, cfg), exe, "", cfg)
+		assertExecFormSettings(t, synthSettings(t, Resolved{}, cfg), exe, "", cfg, false)
 	}
 }
 
@@ -217,5 +221,77 @@ func TestSynthesizeSettingsRelayTimeout(t *testing.T) {
 func TestSettingsSessionStartHookTimeoutIs600(t *testing.T) {
 	if sessionStartHookTimeoutSeconds != 600 {
 		t.Fatalf("sessionStartHookTimeoutSeconds = %d; want 600 (SR-22.9)", sessionStartHookTimeoutSeconds)
+	}
+}
+
+// b.kii: capture's publication/own-stamp cases live once in installversion.
+// Consumers must pass that one captured value to all delivery/context hooks,
+// retain permanent help, and propagate capture refusal without any settings.
+func TestCapturedHookSettings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	shared, err := installversion.CaptureExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := executablePath()
+	if err != nil || actual != shared {
+		t.Fatalf("wrapper = %q, %v; shared capture %q", actual, err, shared)
+	}
+	// TR6: a consumer that resolves the ordinary executable independently must
+	// differ from this supplied capture, even when another consumer calls once.
+	captured := filepath.Join(t.TempDir(), "captured A runtime")
+	saved := executablePath
+	t.Cleanup(func() { executablePath = saved })
+	for _, provider := range []string{"claude", "codex"} {
+		for _, refuse := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/refuse=%v", provider, refuse), func(t *testing.T) {
+				calls := 0
+				captureErr := errors.New("no safe ready executable for this image")
+				executablePath = func() (string, error) {
+					calls++
+					if refuse || calls != 1 {
+						return "", captureErr
+					}
+					return captured, nil
+				}
+				cfg := config.Default()
+				cfg.Defaults.InjectHelpHook = true
+				help, err := helpHookBinPath()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if provider == "claude" {
+					r := Resolved{SpawnParams: SpawnParams{InstanceID: "capture-claude", CWD: t.TempDir(), ExtraEnv: claudeConfigWithStatusLine(t)}, BusySendCovered: true}
+					settings, err := synthesizeSettings(r, cfg)
+					if refuse {
+						if !errors.Is(err, captureErr) || settings != "" {
+							t.Fatalf("unsafe settings = %q, %v", settings, err)
+						}
+					} else {
+						if err != nil {
+							t.Fatal(err)
+						}
+						assertExecFormSettings(t, settings, captured, help+" help", cfg, true)
+						assertContextStatuslines(t, settings, captured, false)
+					}
+				} else {
+					in := codexIn{cwd: t.TempDir(), noPreTrust: true}
+					composed, err := ComposeLaunch(codexResolved(in), cfg)
+					if refuse {
+						if !errors.Is(err, captureErr) {
+							t.Fatalf("unsafe Codex compose: %v", err)
+						}
+					} else {
+						if err != nil {
+							t.Fatal(err)
+						}
+						assertCodexSettings(t, codexfix.Split(t, composed.Create.Command), codexWant{exe: captured, helpBin: help, relay: cfg.Relay.EffectiveTimeoutSeconds(), inject: true, questionOff: cfg.Defaults.DisableAskUser, preTrust: PreTrustSkipped, cwd: in.cwd})
+					}
+				}
+				if calls != 1 {
+					t.Errorf("captured %d times; want one per settings block", calls)
+				}
+			})
+		}
 	}
 }

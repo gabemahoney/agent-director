@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -57,7 +58,7 @@ func TestLaunchOwnerRecordedByEachLaunch(t *testing.T) {
 		}},
 		{"resume's move", func(t *testing.T, f *v5Store, owner store.LaunchOwner) string {
 			r := seedMoveRow(t, f, moveSpec{})
-			if res, _, err := f.s.MoveToPending(r.id, r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, "", owner); err != nil || res != store.CondApplied {
+			if res, _, err := f.s.MoveToPendingWithExit(r.id, r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, "", owner, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, r.id)); err != nil || res != store.CondApplied {
 				t.Fatalf("MoveToPending = %v, %v; want CondApplied", res, err)
 			}
 			return r.id
@@ -156,7 +157,7 @@ func TestLaunchOwnerHoldEnds(t *testing.T) {
 		f := newV5Store(t)
 		prior := store.LaunchOwner{PID: 4400, Starttime: apitest.DarwinProcStarttime, PIDNamespace: "pid:[4026532001]"}
 		r := seedMoveRow(t, f, moveSpec{opts: []apitest.SpawnOption{apitest.WithLaunchOwner(prior)}})
-		res, v, err := f.s.MoveToPending(r.id, r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, "", rvOwner)
+		res, v, err := f.s.MoveToPendingWithExit(r.id, r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, "", rvOwner, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, r.id))
 		if err != nil || res != store.CondApplied {
 			t.Fatalf("MoveToPending = %v, %v; want CondApplied", res, err)
 		}

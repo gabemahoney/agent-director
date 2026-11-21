@@ -116,6 +116,7 @@ RUN apt-get update \
         procps \
         python3 \
         sqlite3 \
+        strace \
         tmux \
         unzip \
         xz-utils \

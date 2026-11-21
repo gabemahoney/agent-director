@@ -8,6 +8,11 @@
     ".ids"
   ],
   "find-missing": [],
+  "force-delivery": [
+    ".force_result.ended_at",
+    ".force_result.force_id",
+    ".force_result.started_at"
+  ],
   "sweep": [],
   "get": [
     ".confirmations.process_liveness.checked_at",
@@ -22,6 +27,8 @@
     ".spawns[*].permission_requests[*].attempted_at",
     ".spawns[*].permission_requests[*].hook_gone_at"
   ],
+  "get-delivery": [],
+  "get-force": [],
   "get-permission": [
     ".attempted_at",
     ".hook_gone_at",
@@ -44,7 +51,9 @@
   "read-pane": [],
   "record-pane-answer": [],
   "resume": [],
-  "send-keys": [],
+  "send-keys": [
+    ".wait.since"
+  ],
   "spawn": [
     ".instance_id"
   ],

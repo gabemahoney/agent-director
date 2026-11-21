@@ -54,15 +54,15 @@ func startLiveAgent(t *testing.T) (int, string) {
 // seedKillRow seeds a waiting row id named killRowName, launched on socket
 // with token tmuxfix.Token, whose agent is its pane process (panePID,
 // paneStart), and returns the store's directory and store id.
-func seedKillRow(t *testing.T, id, socket string, panePID int, paneStart string) (string, string) {
+func seedKillRow(t *testing.T, id, socket string, panePID int, paneStart string, opts ...apitest.SpawnOption) (string, string) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	if _, err := apitest.SeedSpawn(dbPath, id, store.StateWaiting, "", "", "", true,
+	if _, err := apitest.SeedSpawn(dbPath, id, store.StateWaiting, "", "", "", true, append([]apitest.SpawnOption{
 		apitest.WithTmuxSessionName(killRowName),
 		apitest.WithLaunchIdentity(store.LaunchIdentity{
 			Token: tmuxfix.Token, Socket: socket,
 			PaneID: apitest.TestPaneID, PanePID: panePID, PaneStarttime: paneStart,
-		})); err != nil {
+		})}, opts...)...); err != nil {
 		t.Fatalf("seedKillRow: %v", err)
 	}
 	storeID, err := apitest.ReadStoreID(dbPath)

@@ -299,7 +299,8 @@ func TestResumeLookupProceeds(t *testing.T) {
 		{name: "prefix neighbour: a longer name", agent: agentGone, seed: rlkHolder(holderPrefixNeighbour)},
 		{name: "prefix neighbour: a prefix of the name", agent: agentGone,
 			seed: rlkNamed(func(r resumeRow) string { return r.Name[:len(r.Name)-1] })},
-		{name: "agent uncheckable, name free", agent: agentUnreadable},
+		// An uncheckable agent process refuses a covered Claude resume before its
+		// lookup (TestBusySendLifecycleOwnedIssuerExclusion).
 		{name: "no agent recorded, name free", agent: agentNotRecorded},
 	} {
 		t.Run(tc.name, func(t *testing.T) { rlkRun(t, tc) })

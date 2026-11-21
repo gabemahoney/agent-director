@@ -2,35 +2,44 @@
  * Smoke test — send-keys verb
  *
  * Happy path: a waiting row on a private socket whose own labelled session is
- * in the fake-tmux table: send-keys finds it Ours and sends the text, then
- * Enter, to the row's pane by id (SR-7.2, SR-3.7), as the fake's log shows.
- * Error paths: a pane answer (b.146 rule 8) whose sent write fails after its
- * one key → ErrInternal whose errDetails say key_sent; a plain call while a
- * request is not proven gone (b.146 step 2c) → ErrDialogMaybeOpen, which the
- * pane's hash passes; unknown id → ErrSpawnNotFound.
+ * in the fake-tmux table: a claude row's text is a Message held, typed by no one
+ * (SR-3.9); a pane-only droid row's send finds the session Ours and sends the
+ * text, then Enter, to the row's pane by id (SR-7.2, SR-3.7), as the fake's log shows.
+ * Error paths, on codex rows (busy send doesn't cover codex): a pane answer
+ * (b.146 rule 8) whose sent write fails after its one key → ErrInternal whose
+ * errDetails say key_sent; a plain call while a request is not proven gone
+ * (b.146 step 2c) → ErrDialogMaybeOpen, which the pane's hash passes; unknown
+ * id → ErrSpawnNotFound.
  */
 
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as path from "path";
+import { statSync, utimesSync, writeFileSync } from "fs";
 import { withTempHome } from "../internal/tempHome.js";
 import { runHelper, privateTmuxSocket, seedFallenBackRelayRow, fakeTmuxCalls, paneSends, withProcessEnv, homeStore, openClient,
   rejection } from "../internal/helper.js";
-import { ErrInvalidFlags, ErrDialogMaybeOpen, ErrInternal, ErrSpawnNotFound, type AgentDirectorError, type DialogMaybeOpenDetails,
+import { ErrSendAcceptedForceFailed, type SendAcceptedForceFailedDetails, ErrInvalidFlags, ErrDialogMaybeOpen, ErrInternal, ErrSpawnNotFound, type AgentDirectorError, type DialogMaybeOpenDetails,
   type PaneKeySentDetails } from "../../src/index.js";
 
-test("send-keys: happy path — sends the text, then Enter, to the row's pane by id", async () => {
+test.each(["claude", "droid"])("send-keys: happy path — a %s row's text", async (agent) => {
   await withTempHome(async (homeDir) => {
     const store = homeStore(homeDir);
     const id = "smoke-send-keys-id";
     const logPath = path.join(homeDir, "fake-tmux.log");
-    runHelper("seed-spawn", { store, state: "waiting", id, "create-store": true, socket: privateTmuxSocket(homeDir) });
+    runHelper("seed-spawn", { store, state: "waiting", id, agent, "create-store": true, socket: privateTmuxSocket(homeDir) });
     const paneId = runHelper("seed-row-session", { store, id })["pane_id"] as string;
 
-    await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
+    const result = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await openClient(store);
-      expect(await client.sendKeys({ instance_id: id, text: "hello smoke" })).toEqual({});
+      return await client.sendKeys({ instance_id: id, text: "hello smoke" });
     });
+    if (agent === "claude") {
+      expect(result).toMatchObject({ class: "held", final: false, instance_id: id });
+      expect(paneSends(logPath)).toEqual([]);
+      return;
+    }
+    expect(result).toEqual({});
     expect(paneSends(logPath)).toEqual([
       ["send-keys", "-t", paneId, "-l", "--", "hello smoke"],
       ["send-keys", "-t", paneId, "Enter"],
@@ -43,7 +52,7 @@ test("send-keys: error — a pane answer whose sent write fails after its key �
     const store = homeStore(homeDir);
     const id = "smoke-send-keys-answer-id";
     const logPath = path.join(homeDir, "fake-tmux.log");
-    runHelper("seed-spawn", { store, state: "check_permission", id, "relay-mode": "on", "create-store": true,
+    runHelper("seed-spawn", { store, state: "check_permission", id, agent: "codex", "relay-mode": "on", "create-store": true,
       socket: privateTmuxSocket(homeDir) });
     // Past its relay window: fallen back.
     const token = runHelper("seed-permission-request", { store, "spawn-id": id, tool: "Bash",
@@ -75,7 +84,7 @@ test("send-keys: error — a request not proven gone → ErrDialogMaybeOpen with
     const store = homeStore(homeDir);
     const id = "smoke-send-keys-hold-id";
     const logPath = path.join(homeDir, "fake-tmux.log");
-    const { token, paneId } = seedFallenBackRelayRow(homeDir, id, "check_permission", process.pid);
+    const { token, paneId } = seedFallenBackRelayRow(homeDir, id, "check_permission", process.pid, "codex");
 
     const got = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await openClient(store);
@@ -135,5 +144,44 @@ test("send-keys: negative n_lines rejects before reading or sending, leaving the
     expect(Date.parse(probed(after).checked_at!)).toBeGreaterThanOrEqual(Date.parse(probed(before).checked_at!));
     const withoutProbe = (r: typeof before) => ({ ...r, confirmations: { ...r.confirmations, process_liveness: { ...probed(r), confirmed_at: null, checked_at: null } } });
     expect(withoutProbe(after)).toEqual(withoutProbe(before));
+  });
+}, 10_000);
+
+// PM2(b), t3.xis.ec.9e.du: real CLI admission with confirmation off loses no
+// Result when its subsequent force INSERT fails; no identity may be invented.
+test("send-keys: accepted force failure preserves the unconfirmed Result", async () => {
+  await withTempHome(async (homeDir) => {
+    const store = homeStore(homeDir);
+    const id = "smoke-accepted-force-failed";
+    const wake = path.join(homeDir, "wake");
+    writeFileSync(wake, "");
+    utimesSync(wake, 1, 1);
+    const logPath = path.join(homeDir, "fake-tmux.log");
+    runHelper("seed-spawn", { store, id, state: "waiting", agent: "claude", "create-store": true,
+      socket: privateTmuxSocket(homeDir), "busy-send-wake": wake });
+    const { handle } = runHelper("install-write-failure", { store, id, kind: "busy-send-force-insert" });
+    try {
+      const err = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
+        using client = await openClient(store);
+        return await rejection(client.sendKeys({ instance_id: id, text: "private message", force: true, confirmed_delivery: false }));
+      });
+      expect(err).toBeInstanceOf(ErrSendAcceptedForceFailed);
+      const db = new Database(store, { readonly: true });
+      try {
+        const row = db.query("SELECT accepted_at_ms, confirmed FROM busy_send_messages WHERE instance_id = ?").get(id) as { accepted_at_ms: number; confirmed: number };
+        expect(row.confirmed).toBe(0);
+        const want = { result: { class: "held", final: false, reason: "readiness_unknown", resend_safe: false, retry_with: "none",
+          wait: { reason: "readiness_unknown", since: new Date(row.accepted_at_ms).toISOString().replace(/\.000Z$/, "Z").replace(/(\.\d*?[1-9])0+Z$/, "$1Z") },
+          forced: false, instance_id: id, launch_token: null, evidence_kind: null, outcome: "not_started" } } satisfies SendAcceptedForceFailedDetails;
+        expect((err as AgentDirectorError).errDetails).toEqual(want);
+        expect(db.query(`SELECT (SELECT count(*) FROM busy_send_messages) AS messages,
+          (SELECT count(*) FROM busy_send_results) AS pairs, (SELECT count(*) FROM busy_send_forces) AS forces,
+          (SELECT count(*) FROM input_attempts) AS inputs`).get()).toEqual({ messages: 1, pairs: 0, forces: 0, inputs: 0 });
+      } finally { db.close(); }
+      expect(statSync(wake).mtimeMs).toBeGreaterThan(1000);
+      expect(fakeTmuxCalls(logPath)).toEqual([]);
+    } finally {
+      runHelper("remove-write-failure", { store, handle: handle as string });
+    }
   });
 }, 10_000);

@@ -12,18 +12,23 @@ import (
 func TestTemplateBody_LoadsWithGivenFields(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	perms := &config.TemplatePermissions{Allow: []string{"Read"}, Deny: []string{"Bash(rm:*)"}, Ask: []string{"Write"}}
+	mode, off := "wait_turn", false
 	want := config.TemplateFile{
-		CWD:                 "/work/here",
-		RelayMode:           "on",
-		Agent:               "claude",
-		AgentArgs:           []string{"--model", "opus"},
-		ExtraEnv:            map[string]string{"FOO": "1"},
-		AgentDirectorLabels: map[string]string{"team": "a"},
-		Permissions:         perms,
+		CWD:                    "/work/here",
+		RelayMode:              "on",
+		Agent:                  "claude",
+		AgentArgs:              []string{"--model", "opus"},
+		ExtraEnv:               map[string]string{"FOO": "1"},
+		AgentDirectorLabels:    map[string]string{"team": "a"},
+		Permissions:            perms,
+		SendMode:               &mode,
+		ConfirmedDelivery:      &off,
+		ConfirmFromTranscripts: &off,
 	}
 	body := TemplateBody(TemplateFields{
 		Agent: want.Agent, AgentArgs: want.AgentArgs, CWD: want.CWD, RelayMode: want.RelayMode,
 		ExtraEnv: want.ExtraEnv, Labels: want.AgentDirectorLabels, Permissions: perms,
+		SendMode: want.SendMode, ConfirmedDelivery: want.ConfirmedDelivery, ConfirmFromTranscripts: want.ConfirmFromTranscripts,
 	})
 	if _, err := SeedTemplate(config.TemplatesDir(), "full", body); err != nil {
 		t.Fatalf("SeedTemplate: %v", err)

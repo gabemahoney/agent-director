@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strconv"
@@ -103,7 +104,9 @@ const (
 //     lookup decides.
 //
 // Kill never signals a process, never changes the row's state (only the
-// adoption writes to the row) and writes no log line. It writes exactly one
+// adoption writes to the row) and writes no log line. Once it verified the
+// agent process gone it records the busy-send Launch End and, when the shared
+// judgement establishes it, the exit evidence (killRun.recordExit). It writes exactly one
 // ad.kill.called trail event on every return path, and at most one
 // ad.provenance.disagree per reason, both fail-open. The contract is per
 // call: a later call checks only the processes it lists itself, so a process
@@ -143,7 +146,48 @@ func runKill(s KillStore, t KillTmux, pc ProcChecker, startingSession, stoppingW
 	if err = k.run(); err != nil {
 		return KillResult{}, err
 	}
+	if err = k.recordExit(); err != nil {
+		return KillResult{}, err
+	}
 	return KillResult{KillSent: k.killSent}, nil
+}
+
+// killExitStore is the store surface kill's verified exit records through:
+// the busy-send Launch End and the shared exit evidence (SR-6.2).
+// *store.Store satisfies it; a narrow store without it records nothing.
+type killExitStore interface {
+	EndBusySendLaunch(instanceID, token string) (bool, error)
+	ReadBusySendExitScopeOfWithin(ctx context.Context, instanceID, token string, maxWait time.Duration) (store.BusySendExitScope, bool, error)
+	EstablishBusySendExit(ev store.BusySendExitEvidence) (bool, error)
+}
+
+// recordExit is what a kill that verified its agent process gone
+// (process_check gone, after a kill or on a Gone lookup) records, for the
+// Launch it acted on only, the one whose launch token is the row's as read:
+// its Launch End (store.EndBusySendLaunch), then, when the shared judgement
+// of that Launch establishes it now, the exit evidence of every owned process
+// (busySendExitForLaunch). A Launch that replaced it meanwhile is neither
+// judged nor changed. An owned issuer still running or uncheckable, or a
+// scope that cannot be read, leaves exit unestablished, which a later resume,
+// deletion or kill establishes. A finished-row no-op, an unreadable agent and
+// a failed kill record nothing. A store failure is returned: the agent is
+// gone, and a later sweep records its Launch End.
+func (k *killRun) recordExit() error {
+	st, ok := k.s.(killExitStore)
+	if !ok || k.processCheck != processCheckGone {
+		return nil
+	}
+	if _, err := st.EndBusySendLaunch(k.id, k.row.Identity.Token); err != nil {
+		return fmt.Errorf("instance %s: the agent process is gone but recording its busy-send Launch End failed (%v); a later sweep records it", k.id, err)
+	}
+	ev, refusal, err := busySendExitForLaunch(context.Background(), st, k.pc, k.id, k.row.Identity.Token, store.DefaultLockWait)
+	if err != nil || refusal != nil || ev == nil {
+		return nil
+	}
+	if _, err := st.EstablishBusySendExit(*ev); err != nil {
+		return fmt.Errorf("instance %s: the agent process is gone but recording its busy-send exit failed (%v); a later sweep, resume or deletion establishes it", k.id, err)
+	}
+	return nil
 }
 
 // killRun is one Kill call: its inputs, the row and socket it acts on, and

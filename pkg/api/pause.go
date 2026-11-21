@@ -98,6 +98,20 @@ var (
 type PauseParams struct {
 	// InstanceID identifies the Spawn to pause gracefully.
 	InstanceID string `json:"instance_id"`
+	// OnlyIfWaiting pauses only an agent proven waiting with no turn pending
+	// (SR-6.5). It applies only to a Covered Agent. With true, the coverage
+	// the row's current Launch recorded decides first, in any state:
+	// not_covered is ErrSpawnNotPausable, cause agent_not_covered (SR-9.2),
+	// nothing ended. On a covered live row one store transaction checks the
+	// row's raw lifecycle state and its delivery records: not waiting is cause
+	// not_waiting, with NotPausableDetails.ObservedState, and a turn pending
+	// (issued input with no evidence the agent took it, a prompt whose output
+	// is not complete, or a pending force) is cause turn_pending, each changing
+	// nothing and retryable; otherwise the call claims the Launch, which
+	// fences every later hand-over, wake, steer and force to it, and the
+	// keyless pause proceeds as with false. false is today's pause. Either
+	// way a claim standing on the Launch decides first, as Pause says.
+	OnlyIfWaiting bool `json:"only_if_waiting"`
 }
 
 // PauseResult is the typed return shape — empty today. Reserved so
@@ -126,8 +140,41 @@ var pauseSleep = time.Sleep
 // Behavior:
 //
 //   - Unknown id: ErrSpawnNotFound from the store.
+//   - OnlyIfWaiting true, in any state: the coverage the row's current
+//     Launch recorded (Spawn.BusySend) decides. not_covered is
+//     ErrSpawnNotPausable with err_details NotPausableDetails, cause
+//     agent_not_covered (SR-9.2), and nothing is ended or sent; covered is
+//     the conditional keyless pause below. The rules after it apply only with
+//     OnlyIfWaiting false, the default.
 //   - Pane-only row in any state: ErrAgentCapabilityUnsupported, before any
 //     state change or tmux call. The remaining rules apply to other agents.
+//   - A row whose current Launch is recorded covered (Spawn.BusySend): keyless
+//     pause (pauseRun.keyless, SR-6.4, SR-6.5) instead of every rule below.
+//     First the Launch's pause claim decides, for either OnlyIfWaiting value
+//     (the full table is docs/caller-contract.md#standing-pause-claims). A
+//     claim standing on it answers, signalling nothing: pause_in_progress
+//     while the claiming pause is within its deadline; pause_uncertain past
+//     it with a signal intent and no outcome; else its recorded
+//     exit_uncertain (signal_sent true) or failure (its cause, or
+//     pause_uncertain with none, signal_sent omitted). A claim abandoned past
+//     its deadline with no intent and no outcome is released, and the pause
+//     goes on as if none stood. Once the agent's exit is known (the claim
+//     ended on exit evidence, or stands with paused recorded) or, with
+//     OnlyIfWaiting, the Launch's End is recorded with no claim, a finished
+//     row is the no-op success, and a live one is paused as below with no
+//     claim and no signal. The claim and its fence stay until Launch End on
+//     exit evidence (kill establishes it) or a new Launch's publication, and
+//     a new Launch is judged on its own facts. With no claim standing, a
+//     finished row is a no-op success; a live one with OnlyIfWaiting is
+//     claimed or refused (not_waiting with ObservedState, or turn_pending,
+//     changing nothing); then an identity-checked SIGTERM to its recorded
+//     agent process, which a plain pause sends only under the store's write
+//     lock while no claim stands, and its exit and its Launch's exclusion
+//     verified within timeoutSeconds, else ErrSpawnNotPausable with
+//     NotPausableDetails. With no signal sent, an agent still running at the
+//     deadline is owned_process_running, and one that can no longer be judged
+//     agent_process_unverifiable. Verified shutdown records ended with
+//     session_id retained. Nothing is typed and Held Messages stay Held.
 //   - A Codex row in a live state (pending included) whose agent process is
 //     already gone and which holds an end report (the SessionEnd of its
 //     agent) is moved to ended before any of the rules below, with no tmux
@@ -252,8 +299,9 @@ var pauseSleep = time.Sleep
 // ErrPauseTimeout and find-missing settles the row. A store error from the
 // move is returned as pause's error. A nil start-time reader makes no move.
 // Client.Pause passes pause.timeout_seconds through
-// config.Pause.EffectiveTimeoutSeconds. Pause never writes a Claude row's
-// state. It can write adoption, the relay guard's hook_gone_at and the input
+// config.Pause.EffectiveTimeoutSeconds. Uncovered Claude pause never writes
+// the row's state; covered keyless pause records its verified end itself.
+// Pause can write adoption, the relay guard's hook_gone_at and the input
 // session's manual-interference record; a Codex row can also move to ended.
 //
 // Pause is one-shot: it returns when the row reaches `ended`, when the
@@ -272,7 +320,7 @@ var pauseSleep = time.Sleep
 // what the call typed, as for send-keys: keys_sent (`/exit` and Enter both
 // went through), text_sent (the `/exit` call timed out, or it went through
 // and the Enter call failed or timed out) or nothing_sent (a failed C-u
-// included: it types no text). Codex end handling also emits ad.find_missing.tick
+// included: it types no text). Codex and keyless end handling also emit ad.find_missing.tick
 // with source ad_recovery (proc_absent and permission_orphan_closeout),
 // ad.row_mutation.committed for denied requests, and any retained
 // ad.spawn.displayed_state_transition, all after the terminal commit.
@@ -280,7 +328,8 @@ var pauseSleep = time.Sleep
 // env carries the relay judge (its start-time reader judges the lookup's
 // server, SR-3.3, and an adopted pane, SR-3.6, too) and the intent hold.
 func Pause(ctx context.Context, s PauseStore, t PauseTmux, env PauseEnv, timeoutSeconds int, params PauseParams) (PauseResult, error) {
-	r := &pauseRun{s: s, ctx: ctx, caller: callerIdentity(), procs: env.Relay.Procs, now: newRelayJudge(env.Relay).now}
+	r := &pauseRun{s: s, ctx: ctx, caller: callerIdentity(), procs: env.Relay.Procs, now: newRelayJudge(env.Relay).now,
+		timeoutSeconds: timeoutSeconds}
 	delivered, err := r.exit(t, env, params)
 	if errors.Is(err, ErrAgentCapabilityUnsupported) {
 		return PauseResult{}, err
@@ -352,6 +401,9 @@ type pauseRun struct {
 	// wait makes the end check; launch is the launch it sent them to.
 	codex  bool
 	launch launchKey
+	// timeoutSeconds is the pause budget, as Pause was given it: keyless
+	// pause's whole budget for its signal, exit and exclusion checks.
+	timeoutSeconds int
 }
 
 // endIfGone is the Codex end check: when row is a Codex row in a live state
@@ -401,22 +453,48 @@ func (r *pauseRun) endIfGoneInWait(instanceID string) func() (bool, error) {
 
 // exit is pause's row read, state rules, relay guard and tmux phase, which
 // clears the agent's input line before typing (keysRun.clear). It reports
-// whether C-u, `/exit` and Enter went through, so the wait is due. Pane-only
-// rows are refused in every state. For other agents, a finished row, and a
-// Codex row the end check moved to ended, are (false, nil). Every refusal
-// before the lookup makes no tmux call.
+// whether C-u, `/exit` and Enter went through, so the wait is due. With
+// OnlyIfWaiting, an uncovered row is refused by onlyIfWaitingGate whatever its
+// agent or state, and a covered one is paused keylessly under its claim
+// (keyless, conditional). Without it, pane-only rows are refused in every
+// state, and for other agents a finished row, and a Codex row the end check
+// moved to ended, are (false, nil). Every refusal before the lookup makes no
+// tmux call.
 func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent bool, resultErr error) {
 	if r.ctx != nil {
 		if err := r.ctx.Err(); err != nil {
 			return false, err
 		}
 	}
-	row, err := r.s.GetSpawn(params.InstanceID)
+	// The call's one budget starts before its first read (readRow): a covered
+	// row's keyless pause carries the rest of it. An uncovered pause ignores
+	// it: the budget bounds only the first read's wait for the connection, and
+	// a wait it cuts short falls back to GetSpawn; its wait after its keys
+	// keeps its own full timeout.
+	b, cancel := r.newKeylessBudget()
+	defer cancel()
+	row, err := r.readRow(b, params.InstanceID)
 	if err != nil {
 		return false, err
 	}
+	// only_if_waiting is decided from the current Launch's recorded coverage
+	// before every rule below: the Codex end check, the pane-only refusal, a
+	// finished row's no-op and the exit keys (SR-9.2). A covered row is
+	// paused keylessly only under its pause claim (SR-6.5).
+	if params.OnlyIfWaiting {
+		if err := onlyIfWaitingGate(row); err != nil {
+			return false, err
+		}
+		return false, r.keyless(b, row, true)
+	}
 	if spawn.IsPaneOnly(row.Agent) {
 		return false, spawn.PaneOnlyCapabilityError(row.Agent, "pause")
+	}
+	// A row whose current Launch is recorded covered is paused keylessly
+	// (SR-6.4), before the end check, the state rules, the relay guard and
+	// any tmux call: nothing is typed and no input session is opened.
+	if row.BusySend == store.BusySendCovered {
+		return false, r.keyless(b, row, false)
 	}
 
 	// The Codex end check comes first (SR-7.3, MC-4): before the state rules,
@@ -523,6 +601,24 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent boo
 	return true, nil
 }
 
+// onlyIfWaitingGate is pause's only_if_waiting decision from the coverage the
+// row's current Launch recorded: nil for covered, whose pause claims;
+// not_covered is ErrSpawnNotPausable with cause agent_not_covered; any other
+// value is busySendGate's invalid coverage error. A refusal ends nothing.
+func onlyIfWaitingGate(row Spawn) error {
+	switch row.BusySend {
+	case store.BusySendCovered:
+		return nil
+	case store.BusySendNotCovered:
+		return &DetailedError{
+			Err: fmt.Errorf("%w: pause %s: only_if_waiting needs a Covered Agent and busy send does not cover this agent; nothing was ended",
+				ErrSpawnNotPausable, row.InstanceID),
+			Details: NotPausableDetails{Cause: reasonAgentNotCovered},
+		}
+	}
+	return busySendGate("pause "+row.InstanceID, "only_if_waiting", row.BusySend)
+}
+
 // waitEnded is pause's wait after a delivered `/exit` (SR-7.2, SR-17): it
 // polls the row's state at pausePollInterval, sleeping through pauseSleep,
 // until the row is `ended` (nil), the real-clock deadline timeoutSeconds
@@ -589,10 +685,36 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // and Enter to the agent's own pane of the row's current launch, by pane id,
 // and polling until the row reaches ended, or until the configured timeout
 // (pause.timeout_seconds in config.toml; a missing key or 0 gives the default,
-// 30 s) elapses. Pane-only rows return ErrAgentCapabilityUnsupported in every
-// state. For other agents, terminal states (ended/missing) are no-op success.
-// Pause is one-shot — no incremental progress callback; ctx cancellation
-// short-circuits the poll.
+// 30 s) elapses. With OnlyIfWaiting true, the coverage the row's current
+// Launch recorded (Spawn.BusySend) decides first, in any state: not_covered is
+// ErrSpawnNotPausable, cause agent_not_covered, nothing ended. Only with
+// OnlyIfWaiting false, the default, do pane-only rows return
+// ErrAgentCapabilityUnsupported in every state and do other agents' terminal
+// states (ended/missing) give no-op success. A Covered Agent (its current
+// Launch recorded covered) is paused keylessly in any live state: an
+// identity-checked SIGTERM to its recorded agent process, never keys, with
+// its exit and its Launch's exclusion verified within the timeout, else
+// ErrSpawnNotPausable with NotPausableDetails' cause and signal_sent; its
+// Held Messages stay Held for a resume. With OnlyIfWaiting it first claims
+// the Launch in one store transaction, refusing an agent whose raw state is
+// not waiting (cause not_waiting, with ObservedState) or that has a turn
+// pending (turn_pending), with nothing changed; the claim fences every later
+// hand-over, wake, steer and force to the Launch. A claim standing on the
+// Launch answers a Pause of it, with either OnlyIfWaiting value, with nothing
+// signalled: pause_in_progress, pause_uncertain, or the earlier pause's
+// recorded exit_uncertain (signal_sent true) or failure (its cause, or
+// pause_uncertain, signal_sent omitted). A claim abandoned before its signal
+// intent is released and the Pause goes on as if none stood. Once the
+// agent's exit is known (the claim ended on that evidence, or stands with
+// paused recorded) or, with OnlyIfWaiting, the Launch ended with no claim, a
+// finished row is the no-op success and a live one is paused with no claim
+// and no signal, finishing its exit and exclusion checks and its row end; a
+// plain Pause of a Launch ended with no claim signals as usual. A claim and
+// its fence stay until the Launch ends on evidence of its agent's exit (Kill
+// establishes it), or a new Launch is published, which Pause judges on its
+// own. The full table is docs/caller-contract.md#standing-pause-claims. A
+// plain Pause signals only while no claim stands. Pause is one-shot — no
+// incremental progress callback; ctx cancellation short-circuits the poll.
 //
 // Pause types what a plain send-keys without ExpectPaneSHA256 types, so on a
 // relayed Spawn it is held as one: it is refused, typing nothing (no C-u
@@ -627,7 +749,14 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrAgentCapabilityUnsupported]: the row's agent is pane-only and
 //     cannot be paused; nothing is changed or sent.
-//   - [ErrSpawnNotPausable]: the row's state is not waiting.
+//   - [ErrSpawnNotPausable]: with OnlyIfWaiting false, the row's state is
+//     not waiting; with OnlyIfWaiting true, the row's current Launch is
+//     recorded not_covered, in any state, with err_details
+//     ([NotPausableDetails]) cause agent_not_covered, and nothing ended. A
+//     Covered Agent's err_details carry its cause: keyless pause's, the
+//     refusals not_waiting (with observed_state) and turn_pending, a standing
+//     claim's pause_in_progress and pause_uncertain, and a recorded outcome's
+//     replay (above).
 //   - [ErrSubmissionUnconfirmed]: an admission or cleanup failure reports
 //     attempted-input facts without proving submission. Inspect those details
 //     and the session before more input; never blindly replay text or Enter.

@@ -46,8 +46,17 @@ const storeTimestampLayout = "2006-01-02 15:04:05"
 // session_history entries WithSessionHistory seeds, in seeding order; they
 // are not spawns columns and never enter cols.
 type spawnOpts struct {
-	cols    map[string]any
-	history []SessionHistorySeed
+	cols                map[string]any
+	history             []SessionHistorySeed
+	busyCapabilities    *store.BusySendLaunchCapabilities
+	busyCapabilitiesSet bool
+}
+
+// WithBusySendCapabilities supplies complete immutable creation facts to
+// SeedSpawn (reusable fixture). nil explicitly creates an uncovered Launch.
+// Use storefix's named synthetic presets for a later provider or Wait-only case.
+func WithBusySendCapabilities(c *store.BusySendLaunchCapabilities) SpawnOption {
+	return func(o *spawnOpts) { o.busyCapabilities, o.busyCapabilitiesSet = c, true }
 }
 
 // set records value for column; nil stores NULL.
@@ -368,6 +377,14 @@ func nullIfZero[T comparable](v T) any {
 // a codex seed passes it to look as a Codex launch stored it.
 func WithNoSubagentTracking() SpawnOption {
 	return func(o *spawnOpts) { o.set("subagent_tracking", int64(0)) }
+}
+
+// WithTurnStarts stores n as the row's schema-v21 turn_starts, the current
+// Launch's Turn Start counter (b.7si SR-1.4), which no store write advances
+// yet. Without it a seeded row keeps the insert's 0. The column takes only a
+// non-negative integer.
+func WithTurnStarts(n int64) SpawnOption {
+	return func(o *spawnOpts) { o.set("turn_starts", n) }
 }
 
 // SeededSubagentMs is the instant, in Unix milliseconds, SeedSubagent and

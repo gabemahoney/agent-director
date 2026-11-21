@@ -95,8 +95,8 @@ func computeCoherenceDiff(
 	//   • "ErrSchemaMismatch", "ErrSchemaMigrationRequired" — the same, for the
 	//                         store's schema refusals (b.cm7).
 	//   • "ErrOldLayout"   — the same, for the store's old-layout refusal (SR-1.6).
-	//   • "ErrJournalMigrationRefused" — the separate administrator command
-	//                         emits its typed JournalRefusal; no Client verb does.
+	//   • "ErrJournalMigrationRefused", "ErrVersionInstallRefused" — the
+	//                         administrator emits these; no Client verb does.
 	//   • "ErrUnknownVerb", "ErrJSONMarshal", "ErrTrailWrite" — the command
 	//                         binaries write them outside any verb handler, so
 	//                         no callable verb lists them (b.cm7).
@@ -109,6 +109,7 @@ func computeCoherenceDiff(
 		"ErrSchemaMigrationRequired": {},
 		"ErrOldLayout":               {},
 		"ErrJournalMigrationRefused": {},
+		"ErrVersionInstallRefused":   {},
 		"ErrUnknownVerb":             {},
 		"ErrJSONMarshal":             {},
 		"ErrTrailWrite":              {},

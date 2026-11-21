@@ -78,16 +78,20 @@ var errDispatch = errors.New("dispatch error")
 // first argument after the global flags.
 func handlers(o clisetup.Overrides) map[string]func([]string) error {
 	return map[string]func([]string) error{
-		"help":            helpHandler,
-		"--help":          helpHandler,
-		"-h":              helpHandler,
-		"version":         versionHandler,
-		"--version":       versionHandler,
-		"-v":              versionHandler,
-		"kill-finished":   func(args []string) error { return killFinishedHandler(o, args) },
-		"delete":          func(args []string) error { return deleteHandler(o, args) },
-		"migrate-journal": func(args []string) error { return migrateJournalHandler(o, args) },
-		"snapshot-store":  func(args []string) error { return snapshotStoreHandler(o, args) },
+		"help":             helpHandler,
+		"--help":           helpHandler,
+		"-h":               helpHandler,
+		"version":          versionHandler,
+		"--version":        versionHandler,
+		"-v":               versionHandler,
+		"kill-finished":    func(args []string) error { return killFinishedHandler(o, args) },
+		"delete":           func(args []string) error { return deleteHandler(o, args) },
+		"migrate-journal":  func(args []string) error { return migrateJournalHandler(o, args) },
+		"snapshot-store":   func(args []string) error { return snapshotStoreHandler(o, args) },
+		"version-facts":    versionFactsHandler,
+		"publish-version":  publishVersionHandler,
+		"rollback-version": rollbackVersionHandler,
+		"list-versions":    listVersionsHandler,
 	}
 }
 
@@ -259,6 +263,9 @@ func dispatch(argv []string) error {
 			return journalGlobalFlagError(argv[i+1:], err)
 		}
 		return writeError(errInvalidFlags, err.Error())
+	}
+	if len(args) > 0 && versionInstallVerb(args[0]) && (g.StorePathSet || g.TmuxCommandSet || g.CreateIfMissingSet) {
+		return writeError(errInvalidFlags, "version installation commands accept --home, but not --store-path, --tmux-command or --create-if-missing")
 	}
 	o, err := g.Apply()
 	if err != nil {

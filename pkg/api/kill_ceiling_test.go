@@ -162,10 +162,13 @@ func TestKillCeilingExitWaitSetting(t *testing.T) {
 	}
 }
 
-// TestPaneVerbsCeilingVirtualTime: these manual fixture paths include target
-// checks before every write and a failure follow-up lookup. Their
-// timeouts charge less with no follow-up, at the defaults and with Q raised
-// above 2A through api.New's config.
+// TestPaneVerbsCeilingVirtualTime: these manual fixture paths and a failure
+// follow-up lookup stay within each verb's ceiling. pause's (a Codex row's)
+// include target checks before every write; send-keys' (a pane-only Droid
+// row's: busy send covers Claude, whose send types nothing) make one target
+// lookup, then their text call carrying its Enter. Their timeouts charge less
+// with no follow-up, at the defaults and with Q raised above 2A through
+// api.New's config.
 func TestPaneVerbsCeilingVirtualTime(t *testing.T) {
 	t.Parallel()
 	q, a, _ := ceilDefaults()
@@ -211,19 +214,20 @@ func TestPaneVerbsCeilingVirtualTime(t *testing.T) {
 		{"read-pane", "capture times out", tmux.CallCapture, tmux.FailTimeout, nil, paneReadCalls,
 			func(q, a time.Duration) time.Duration { return 2*q + a },
 			func(a time.Duration) apitest.DescCase { return apitest.DescCallTimeout(tmux.CallCapture, a) }},
-		{"send-keys", "Enter fails, follow-up finds Ours", callEnterKey, tmux.FailUnrecognized, nil,
-			withFollowUp(paneSendCalls), ceilings["send-keys"], func(time.Duration) apitest.DescCase {
-				return apitest.DescUnrecognisedReply(tmux.CallSendKey, "").AfterEnterFailed(apitest.PaneSendKeys)
+		{"send-keys", "Enter fails, follow-up finds Ours", tmux.CallSendEnter, tmux.FailUnrecognized, nil,
+			withFollowUp(paneOnlySendCalls), func(q, a time.Duration) time.Duration { return 3*q + 2*a },
+			func(time.Duration) apitest.DescCase {
+				return apitest.DescUnrecognisedReply(tmux.CallSendEnter, "").AfterEnterFailed(apitest.PaneSendKeys)
 			}},
-		{"send-keys", "text times out", tmux.CallSendText, tmux.FailTimeout, nil, paneTextCalls,
-			func(q, a time.Duration) time.Duration { return 6*q + a },
+		{"send-keys", "text times out", tmux.CallSendText, tmux.FailTimeout, nil, paneOnlyTextCalls,
+			func(q, a time.Duration) time.Duration { return 2*q + a },
 			func(a time.Duration) apitest.DescCase {
 				return apitest.DescKeysTimeout(apitest.PaneSendKeys, tmux.CallSendText, a)
 			}},
-		{"send-keys", "Enter times out", callEnterKey, tmux.FailTimeout, nil, paneSendCalls,
-			func(q, a time.Duration) time.Duration { return 8*q + 2*a },
+		{"send-keys", "Enter times out", tmux.CallSendEnter, tmux.FailTimeout, nil, paneOnlySendCalls,
+			func(q, a time.Duration) time.Duration { return 2*q + 2*a },
 			func(a time.Duration) apitest.DescCase {
-				return apitest.DescKeysTimeout(apitest.PaneSendKeys, callEnterKey, a)
+				return apitest.DescKeysTimeout(apitest.PaneSendKeys, tmux.CallSendEnter, a)
 			}},
 		{"pause", "Enter fails, follow-up lookup times out", callEnterKey, tmux.FailUnrecognized, followUpTimesOut,
 			withFollowUp(pauseSendCalls), ceilings["pause"], func(time.Duration) apitest.DescCase {
@@ -244,6 +248,7 @@ func TestPaneVerbsCeilingVirtualTime(t *testing.T) {
 		for _, pc := range paths {
 			t.Run(sc.name+"/"+pc.verb+"/"+pc.name, func(t *testing.T) {
 				e := newKillEnv(t)
+				e.rowAgent = map[string]string{"send-keys": store.AgentDroid, "pause": store.AgentCodex}[pc.verb]
 				e.rec.WithVirtualTime(e.clock, tmux.Timeouts{Query: sc.q, Action: sc.a})
 				r := e.seedRow(t, killRowSpec{})
 				pane := r.Spawn.Identity.PaneID
@@ -277,7 +282,7 @@ func TestPaneVerbsCeilingVirtualTime(t *testing.T) {
 				case "read-pane":
 					e.assertCaptured(t, pane, api.DefaultReadPaneLines, false)
 				case "send-keys":
-					assertTextSent(t, e.rec, r.Socket, pane, "hello")
+					assertTextCall(t, e.rec, r.Socket, pane, "hello", true)
 				default:
 					e.assertExitTyped(t, r.Socket, pane)
 				}

@@ -148,6 +148,13 @@ RUN arch=$(dpkg --print-architecture) \
  && chmod 0755 /opt/previous-release /opt/previous-release/install.sh /opt/previous-release/agent-director /opt/previous-release/agent-director-admin \
  && chmod 0644 /opt/previous-release/TAG
 
+# Cache mixed-version build modules before any changing source or binary layer.
+# The standalone slug uses this cache offline at /opt/mixed-version-modules.
+COPY go.mod go.sum /opt/mixed-version-source/
+RUN cd /opt/mixed-version-source \
+ && GOMODCACHE=/opt/mixed-version-modules go mod download \
+ && chmod -R a+rX /opt/mixed-version-modules
+
 # pc.01 runs with networking disabled. Resolve build/consumer dependencies and
 # build the actual public tarball here, including declaration emission. Keep a
 # complete input manifest so a stale image cannot validate newer mounted source.
@@ -186,6 +193,16 @@ COPY bin/agent-director /usr/local/bin/agent-director
 # source mount's; test plans run it by this full path.
 COPY bin/agent-director-admin /opt/bin/agent-director-admin
 COPY test/driver /opt/driver
+# Mixed-version T4 builds from these final immutable inputs, never a host mount.
+# The standalone slug runs offline as tester using the module cache above and
+# writes only its own build/overlay directories. Reuse the already
+# built shipped TS client instead of installing a second copy at runtime.
+COPY cmd /opt/mixed-version-source/cmd
+COPY internal /opt/mixed-version-source/internal
+COPY pkg /opt/mixed-version-source/pkg
+COPY test /opt/mixed-version-source/test
+RUN cp -a /opt/cursor-pane-bun/source/pkg/ts-bun-client/dist /opt/mixed-version-source/pkg/ts-bun-client/ \
+ && chmod -R a+rX /opt/mixed-version-source
 # The install skill ships alongside the binary so the epic-12-install
 # testplan can exercise it without a separate mount. Path mirrors the
 # repo layout (`skills/install-agent-director/`) so test scripts can

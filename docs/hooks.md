@@ -60,6 +60,54 @@ Limits:
 To disable Claude Code's prompt-suggestion background work, set
 `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` through the spawn's `extra_env`.
 
+### Busy-send delivery to a covered Claude launch
+
+A Claude launch that busy send covers also registers one `FileChanged` entry
+with `asyncRewake` and one synchronous `PostToolBatch` entry. Neither is a
+state-tracking hook or reports state. The launch's main `SessionStart`
+creates the launch's private wake file and returns it in `watchPaths`.
+
+The wake file carries no content. agent-director touches it when it accepts a
+Message, and again at a main-agent `Stop` or idle-prompt `Notification` while
+Messages are Held, or claimed by a
+[force call that never ended](caller-contract.md#stored-force-attempts).
+[Startup also wakes eligible launches](caller-contract.md#launch-end-resume-and-reuse).
+On each touch the `FileChanged` hook checks the agent again. It either writes
+one whole prompt to stderr and exits 2, so Claude Code hands that prompt to
+the agent as its next input, or writes nothing and exits 0:
+
+- Ordinary delivery writes a prompt of Held Messages only when the main agent
+  is idle at its prompt, no dialog is open, and agent-director has
+  [evidence the agent took](caller-contract.md#busy-send-coverage) every
+  earlier delivered prompt.
+- While a [force](caller-contract.md#stored-force-attempts) call runs, the
+  hook writes only that force's next prompt, one per touch, whether the agent
+  is working, in a dialog or compacting. Only the force call touches the file
+  for its next prompt.
+
+The main agent's `UserPromptSubmit` records agent-director's sighting of its
+own prompt: evidence the agent took it, and a force prompt's admission. It
+and the main `SessionStart` also finish a force call that never
+ended, once its deadline has passed: its never-issued Messages return to Held,
+and the wake file is touched when any did. Neither issues a prompt.
+
+When a batch of the main agent's tool calls finishes, the `PostToolBatch`
+hook can hand [Steer Turn](caller-contract.md#steer-turn-delivery) Messages
+into the running turn. It writes at most one prompt to stdout, as
+`{"hookSpecificOutput":{"additionalContext":"<prompt>","hookEventName":"PostToolBatch"}}`
+and a newline, or nothing, and always exits 0. It returns no permission
+decision. It too first finishes a force call that never ended.
+
+- A spawn's own startup prompt always goes first, forced or not.
+- Repeated touches never deliver a Message twice.
+- A lost touch leaves Messages Held until the next eligible event.
+- Subagent and teammate hooks never deliver or record a sighting.
+- A sighting shows that the agent took the prompt, not that it acted on it.
+
+Results, waits and recovery are in [Covered sends](caller-contract.md#covered-sends);
+force outcomes by agent state, and the sighting limits, in
+[Claude Code force capability](caller-contract.md#claude-code-force-capability).
+
 ## Cursor reporting
 
 Cursor reports startup, conversation changes, submitted prompts, completed
@@ -200,14 +248,22 @@ Subagent prompts, messages, result text, errors and output files are not stored.
 ## Fail-open invariant
 
 State-tracking failures leave the agent running; they do not confirm its
-state. State hooks add no stdout context or permission decision, and
-`SubagentStop` does not block a stop. Relay permission decisions have a
-separate [fail-closed boundary](#fail-closed-boundary).
+state. State hooks add no context or permission decision, and `SubagentStop`
+does not block a stop. Relay permission decisions have a separate
+[fail-closed boundary](#fail-closed-boundary).
+
+[Busy-send delivery](#busy-send-delivery-to-a-covered-claude-launch) is the
+only other hook output: the `SessionStart` watch path, the `FileChanged`
+prompt on stderr and the `PostToolBatch` prompt on stdout. It carries no
+permission decision and changes no dialog, settings or hooks of yours. A
+failed delivery exits 0. A failed wake gives the agent nothing; a prompt cut
+short is never written again.
 
 For a spawn that never reports, see
 [Pending rows and startup screens](caller-contract.md#pending-rows-and-startup-screens).
 Diagnostics go to the configured
-[error log](configuration.md#keys), or stderr if it cannot be opened.
+[error log](configuration.md#keys), or stderr if it cannot be opened. The
+`FileChanged` hook never writes diagnostics to stderr.
 
 ## Fire order
 

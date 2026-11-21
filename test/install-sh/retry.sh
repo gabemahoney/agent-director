@@ -277,8 +277,8 @@ run_install() {
 # report_installed <name>: BIN and ADMIN are installed under H, at 0755.
 report_installed() {
     local c="$H/.config/agent-director/bin/agent-director" a="$H/.config/agent-director/admin/agent-director-admin"
-    report "$1-binary-installed" "$(cmp -s "$c" "$BIN" && stat -c %a "$c")" "755"
-    report "$1-admin-binary-installed" "$(cmp -s "$a" "$ADMIN" && stat -c %a "$a")" "755"
+    report "$1-binary-installed" "$(cmp -s "$c" "$BIN" && stat -L -c %a "$c")" "755"
+    report "$1-admin-binary-installed" "$(cmp -s "$a" "$ADMIN" && stat -L -c %a "$a")" "755"
 }
 
 # report_refused <name> <want-rc> <want-first-stderr-line>: the run exited
@@ -454,7 +454,19 @@ PRE_CUTOVER_SCHEMA=15
 # pre_cutover_store <db> <current>: replace an owned, closed fixture with the
 # genuine pre-cutover schema. All old callers have returned; no other roots
 # exist outside this fixture HOME, and real admin inventory remains enabled.
+exempt_teardown() {
+    # These cases exercise exempt migration. Explicit non-purge teardown is
+    # the supported way back to that path; simply replacing a DB under a
+    # versioned program layout must never make a later install migrate it.
+    if [[ -e "$H/.config/agent-director/install-contract.json" ]]; then
+        env -i HOME="$H" PATH="$FAKES:$PATH" \
+            INSTALL_SH_TEST_CRONTAB="$ROOT/no-such-crontab" INSTALL_SH_TEST_SYSTEMCTL="$ROOT/no-such-systemctl" \
+            bash "$REPO_ROOT/skills/install-agent-director/uninstall.sh" >"$ROOT/exempt-teardown.out" 2>"$ROOT/exempt-teardown.err" || die "non-purge exempt setup"
+    fi
+}
+
 pre_cutover_store() {
+    exempt_teardown
     rm -f "$1" "$1-wal" "$1-shm"
     (umask 077; sqlite3 "$1" <"$HERE/testdata/pre-cutover-v15.sql") || die "create pre-cutover store"
     sqlite3 "$1" 'PRAGMA journal_mode=WAL;' >/dev/null || die "initialize fixture WAL mode"
@@ -799,6 +811,9 @@ preflight_refused db-path-refused-fresh '[store]\ndb_path = "C:\\\\agents\\\\sta
 new_home db-path-refused-installed
 local_install
 report db-path-refused-installed-first-install-exit-code "$RC" "0"
+# This store-resolution refusal belongs to exempt installation. Keep the
+# installed DB/config while explicit teardown removes versioned evidence.
+exempt_teardown
 preflight_refused db-path-refused-installed '[defaults]\nrelay_mode = "off"\n[Store]\ndb_path = "/elsewhere/agents.db"' '3  : [Store]'
 
 # shown <file>: <file>'s bytes on one line, as cat -A shows them (^M a CR,
@@ -1138,20 +1153,8 @@ invalid-after-document|{"theme":"dark"}\n{\n
 EOF
 HOOKS=""
 
-# A re-run with no flags after a clean install (b.pye) copies the pair it
-# finds (agent-director through its ~/.local/bin link, the installed
-# agent-director-admin) again and returns 0, leaving settings.json and
-# config.toml as they were, config.toml after a .bak. The first install already
-# put the same bytes at 0755, so the copy shows only in the inodes: install.sh
-# copies each binary to a .tmp.<pid> beside it and mvs that over it, so each
-# ends up a new file. Neither run nor --help mentions an "already installed"
-# message, which install.sh never prints, and --help's "Idempotent:" paragraph
-# says what this checks (pinned with its line breaks joined, as
-# advice_follow.sh pins --help sentences). The paragraph also says the
-# agent-rename migration of config.toml and the templates runs only while the
-# store is below the rename's version, and makes no new copy of what an
-# earlier run already migrated, and that only config.toml gets a fresh .bak on
-# the re-merge, settings.json none (b.f3n).
+# A later no-flag rerun (b.pye) finds the canonical pair, reuses the retained
+# build and keeps effective references physically unchanged, without backups.
 new_home rerun-no-flags
 mkdir -p "$H/.local/bin"
 HOOKS=1 PATH_PREFIX="$H/.local/bin"
@@ -1163,10 +1166,10 @@ run_install 0 '*'
 HOOKS="" PATH_PREFIX=""
 report rerun-no-flags-exit-codes "$rc $RC" "0 0"
 report_installed rerun-no-flags
-report rerun-no-flags-binaries-copied-again \
-    "$([[ "$(stat -c %i "$H/.config/agent-director/bin/agent-director")" != "$bin_ino" ]] && echo new || echo same) $([[ "$(stat -c %i "$H/.config/agent-director/admin/agent-director-admin")" != "$admin_ino" ]] && echo new || echo same)" "new new"
+report rerun-no-flags-permanent-entries-unchanged \
+    "$([[ "$(stat -c %i "$H/.config/agent-director/bin/agent-director")" != "$bin_ino" ]] && echo new || echo same) $([[ "$(stat -c %i "$H/.config/agent-director/admin/agent-director-admin")" != "$admin_ino" ]] && echo new || echo same)" "same same"
 report rerun-no-flags-merged-unchanged "$(cat "$H/.claude/settings.json" "$H/.config/agent-director/config.toml" | sha256sum)" "$merged"
-report rerun-no-flags-backups "$(compgen -G "$H/.config/agent-director/config.toml.bak.*" | wc -l)" "1"
+report rerun-no-flags-backups "$(compgen -G "$H/.config/agent-director/config.toml.bak.*" | wc -l)" "0"
 report rerun-no-flags-already-installed "$(cat "$OUT" "$ERR" | grep -c 'already installed')" "0"
 run_install 0 '*' --help
 report help-exit-code "$RC" "0"

@@ -17,7 +17,9 @@ import (
 // TestAdviceFollow_D1_UnreportedReadPaneThenSendKeys (D1, b.kdf): "To act on it: read-pane, then send-keys with
 // allow_pending (--allow-pending on the CLI); only a caller that looked should type." (get's liveness_note; find-missing
 // and list say the same). Followed after find-missing noted a live pending row, found by liveness_note in get and list:
-// read-pane reads its pane, then Enter-only answers the inspected startup prompt (b.qcf).
+// read-pane reads its pane, then Enter-only answers the inspected startup prompt (b.qcf). On a Codex row (a covered
+// Claude row's send-keys takes text only), whose pending Enter then waits for turn activity the agent at its startup
+// prompt does not report: ErrSubmissionUnconfirmed, the keys sent.
 func TestAdviceFollow_D1_UnreportedReadPaneThenSendKeys(t *testing.T) {
 	t.Parallel()
 	adviceAssertManifest(t, "sweep", "", "Past grace, a running agent with no hook report gets liveness_note unreported: read-pane before send-keys with allow_pending.")
@@ -38,7 +40,9 @@ func TestAdviceFollow_D1_UnreportedReadPaneThenSendKeys(t *testing.T) {
 		}
 	}
 
+	// On a Codex row: a covered Claude row's send-keys takes text only, as a Message.
 	e := newKillEnv(t)
+	e.rowAgent = store.AgentCodex
 	r := e.seedRow(t, e.pendingSpec(pendingOurs))
 	e.clock.Advance(fmGrace + time.Second)
 	c, _ := e.client(t)
@@ -62,9 +66,8 @@ func TestAdviceFollow_D1_UnreportedReadPaneThenSendKeys(t *testing.T) {
 	}
 	e.rec.Reset()
 	before := e.columns(t, r.ID) // b.qcf: a never-reported row remains pending.
-	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, AllowPending: true}); err != nil {
-		t.Fatalf("SendKeys with allow_pending: %v", err)
-	}
+	_, err = c.SendKeys(api.SendKeysParams{InstanceID: r.ID, AllowPending: true})
+	assertSubmissionUnconfirmed(t, err, store.StatePending)
 	e.assertEnterOnly(t, r.Socket, pane)
 	e.assertRowUnchanged(t, r.ID, before)
 }

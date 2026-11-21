@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -84,7 +85,7 @@ func expireMove(t *testing.T, e *killEnv, r killRow) (store.Spawn, int64) {
 	if err != nil {
 		t.Fatalf("GetSpawn(%s): %v", r.ID, err)
 	}
-	res, moved, err := e.st.MoveToPending(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), newToken(), r.Socket, "", store.LaunchOwner{})
+	res, moved, err := e.st.MoveToPendingWithExit(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), newToken(), r.Socket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, e.st, r.ID))
 	if err != nil || res != store.CondApplied {
 		t.Fatalf("MoveToPending(%s) = %v, %v; want applied", r.ID, res, err)
 	}
@@ -142,7 +143,7 @@ func TestExpireConditionalDelete(t *testing.T) {
 			write: expireAgentHook("Notification"), after: store.StateEnded, rerunDeletes: true},
 		{name: "deleted by another caller", state: store.StateEnded,
 			write: func(t *testing.T, e *killEnv, r killRow) {
-				if err := e.st.DeleteSpawn(r.ID); err != nil {
+				if err := storefix.DeleteWithExit(t, e.st, r.ID); err != nil {
 					t.Fatalf("DeleteSpawn(%s): %v", r.ID, err)
 				}
 			}},
@@ -213,6 +214,43 @@ func TestExpireConditionalDelete(t *testing.T) {
 					e.assertRowUnchanged(t, r.ID, written)
 				}
 			})
+		}
+	}
+}
+
+// TestExpireKeepsHeldMessages (SR-5.5): an otherwise eligible finished row
+// whose covered conversation holds a Held Message is kept held_messages, in
+// kept_ids and the kept count; so is one whose Message is admitted between
+// expire's examination and its delete, which leaves the row's snapshot
+// unchanged. Each row and its Message survive; a covered row holding nothing
+// still goes.
+func TestExpireKeepsHeldMessages(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
+	e := newKillEnv(t)
+	c, _ := e.client(t)
+	held, racing, empty := e.seedFinished(t, time.Hour, agentGone), e.seedFinished(t, time.Hour, agentGone), e.seedFinished(t, time.Hour, agentGone)
+	seedBusyCovered(t, e, held.ID, racing.ID, empty.ID)
+	busyAdmit(t, c, api.SendKeysParams{InstanceID: held.ID, Text: "kept"})
+	w := e.expireStore()
+	var examined apitest.SpawnColumns
+	w.beforeDelete(racing.ID, func() {
+		examined = e.columns(t, racing.ID)
+		busyAdmit(t, c, api.SendKeysParams{InstanceID: racing.ID, Text: "racing"})
+	})
+	before := e.columns(t, held.ID)
+	mark := trailMark(t)
+
+	res, lg, err := e.expireWith(w, olderThan(0))
+
+	if err != nil || len(lg.lines) != 0 {
+		t.Fatalf("Expire = %v (logged %q); want success with nothing logged", err, lg.lines)
+	}
+	assertExpired(t, res, mark, map[string]string{held.ID: "held_messages", racing.ID: "held_messages", empty.ID: ""})
+	e.assertRowUnchanged(t, held.ID, before)
+	e.assertRowUnchanged(t, racing.ID, examined)
+	for _, id := range []string{held.ID, racing.ID} {
+		if m := busyFacts(t, e.dbPath, id).Messages; len(m) != 1 || m[0].Place != "held" {
+			t.Errorf("%s Messages after expire = %+v; want one Held", id, m)
 		}
 	}
 }

@@ -1,0 +1,25 @@
+{
+  "session_id": "5acdf0e3-8b8c-47c8-83d6-870c0b0cebd1",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/5acdf0e3-8b8c-47c8-83d6-870c0b0cebd1.jsonl",
+  "cwd": "/work/demo",
+  "hook_event_name": "PostToolBatch",
+  "prompt_id": "6e1f0c2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "agent_id": "a4d8e2c61b9f0357",
+  "agent_type": "general-purpose",
+  "tool_calls": [
+    {
+      "tool_name": "Grep",
+      "tool_input": {
+        "pattern": "TODO"
+      },
+      "tool_use_id": "toolu_01BATCHCHILD1",
+      "tool_response": {
+        "numFiles": 0
+      }
+    }
+  ]
+}

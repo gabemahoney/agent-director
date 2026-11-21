@@ -159,12 +159,15 @@ function checkTrail(id) {
  return displayed.length;
 }
 
+// The rows are of agents busy send does not cover, Codex and Cursor: every
+// Claude launch is covered and has no SQL seed that production makes (its
+// coverage, Agent Defaults and delivery block come from spawn), and its typed
+// paths, which the guards refuse, are retired (Idea b.kii).
 const mode = process.argv[2];
 if (mode === 'public') {
  // Each row's expected stored clock: confirm_by on the deadline basis with
  // the relay on, admission with Cursor's relay off.
  const rows = [
-  {id: 'public-claude', agent: 'claude', relay: 'on', want: `${OLD}|deadline`},
   {id: 'public-codex', agent: 'codex', relay: 'on', want: `${OLD}|deadline`},
   {id: 'public-cursor', agent: 'cursor', relay: 'on', want: `${OLD}|deadline`},
   {id: 'public-cursor-off', agent: 'cursor', relay: 'off', want: `${OLD - 1000}|admission`},
@@ -201,7 +204,7 @@ if (mode === 'public') {
  const expected = {'send-keys': 'ErrRelayFallenBack', decide: 'ErrRelayFallenBack', pause: 'ErrSpawnNotPausable'};
  const observed = {'send-keys': [], decide: [], pause: []};
  const facts = [];
- for (const agent of ['claude', 'codex', 'cursor']) {
+ for (const agent of ['codex', 'cursor']) {
   const id = 'guard-' + agent;
   seed(id, agent);
   request(id, OLD, true);

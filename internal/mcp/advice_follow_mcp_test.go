@@ -269,6 +269,28 @@ func TestAdviceFollow_I7_OldInstanceIDKeyUseInstanceID(t *testing.T) {
 	}
 }
 
+// TestAdviceFollow_I11_NullBusySendOptionOmit: I11 "parameter %q must be %s,
+// not null; omit it to leave it unset" (Task t2.xis.pu.ar), ErrInvalidFlags
+// with nothing run. Sent again without the key, as the text says,
+// make_template saves a template with no send_mode key. (pause's
+// only_if_waiting null advises nothing; TestBusySendMCPNullRefused pins it.)
+func TestAdviceFollow_I11_NullBusySendOptionOmit(t *testing.T) {
+	d, _ := advCLIServer(t)
+	args := map[string]any{"name": "i11-tpl", "agent": "claude", "send_mode": nil}
+	data := toolErrorData(t, callTool(t, d, "make_template", paramJSON(t, args)))
+	want := `ErrInvalidFlags: make-template: parameter "send_mode" must be a string, not null; omit it to leave it unset`
+	if data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
+		t.Fatalf("refusal = %s: %q\nwant ErrInvalidFlags: %q", data.ErrName, data.ErrDescription, want)
+	}
+
+	delete(args, "send_mode")
+	var res api.MakeTemplateResult
+	advCLIResult(t, callTool(t, d, "make_template", paramJSON(t, args)), &res)
+	if body, err := os.ReadFile(res.Path); err != nil || strings.Contains(string(body), "send_mode") {
+		t.Errorf("template %q (%v); want it saved with send_mode unset", body, err)
+	}
+}
+
 // TestAdviceFollow_I8_OldArgsKeyUseAgentArgs: I8 "unknown parameter
 // "claude_args" (no longer accepted; use "agent_args")", the name copied
 // literally into the arguments in place of the old key: spawn stores the args

@@ -3,9 +3,7 @@ package main_test
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"slices"
-	"syscall"
 	"testing"
 	"time"
 
@@ -16,14 +14,13 @@ import (
 )
 
 // TestSendKeysCLIDeliversByPaneID: send-keys' --text, --allow-pending,
-// --no-enter and --key reach the verb: after target lookups before each write,
-// a live row gets text and Enter in the agent's pane by id; a pending row
+// --no-enter and --key reach the verb: after the target lookup, a live row
+// gets text and Enter in the agent's pane by id; a pending row
 // with --allow-pending accepts Enter-only (b.9o4); --no-enter types text alone.
 // --key sends one key, a named key by name or one character literally (b.146).
-// b.qcf: pending Claude ordinary text waits for SessionStart; Enter-only drives
-// an unreported row. An unreadable tty refuses after the target lookup, before
-// typing, and exposes not_started on stderr. The guards, refusals and trail
-// are pkg/api's sendkeys_*_test.go.
+// The row is a pane-only Droid agent's, whose raw input busy send leaves
+// alone (a Claude row's send is a Message, typed by no one: busy_send_cli_test.go).
+// The guards, refusals and trail are pkg/api's sendkeys_*_test.go.
 func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	typed := func(text string) []string { return []string{"-l", "--", text} }
@@ -35,65 +32,35 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 	}{
 		{"live row", store.StateWaiting, []string{"--text", "hello world"}, [][]string{typed("hello world"), enter}},
 		{"pending row with allow pending", store.StatePending, []string{"--text", "", "--allow-pending"}, [][]string{enter}},
-		{"pending row unreadable terminal", store.StatePending, []string{"--text", "hello world", "--allow-pending"}, nil},
 		{"empty text presses Enter only", store.StateWaiting, []string{"--text", ""}, [][]string{enter}},
 		{"no enter types the text alone", store.StateWaiting, []string{"--text", "hi", "--no-enter"}, [][]string{typed("hi")}},
 		{"a named key alone", store.StateWaiting, []string{"--key", "Escape"}, [][]string{{"Escape"}}},
 		{"one character alone", store.StateWaiting, []string{"--key", "y"}, [][]string{typed("y")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			home, id, socket := seedRowOnSocket(t, tc.state)
+			home, id, socket := seedRowOnSocket(t, tc.state, apitest.WithAgent("droid"))
 			session := ownSession(t, home, id, "")
 			faketmuxfix.Tables{}.Write(t, socket, fakeTable(session))
 
 			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, append([]string{"send-keys", "--instance-id", id}, tc.args...)...)
 
-			outcome := "ok"
-			if tc.state == store.StatePending && len(tc.sends) == 0 {
-				outcome = "ErrSubmissionUnconfirmed"
-				assertOnlyEnvelope(t, stdout, stderr, code, outcome)
-				var got struct {
-					Details map[string]any `json:"err_details"`
-				}
-				want := map[string]any{
-					"outcome": "not_started", "phase": "pre_input", "bytes_attempted": float64(0),
-					"enter_may_have_been_sent": false, "keys_sent": false, "submission_confirmed": false,
-					"row_state": tc.state,
-					"reason": "the agent's terminal mode could not be read: read the terminal mode of /dev/null: " + syscall.ENOTTY.Error() +
-						"; nothing was typed, so the same send-keys can be retried later",
-				}
-
-				if err := json.Unmarshal([]byte(stderr), &got); err != nil || !reflect.DeepEqual(got.Details, want) {
-					t.Errorf("err_details = %v (%v); want %v", got.Details, err, want)
-				}
-			} else if code != 0 || stderr != "" || stdout != "{}\n" {
+			const outcome = "ok"
+			if code != 0 || stderr != "" || stdout != "{}\n" {
 				t.Fatalf("send-keys exit = %d, stdout = %q, stderr = %q; want 0, {} and empty", code, stdout, stderr)
 			}
 			target := []string{"-u", "-S", socket, "send-keys", "-t", apitest.TestPaneID}
-			refused := tc.state == store.StatePending && len(tc.sends) == 0
-			kinds := []string{"list-sessions", "list-panes", "list-sessions", "list-panes"}
-			if refused {
-				// b.qcf: the wait reads the pane's tty after the target lookup and refuses before any write.
-				kinds = []string{"list-sessions", "list-panes", "display-message"}
-			} else {
-				if !slices.Contains(tc.args, "--key") {
-					kinds = append(kinds, "list-sessions", "list-panes")
-					if slices.Equal(tc.sends[len(tc.sends)-1], enter) {
-						if len(tc.sends) > 1 {
-							kinds = append(kinds, "send-keys")
-						}
-						kinds = append(kinds, "list-sessions", "list-panes")
-					}
-				}
+			// The pane-only lane's one target lookup, then each send.
+			kinds := []string{"list-sessions", "list-panes"}
+			for range tc.sends {
 				kinds = append(kinds, "send-keys")
 			}
 			invs := assertInvocationKinds(t, home, kinds...)
-			var sends [][]string // the input calls and the tty read
+			var sends [][]string // the input calls
 			for _, argv := range invs {
 				if len(argv) < 3 || !slices.Equal(argv[:3], []string{"-u", "-S", socket}) {
 					t.Fatalf("invocation = %q; want the row's socket %q", argv, socket)
 				}
-				if slices.Contains(argv, "send-keys") || slices.Contains(argv, "#{pane_tty}") {
+				if slices.Contains(argv, "send-keys") {
 					sends = append(sends, argv)
 				}
 			}
@@ -101,9 +68,6 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 				t.Fatalf("fake-tmux invocations = %q; want initial lookup and pane listing", invs)
 			}
 			var want [][]string
-			if refused {
-				want = append(want, []string{"-u", "-S", socket, "display-message", "-p", "-t", apitest.TestPaneID, "#{pane_tty}"})
-			}
 			for _, send := range tc.sends {
 				want = append(want, append(slices.Clone(target), send...))
 			}
@@ -121,15 +85,15 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 
 // TestSendKeysCLIPaneAnswer (b.146 rule 8): a pane answer through the CLI
 // (--request-token, --as, --key and --expect-pane-sha256 from read-pane's
-// pane_sha256) on a request that fell back captures the agent's pane, then
-// sends exactly its one key, no Enter. When its sent write fails after the
-// key, it exits 1 with ErrInternal, err_details {key_sent: true,
-// request_token}.
+// pane_sha256) on a Codex request that fell back captures the agent's pane,
+// then sends exactly its one key, no Enter. When its sent write fails after
+// the key, it exits 1 with ErrInternal, err_details {key_sent: true,
+// request_token}. (A Claude row takes no keys through send-keys.)
 func TestSendKeysCLIPaneAnswer(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	for _, failSent := range []bool{false, true} {
 		t.Run(fmt.Sprintf("its sent write fails %v", failSent), func(t *testing.T) {
-			home, id, socket := seedRowOnSocket(t, store.StateCheckPermission, apitest.WithRelayMode("on"))
+			home, id, socket := seedRowOnSocket(t, store.StateCheckPermission, apitest.WithRelayMode("on"), apitest.WithAgent("codex"))
 			req, err := apitest.SeedPermissionRequest(stateDB(home), id, "Bash")
 			if err == nil { // past the relay window: fallen back
 				err = apitest.AgePermissionRequest(stateDB(home), req.RequestID, 48*time.Hour, 0)

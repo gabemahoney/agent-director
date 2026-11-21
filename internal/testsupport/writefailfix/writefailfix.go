@@ -129,6 +129,10 @@ const (
 	// PermissionResponseIssue fails only consumption of a relay/native claim
 	// into issued state for the named instance. Claim creation is unaffected.
 	PermissionResponseIssue Kind = 14
+	// BusySendForceInsert fails only INSERT into the instance's busy_send_forces,
+	// including refused attempts (such as route_unavailable). Message admission
+	// and updates/deletes of existing forces are unaffected. Install after seeding.
+	BusySendForceInsert Kind = 15
 )
 
 // String names the kind, for test failure messages.
@@ -162,6 +166,8 @@ func (k Kind) String() string {
 		return "input authority"
 	case PermissionResponseIssue:
 		return "permission response issue"
+	case BusySendForceInsert:
+		return "busy-send force insert"
 	default:
 		return fmt.Sprintf("writefailfix.Kind(%d)", int(k))
 	}
@@ -169,7 +175,7 @@ func (k Kind) String() string {
 
 // Kinds lists every kind, for table-driven tests.
 func Kinds() []Kind {
-	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord, MissingDeadlineOverrun, DisplayObservation, InputAttemptInsert, InputTextIntent, InputCurrent, InputAuthority, PermissionResponseIssue}
+	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord, MissingDeadlineOverrun, DisplayObservation, InputAttemptInsert, InputTextIntent, InputCurrent, InputAuthority, PermissionResponseIssue, BusySendForceInsert}
 }
 
 // createTargetsTable creates the bookkeeping table: one row per installed
@@ -195,6 +201,10 @@ type trigger struct {
 // triggersByKind holds every trigger's SQL: the single source (SR-20.3).
 // The kind number in each WHEN clause is the Kind constant's fixed value.
 var triggersByKind = map[Kind][]trigger{
+	BusySendForceInsert: {{name: "ad_test_fail_busy_send_force_insert", create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_busy_send_force_insert
+ BEFORE INSERT ON busy_send_forces
+ WHEN EXISTS (SELECT 1 FROM ad_test_write_failure WHERE kind=15 AND instance_id=NEW.instance_id)
+ BEGIN SELECT RAISE(ABORT, 'injected write failure: busy-send force insert'); END`}},
 	PermissionResponseIssue: {{name: "ad_test_fail_permission_issue", create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_permission_issue
  BEFORE UPDATE OF response_state ON permission_requests
  WHEN NEW.response_state IN ('relay_issued','native_issued')

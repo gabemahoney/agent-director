@@ -45,6 +45,15 @@ type ClaudeArgs struct {
 	DoubleDash  int
 }
 
+// HasClaudeStartupPrompt reports whether Claude agent arguments carry a
+// startup prompt, an operand (ReadClaudeArgs), which goes first in a fresh or
+// reused Launch's order (SR-6.1). cmd/agent-director hands it to the hook
+// (hook.HandleConfig.ClaudeStartupPrompt), which does not import this
+// package.
+func HasClaudeStartupPrompt(args []string) bool {
+	return len(ReadClaudeArgs(args).Positionals) > 0
+}
+
 // ReadClaudeArgs uses the verified root option table and Commander semantics:
 // required/optional/list values, exact short names before clusters, and attached
 // short values with their leading equals retained. Unknown options are read as

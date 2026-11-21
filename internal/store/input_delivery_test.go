@@ -23,12 +23,17 @@ import (
 	"github.com/google/uuid"
 )
 
+// inputStoreFixture is an uncovered (Codex) launch's native input records on
+// a real store. Its attempt's watermark validates the rollout, whose first
+// line is the session metadata meta, so proof needs no live descriptor.
 type inputStoreFixture struct {
-	s    *store.Store
-	path string
-	l    *inputdelivery.Launch
-	g    inputdelivery.Guard
-	a    *inputdelivery.Attempt
+	s       *store.Store
+	path    string
+	l       *inputdelivery.Launch
+	g       inputdelivery.Guard
+	a       *inputdelivery.Attempt
+	rollout string
+	meta    []byte
 }
 
 func newInputStore(t *testing.T) *inputStoreFixture {
@@ -36,7 +41,7 @@ func newInputStore(t *testing.T) *inputStoreFixture {
 	s, path := storefix.OpenTempStore(t)
 	li := store.LaunchIdentity{Token: "fedcba9876543210", Socket: apitest.TestSocket, PaneID: apitest.TestPaneID, PanePID: apitest.TestPanePID, PaneStarttime: apitest.LinuxProcStarttime}
 	session := uuid.NewString()
-	id, err := apitest.SeedSpawn(path, "", store.StatePending, t.TempDir(), "off", session, false, apitest.WithLaunchIdentity(li), apitest.WithLifeNumber(2))
+	id, err := apitest.SeedSpawn(path, "", store.StatePending, t.TempDir(), "off", session, false, apitest.WithAgent(store.AgentCodex), apitest.WithLaunchIdentity(li), apitest.WithLifeNumber(2))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,9 +49,13 @@ func newInputStore(t *testing.T) *inputStoreFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	i := inputdelivery.Identity{StoreID: s.StoreID(), Token: li.Token, InstanceID: id, Socket: li.Socket, Agent: "claude", CWD: row.CWD, LifeNumber: row.LifeNumber}
-	l := inputdelivery.Launch{Identity: i, Revision: 1, EvidenceDir: t.TempDir(), Capability: inputdelivery.Capability{Agent: i.Agent, Version: "2.1.280", SessionID: session, CWD: i.CWD, Socket: i.Socket, Token: i.Token, InstanceID: i.InstanceID, Created: time.Now().UTC(), Safe: true}}
-	l.Capability.Transcript = filepath.Join(l.EvidenceDir, "native.jsonl")
+	i := inputdelivery.Identity{StoreID: s.StoreID(), Token: li.Token, InstanceID: id, Socket: li.Socket, Agent: store.AgentCodex, CWD: row.CWD, LifeNumber: row.LifeNumber}
+	l := inputdelivery.Launch{Identity: i, Revision: 1, EvidenceDir: t.TempDir(), Capability: inputdelivery.Capability{Agent: i.Agent, Version: "0.159.2", CWD: i.CWD, Socket: i.Socket, Token: i.Token, InstanceID: i.InstanceID, Created: time.Now().UTC(), Safe: true, KeymapPinned: true}}
+	meta, err := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]any{"id": session, "cwd": i.CWD, "cli_version": "0.159.2", "timestamp": l.Capability.Created.Add(time.Second).Format(time.RFC3339Nano)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &inputStoreFixture{s: s, path: path, rollout: filepath.Join(t.TempDir(), "rollout.jsonl"), meta: append(meta, '\n')}
 	if err := s.CreateInputLaunch(context.Background(), l); err != nil {
 		t.Fatal(err)
 	}
@@ -60,12 +69,18 @@ func newInputStore(t *testing.T) *inputStoreFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := inputdelivery.NewAttempt(i, "hello <>& café 🌍", map[string]inputdelivery.Watermark{l.Capability.Transcript: {PrefixSHA256: inputdelivery.Hash(nil)}})
+	f.l, f.g = committed, g
+	f.a, err = inputdelivery.NewAttempt(i, "hello <>& café 🌍", map[string]inputdelivery.Watermark{f.rollout: f.mark(f.meta)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.NativeSessionID = session
-	return &inputStoreFixture{s: s, path: path, l: committed, g: g, a: a}
+	f.a.NativeSessionID = session
+	return f
+}
+
+// mark is the watermark a Codex snapshot records for rollout data.
+func (f *inputStoreFixture) mark(data []byte) inputdelivery.Watermark {
+	return inputdelivery.Watermark{Size: int64(len(data)), PrefixSHA256: inputdelivery.Hash(data), SessionID: f.g.SessionID, MetadataSHA256: inputdelivery.Hash(bytes.TrimSuffix(f.meta, []byte("\n")))}
 }
 
 func (f *inputStoreFixture) save(t *testing.T) {
@@ -85,11 +100,14 @@ func (f *inputStoreFixture) raw(t *testing.T) *sql.DB {
 	t.Cleanup(func() { db.Close() })
 	return db
 }
+
+// proof is the attempt's exact rollout user record, with its JSONL whitespace,
+// recorded as its proof right after the metadata line.
 func (f *inputStoreFixture) proof() []byte {
 	text, _ := json.Marshal(f.a.Payload)
-	raw := []byte(fmt.Sprintf(" \t{ \"type\":\"user\", \"uuid\":\"cde93519-6972-4b1b-a650-830a0042e876\", \"sessionId\":%q, \"cwd\":%q, \"version\":\"2.1.280\", \"message\":{\"role\":\"user\",\"content\":%s} } \t", f.g.SessionID, f.g.Identity.CWD, text))
+	raw := []byte(fmt.Sprintf(" \t{ \"type\":\"response_item\", \"payload\":{ \"type\":\"message\", \"role\":\"user\", \"id\":\"turn-1\", \"content\":[{\"type\":\"input_text\",\"text\":%s}], \"internal_chat_message_metadata_passthrough\":{\"content_item_kinds\":[\"user.text\"]} } } \t", text))
 	f.a.Phase = "submitted"
-	f.a.Proof = &inputdelivery.Proof{Path: f.l.Capability.Transcript, SessionID: f.g.SessionID, RecordID: "cde93519-6972-4b1b-a650-830a0042e876", Raw: raw, RawSHA256: inputdelivery.Hash(raw)}
+	f.a.Proof = &inputdelivery.Proof{Path: f.rollout, SessionID: f.g.SessionID, RecordID: "turn-1", Offset: int64(len(f.meta)), Raw: raw, RawSHA256: inputdelivery.Hash(raw)}
 	return raw
 }
 
@@ -230,7 +248,7 @@ func TestInputDeliveryRestartRequiresConfirmedCurrentZeroIntent(t *testing.T) {
 			next := old
 			next.Phase = "attempt_started"
 			next.SnapshotAt = old.SnapshotAt.Add(time.Second)
-			next.Watermark = map[string]inputdelivery.Watermark{f.l.Capability.Transcript: {Size: 10, PrefixSHA256: inputdelivery.Hash([]byte("new prefix"))}}
+			next.Watermark = map[string]inputdelivery.Watermark{f.rollout: f.mark(append(append([]byte(nil), f.meta...), "later turn\n"...))}
 			l, a, err := f.s.SaveInputAttempt(context.Background(), *f.l, f.g, &next)
 			if mode == "confirmed" {
 				if err != nil || a.RequestID != old.RequestID || a.Revision != old.Revision+1 || l.CurrentRequestID != old.RequestID || !a.SnapshotAt.Equal(next.SnapshotAt) {
@@ -451,7 +469,7 @@ func TestInputProofSharedReadDoesNotQueueBehindNativeCommit(t *testing.T) {
 			f.a.Phase, f.a.EnterAttempted = "enter_attempted", true
 			f.save(t)
 			raw := f.proof()
-			if err := os.WriteFile(f.l.Capability.Transcript, append(append([]byte(nil), raw...), 10), 0600); err != nil {
+			if err := os.WriteFile(f.rollout, append(append(append([]byte(nil), f.meta...), raw...), 10), 0600); err != nil {
 				t.Fatal(err)
 			}
 			row, err := f.s.GetSpawn(f.g.Identity.InstanceID)

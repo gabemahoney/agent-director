@@ -14,7 +14,10 @@ import (
 // and its text is the description. Details is the err_details object, one of
 // RelayFallenBackDetails, PaneAnswerInProgressDetails, ClaimTooSoonDetails,
 // PaneChangedDetails, PaneKeySentDetails, DialogMaybeOpenDetails,
-// PauseTimeoutDetails and TooManyIdsDetails.
+// PauseTimeoutDetails, TooManyIdsDetails, CantSendDetails,
+// SendAcceptedForceFailedDetails, NotPausableDetails or NotResumableDetails.
+// A delegated resume retains the recipient's raw details, including unknown
+// fields and explicit null.
 //
 // The CLI writes Details as the error envelope's err_details key, the MCP
 // server as its error data's err_details, and the TypeScript client exposes
@@ -34,8 +37,13 @@ func (e *DetailedError) Error() string { return e.Err.Error() }
 func (e *DetailedError) Unwrap() error { return e.Err }
 
 // ErrDetails returns err's err_details object: the Details of the first
-// DetailedError in err's chain, or nil when there is none (b.146 rule 15).
+// DetailedError in err's chain, or the recipient's raw delegated details,
+// or nil when there is none (b.146 rule 15).
 func ErrDetails(err error) any {
+	var remote *delegatedResumeError
+	if errors.As(err, &remote) && len(remote.remote.Details) != 0 {
+		return remote.remote.Details
+	}
 	var de *DetailedError
 	if errors.As(err, &de) {
 		return de.Details
@@ -43,10 +51,98 @@ func ErrDetails(err error) any {
 	return nil
 }
 
+// NotResumableDetails is resume's refusal when no retained installed version
+// with the permanent core covers the conversation's recorded provider.
+type NotResumableDetails struct {
+	Cause    string `json:"cause"`
+	Provider string `json:"provider"`
+}
+
 // TooManyIdsDetails is ErrTooManyIds's err_details from get-many.
 type TooManyIdsDetails struct {
 	// IdCap is the maximum number of ids the Client accepts in one call.
 	IdCap int `json:"id_cap"`
+}
+
+// CantSendDetails is ErrCantSend's err_details (SR-9.4): the refusal's class
+// (always cant_send), its reason, whether the same Message may be sent again
+// as a new send, and with what. Limit is the exceeded limit (SR-1.6) and
+// Result an id_conflict's owner Result (SR-1.2); both are omitted when the
+// reason has none.
+type CantSendDetails struct {
+	// Class is cant_send.
+	Class string `json:"class"`
+	// Reason is the machine-readable refusal reason, such as
+	// agent_not_covered.
+	Reason string `json:"reason"`
+	// ResendSafe is true when the Message was not sent and a new send may
+	// carry it.
+	ResendSafe bool `json:"resend_safe"`
+	// RetryWith is the call that can succeed instead: new_send for a
+	// retryable refusal (agent_not_covered: the same call without busy-send
+	// options; steer_unsupported, held_count, held_bytes and id_conflict: a
+	// new send, changed or later), none otherwise.
+	RetryWith string `json:"retry_with"`
+	// Limit is the exceeded limit's actual and allowed values.
+	Limit *CantSendLimit `json:"limit,omitempty"`
+	// Result is the owner's Result of a conflicting pair.
+	Result *DeliveryResult `json:"result,omitempty"`
+}
+
+// SendAcceptedForceFailedDetails is ErrSendAcceptedForceFailed's err_details:
+// the exact accepted Message Result, without a force outcome. Any force
+// stored before the failure retains its own authority and recovery.
+type SendAcceptedForceFailedDetails struct {
+	Result DeliveryResult `json:"result"`
+}
+
+// CantSendLimit is a refused send's exceeded limit (SR-1.6).
+type CantSendLimit struct {
+	// Actual is the refused value.
+	Actual int64 `json:"actual"`
+	// Allowed is the published limit.
+	Allowed int64 `json:"allowed"`
+}
+
+// NotPausableDetails is ErrSpawnNotPausable's err_details when pause refuses
+// only_if_waiting (SR-6.5, SR-9.2), with cause agent_not_covered for a row
+// whose published current Launch is recorded not_covered (nothing was ended),
+// not_waiting for a covered row whose raw lifecycle state is not waiting
+// (ObservedState holds it) and turn_pending for one with a turn pending (each
+// changing nothing); when a pause claim standing on the covered Launch
+// answers a pause with either option value, nothing signalled:
+// pause_in_progress (its pause is within its deadline), pause_uncertain (past
+// that deadline, its signal intent has no recorded outcome; or its recorded
+// failure has no cause) or
+// the cause its pause recorded (exit_uncertain with signal_sent true, or a
+// failure's cause, signal_sent omitted); or when keyless pause of a covered
+// row could not establish resumable keyless shutdown (SR-6.4):
+// agent_process_unverifiable, launch_changed, signal_unsupported,
+// signal_uncertain, exit_uncertain (the signal was sent and exit was not
+// verified within the pause budget: uncertain, never success),
+// budget_exhausted (the pause budget ran out at a store read or write, or
+// just before the signal; signal_sent says whether it was sent, and is
+// omitted when the budget ran out while the signal's result was not known),
+// or, after the agent's verified exit, owned_process_running,
+// owned_process_unverifiable or destination_unfenced (an owned issuer of its
+// Launch may still emit, so exclusion is not established). A pause that
+// sends no signal because its agent's exit is already known (its claim ended,
+// or stands with paused recorded) or, with only_if_waiting, its Launch ended
+// with no claim also gives owned_process_running, signal_sent false, when the
+// recorded agent itself still runs at the deadline.
+type NotPausableDetails struct {
+	// Cause is the machine-readable cause.
+	Cause string `json:"cause"`
+	// SignalSent is keyless pause's own fact: whether its SIGTERM was sent.
+	// It is absent when that is not known (signal_uncertain, budget_exhausted
+	// while the signal's result was not returned, and a recorded failure
+	// replayed: a signal intent proves no signal), and for an
+	// only_if_waiting refusal and a standing claim's in-progress or uncertain
+	// answer, which send nothing. A replayed exit_uncertain has it true.
+	SignalSent *bool `json:"signal_sent,omitempty"`
+	// ObservedState is the row's raw lifecycle state the claim transaction
+	// observed, for cause not_waiting only.
+	ObservedState string `json:"observed_state,omitempty"`
 }
 
 // PauseTimeoutDetails is ErrPauseTimeout's err_details after pause sent the

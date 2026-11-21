@@ -20,6 +20,9 @@ import (
 // rrFailedAt is the failure time the restore is given, unlike every seeded time.
 var rrFailedAt = time.Date(2030, 1, 2, 3, 9, 7, 0, time.UTC)
 
+// rrTurnStarts is the pre-reuse Launch's Turn Start counter TestReuseRestoreApplied seeds.
+const rrTurnStarts int64 = 7
+
 // rrReset is a row reuse read and reset.
 type rrReset struct {
 	id       string
@@ -35,7 +38,7 @@ type rrReset struct {
 func rrDoReset(t *testing.T, f *v5Store, id string, fresh store.Spawn) rrReset {
 	t.Helper()
 	before, row := f.rawColumns(id), f.readForReuse(t, id)
-	res, archived, v, err := f.s.ResetForReuse(id, row.Snapshot, row.Agent, fresh)
+	res, archived, v, err := f.s.ResetForReuse(id, row.Snapshot, row.Agent, storefix.WithExit(t, f.s, id, fresh))
 	if err != nil || res != store.CondApplied {
 		t.Fatalf("ResetForReuse = %v, %q, %d, %v; want CondApplied", res, archived, v, err)
 	}
@@ -67,8 +70,10 @@ func rrStorageClass(t *testing.T, f *v5Store, id, column string) string {
 // back byte for byte, malformed values and their storage class included, with
 // no launch start, the reset version + 1, the failure time for a NULL ended_at
 // and a NULL parent once the pre-reuse parent is deleted, the agent and end
-// report and subagent_tracking (the reset set 1) included; the reset's archive
-// and request deletion stay; the restore closes and reopens no subagent entry:
+// report and subagent_tracking (the reset set 1) included, and the Turn Start
+// counter, which the reset of the same agent or another one set to 0 (b.7si
+// SR-1.4); the reset's archive and request deletion stay; the restore closes
+// and reopens no subagent entry:
 // what the reset closed (SR-8.1, SR-10.3) stays closed and no claimable launch comes back
 // (SR-8.4).
 func TestReuseRestoreApplied(t *testing.T) {
@@ -105,6 +110,7 @@ func TestReuseRestoreApplied(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newV5Store(t)
+			tc.spec.opts = append(tc.spec.opts, apitest.WithTurnStarts(rrTurnStarts))
 			seeded := seedReuseRow(t, f, tc.spec)
 			id := seeded.id
 			agentClass := rrStorageClass(t, f, id, "agent")
@@ -130,6 +136,9 @@ func TestReuseRestoreApplied(t *testing.T) {
 			if reflect.DeepEqual(reset, mix.rows) || !reflect.DeepEqual(reset, cmClosed(mix.rows, fresh.LaunchStartedAtMillis)) {
 				t.Fatalf("the reset left the entries and launches %+v from %+v; want the close mix closed at the launch start, or the restore check is vacuous", reset, mix.rows)
 			}
+			if r.before.TurnStarts != rrTurnStarts || r.reset.TurnStarts != int64(0) {
+				t.Fatalf("turn_starts %v -> %v after the reset; want %d -> 0", r.before.TurnStarts, r.reset.TurnStarts, rrTurnStarts)
+			}
 			for _, col := range []string{"State", "LifeNumber", "NoPreTrust", "SessionID", "LaunchToken", "StartedAt", "CWD", "Labels", "ParentID", "Agent", "EndReportedAt", "SubagentTracking"} {
 				b, a := reflect.ValueOf(r.before).FieldByName(col).Interface(), reflect.ValueOf(r.reset).FieldByName(col).Interface()
 				if (col == "LifeNumber" || col == "Agent" || col == "SubagentTracking") && r.before.Agent == store.AgentClaude {
@@ -145,7 +154,7 @@ func TestReuseRestoreApplied(t *testing.T) {
 				want.EndedAt = rrFailedAt.Format("2006-01-02 15:04:05")
 			}
 			if tc.deleteParent {
-				if err := f.s.DeleteSpawn(seeded.parent); err != nil {
+				if err := storefix.DeleteWithExit(t, f.s, seeded.parent); err != nil {
 					t.Fatalf("DeleteSpawn(parent): %v", err)
 				}
 				want.ParentID = nil

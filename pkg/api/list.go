@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -144,6 +145,60 @@ type ListRow struct {
 	// (raw) state is check_permission, as SpawnRow.PermissionRequests; always
 	// a non-nil slice (encodes as [] when empty).
 	PermissionRequests []PermissionRequestInfo `json:"permission_requests"`
+	// AgentDefaults is, as SpawnRow's, a covered row's published Agent
+	// Defaults (SR-5.6); omitted for an uncovered row.
+	AgentDefaults *AgentDefaults `json:"agent_defaults,omitempty"`
+}
+
+// busySendDefaultsReader is list's one read of its covered rows' published
+// Agent Defaults (store.ReadBusySendDefaults). It is not part of ListStore;
+// list finds it by a type assertion, through an Active Check run's source. A
+// store without it shows none.
+type busySendDefaultsReader interface {
+	ReadBusySendDefaults(instanceIDs []string, maxWait time.Duration) (map[string]store.BusySendAgentDefaults, error)
+}
+
+var _ busySendDefaultsReader = (*store.Store)(nil)
+
+// withAgentDefaults sets the AgentDefaults of each row whose stored row,
+// among spawns, records its current Launch covered. An Active Check run's
+// rows take them from the Agent Defaults their row read took in its own read
+// transaction (store.NewBusySendDefaults: one batched query; a row with no
+// consistent published binding shows none); any other covered row from one
+// read that, as list's other reads, does not wait (readerLockWait). A list
+// with no such row makes no read.
+func withAgentDefaults(s any, rows []ListRow, spawns []Spawn) error {
+	defaults := map[string]store.BusySendAgentDefaults{}
+	var delivery *store.BusySendDeliveries
+	if run, ok := s.(*activeReadStore); ok {
+		s, delivery = run.source, run.delivery
+	}
+	var ids []string
+	for _, row := range spawns {
+		if row.BusySend != store.BusySendCovered {
+			continue
+		}
+		if d, ok, found := delivery.LookupDefaults(row); found {
+			if ok {
+				defaults[row.InstanceID] = d
+			}
+			continue
+		}
+		ids = append(ids, row.InstanceID)
+	}
+	if reader, ok := s.(busySendDefaultsReader); ok && len(ids) > 0 {
+		read, err := reader.ReadBusySendDefaults(ids, readerLockWait)
+		if err != nil {
+			return err
+		}
+		maps.Copy(defaults, read)
+	}
+	for i := range rows {
+		if d, covered := defaults[rows[i].InstanceID]; covered {
+			rows[i].AgentDefaults = agentDefaultsOf(d)
+		}
+	}
+	return nil
 }
 
 // ListResult is the typed return shape. Spawns is always a non-nil
@@ -243,13 +298,15 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 		s = concrete.WithRecoveryTickSource("ad_recovery")
 	}
 	if _, checked := s.(*activeReadStore); !checked {
+		delivery := store.NewBusySendDefaults()
 		selected := filters
 		selected.StoredDisplay = true
+		selected.Delivery = delivery
 		rows, err := s.ListSpawns(selected)
 		if err != nil {
 			return ListResult{Spawns: []ListRow{}}, err
 		}
-		run := checkActiveRows(context.Background(), s, v, filters.Settle, rows, activeRefresh(s, filters.Settle, false), false)
+		run := checkActiveRows(context.Background(), s, v, filters.Settle, rows, activeRefresh(s, filters.Settle, false, delivery), false, delivery)
 		out, err := listFiltered(run, run.view, ListFilters{Settle: filters.Settle})
 		var fallbacks map[string]cursorListFallback
 		if err == nil {
@@ -269,6 +326,7 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 					return ListResult{Spawns: []ListRow{}}, fallback.err
 				}
 				out.Spawns[i] = fallback.row
+				out.Spawns[i].AgentDefaults = row.AgentDefaults
 				// The retained older facts carry their own records, with the
 				// rejected terminal write as this read's latest attempt.
 				out.Spawns[i].ProcessLiveness, out.Spawns[i].Confirmations = mainFields(run, fallback.stored, filters.Settle)
@@ -328,6 +386,9 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 		if family, ok := families[out[i].InstanceID]; ok {
 			out[i].FamilyState = family
 		}
+	}
+	if err := withAgentDefaults(s, out, rows); err != nil {
+		return ListResult{Spawns: []ListRow{}}, err
 	}
 	// Every row is built, so the slots below point at their final elements.
 	// Once an observation write of this read found the store busy, hook_gone_at

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -239,7 +240,7 @@ func TestCursorResumeRegistrationPreservesDurableRequestFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	const token = "2222222222222222"
-	result, version, err := e.f.s.MoveToPending(old.InstanceID, old.Snapshot, time.Now().UnixMilli(), token, old.Identity.Socket, "", store.LaunchOwner{})
+	result, version, err := e.f.s.MoveToPendingWithExit(old.InstanceID, old.Snapshot, time.Now().UnixMilli(), token, old.Identity.Socket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, e.f.s, old.InstanceID))
 	if err != nil || result != store.CondApplied {
 		t.Fatalf("resume move %v %v", result, err)
 	}

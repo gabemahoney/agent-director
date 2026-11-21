@@ -12,7 +12,6 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
-	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -159,10 +158,11 @@ func ExampleClient_List() {
 	// list-working-example working
 }
 
-// ExampleClient_SendKeys demonstrates delivering text to a Spawn's own pane
-// (SR-7.1): the Recorder holds the row's own labelled session, so send-keys
-// makes one lookup and one pane listing, then sends the text and Enter by the
-// row's pane id (apitest.TestPaneID, "%42").
+// ExampleClient_SendKeys demonstrates sending a Message to a Claude Code
+// Spawn (SR-1.1, SR-3.9): busy send covers Claude, so send-keys stores the
+// text durably, held until the agent's own hooks hand it over at its turn's
+// end, and makes no tmux call; the Recorder, which holds the row's own
+// labelled session, shows none.
 func ExampleClient_SendKeys() {
 	c, _, path, rec, cleanup := exampleClient()
 	defer cleanup()
@@ -181,29 +181,16 @@ func ExampleClient_SendKeys() {
 	}
 	// README:end
 
-	// The Recorder shows every tmux call: both sends target the pane id.
-	for _, call := range rec.SocketCalls() {
-		switch call.Call {
-		case tmux.CallSendText:
-			fmt.Printf("%s %q to pane %s\n", call.Call, call.Text, call.Target)
-		case tmux.CallSendKey:
-			fmt.Printf("%s %s to pane %s\n", call.Call, call.Key, call.Target)
-		default:
-			fmt.Println(call.Call)
-		}
+	// The Message is held in the agent's inbox; nothing was typed.
+	calls := len(rec.SocketCalls())
+	row, err := c.Get("claude_2026-05-22T18-23-15")
+	if err != nil {
+		log.Fatal(err)
 	}
+	fmt.Println("held:", row.Delivery.HeldCount, "tmux calls:", calls)
 
 	// Output:
-	// lookup
-	// pane listing
-	// lookup
-	// pane listing
-	// lookup
-	// pane listing
-	// text send "what is 2+2?" to pane %42
-	// lookup
-	// pane listing
-	// key send Enter to pane %42
+	// held: 1 tmux calls: 0
 }
 
 // ExampleClient_Kill demonstrates ending a live Spawn's agent (SR-6.1): the

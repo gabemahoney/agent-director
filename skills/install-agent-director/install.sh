@@ -11,7 +11,20 @@
 # (directory mode 0700), which is never put on PATH under any option
 # (b.vqr). It refuses to install when the two binaries' version stamps
 # (version and commit) differ, or carry no commit stamp (a plain
-# `go build` reports commit "unknown"), since both open the same store.
+# `go build` reports commit "unknown").
+#
+# Install paths: with no versioned-layout evidence, the install is exempt:
+# it performs the legacy store checks, migrations and directory move when
+# needed. A capable pair then establishes the versioned layout after schema
+# work settles. Evidence is any install-contract.json, install-initialization.json,
+# current, versions, publications or install.lock under ~/.config/agent-director,
+# or a bin/admin entry linking into current or versions; partial and dangling
+# evidence counts. With any evidence, this is a later, file-only install: it
+# publishes the matching pair and repairs requested references, without opening
+# or migrating the store, checking holders or stopping/restarting agents, callers
+# or MCP servers. Invalid evidence can refuse publication; it never authorizes
+# falling back to an exempt install. Store/migration help below applies only to
+# the exempt path.
 #
 # Without --from-release, each binary comes from the first of these it
 # finds (b.azo):
@@ -77,10 +90,12 @@
 #                        backup). Default OFF — defaulting to skip would
 #                        defeat install.sh's main value over a bare
 #                        binary copy.
-#   --keep-prior         Before overwriting an existing binary,
+#   --keep-prior         On an exempt install, before overwriting a binary,
 #                        snapshot it to <target>.prior (overwriting
-#                        any previous .prior). Roll back with
-#                        `mv <target>.prior <target>`. Default OFF.
+#                        any previous .prior). Default OFF. Legacy rollback
+#                        requires no layout evidence and a prior pair that
+#                        supports the store schema and directory. Roll back with
+#                        `mv <target>.prior <target>`.
 #                        Both binaries are snapshotted, agent-director
 #                        and agent-director-admin, so rolling back both
 #                        restores a matching pair; when no
@@ -96,6 +111,14 @@
 #                        move" below) nothing is snapshotted: the new bin
 #                        and admin directories hold no earlier binary, and
 #                        the install says so.
+#                        Later installs leave this flag unused and retain
+#                        versions without a .prior copy. On a versioned layout,
+#                        use rollback-version with a compatible retained stamp:
+#                        docs/operator-actions.md "Rolling back a versioned install".
+#                        Returning across the exempt conversion instead needs
+#                        stopped writers, explicit teardown and a complete matching
+#                        pre-upgrade backup: "Returning across the exempt conversion"
+#                        in that document. A .prior copy alone is insufficient.
 #   --schedule           Schedule recovery and separate expire jobs for the
 #                        user running this script, who must be the agents'
 #                        user (see "The schedule" below). Default OFF: without
@@ -118,12 +141,17 @@
 #                        and no cutover is crossed, a completed install warns
 #                        that the flags were unused, names the store's version
 #                        before this install (or says there was no store), and
-#                        says no journal backup was made. A refused install adds
+#                        says no journal backup was made. On later installs the
+#                        flags are unused, no backup is made and the schema is
+#                        reported as uninspected. A refused install adds
 #                        no such warning.
 #                        See docs/operator-actions.md
 #                        "Upgrading the native-input journal".
-#   --check-holders      Read-only pre-flight holder inventory for a native-input
-#                        cutover. Resolve the candidate binaries and store,
+#   --check-holders      On a later install, exit 0 before source/store resolution,
+#                        inventory, snapshots, publication or repair: holder checks
+#                        are unnecessary and the schema is uninspected.
+#                        On an exempt install, read-only pre-flight holder inventory
+#                        for a native-input cutover. Resolve the binaries and store,
 #                        validate the journal flags and list blocking processes
 #                        with the real migration verifier, then exit 0 (clear)
 #                        or 5 (refused). Skip live-row checks, so agents need
@@ -151,17 +179,19 @@
 #   - cron, when crontab is available and a cron daemon runs (a process named
 #     cron or crond; checked on Linux only): the lines are added to the user's
 #     crontab, each tagged with the marker comment `# agent-director-schedule`;
-#     a re-run replaces the marked lines, so one copy of each stays, and
-#     every other crontab line is kept;
+#     a re-run repairs changed marked lines and keeps already-correct lines,
+#     so one copy of each stays, and every other crontab line is kept;
 #   - else systemd, when `systemctl --user` reaches the user manager: a
 #     .service and .timer per sweep in ~/.config/systemd/user, both timers
-#     enabled; a re-run rewrites them (one copy);
+#     enabled; a re-run repairs missing or changed units and disabled/inactive
+#     timers; a later re-run leaves already-correct units untouched without
+#     needless reloads or restarts;
 #   - else nothing: the warning below, with the reason. (crontab working but no
 #     cron daemon running, and no systemd: the crontab lines are put in, the
 #     install says on stderr that no daemon runs, and the warning fires.)
 # The entries run the canonical binary, ~/.config/agent-director/bin/
-# agent-director, so an upgrade needs no change; a re-run of --schedule
-# re-points them at the binary installed now. uninstall.sh removes exactly the
+# agent-director, so an upgrade needs no change; --schedule repairs missing or
+# changed entries. uninstall.sh removes exactly the
 # marked lines or the units this adds. Whenever neither this install's cron
 # lines (with a cron daemon running) nor its units are present after the run,
 # the install ends with a warning on stderr naming the exact lines (the cron
@@ -190,9 +220,12 @@
 #      agent-director-admin binary), or the two binaries' version
 #      stamps differ or carry no commit stamp, or a binary's `version`
 #      output lacks config_dir or names a directory other than
-#      ~/.config/agent-director (a binary from an earlier release: install
-#      that release with its own install.sh (that release's install.sh must support this host), fetched from its tag; this
-#      install reads no store for the check)
+#      ~/.config/agent-director (an earlier release). Only without layout evidence,
+#      install that release with its own install.sh, fetched from its tag and
+#      supporting this host; this check reads no store. Also exit 3 for missing candidate
+#      version-publication capability over layout evidence, or partial/malformed
+#      capability on either path. With evidence, use a matching layout-aware pair;
+#      rollback and return across the conversion are as described under --keep-prior.
 #   4  hook merge failure (~/.claude/settings.json malformed, or holding
 #      more than one JSON document; an empty one is merged as {}), or
 #      (hooks on, Claude Code installed) a symlinked settings.json
@@ -201,7 +234,8 @@
 #      be written in (refused in pre-flight, before anything on disk
 #      changes). With Claude Code not installed settings.json is not
 #      touched or checked.
-#   5  store open / schema-migration failure (open failed, the config
+#   5  publication refusal or uncertainty, or exempt store open /
+#      schema-migration failure (open failed, the config
 #      file refused with ErrConfigMalformed, state.db not created, an
 #      existing state.db's user_version unreadable before the open (or
 #      after the probe open, when a migration sentinel written before
@@ -231,7 +265,12 @@
 #      or wherever [store] db_path in ~/.config/agent-director/config.toml puts it.
 #      Every exit 5 ends with one line on stderr, its last, naming the
 #      cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the
-#      text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed
+#      text above it. ErrVersionInstallRefused preserves the admin publication
+#      details; unreadable or interrupted output means an unknown outcome, not
+#      rollback. Correct the cause and rerun the same install with the same tag,
+#      pair and flags for forward recovery: docs/operator-actions.md
+#      "Recovering a versioned install". Other causes: ErrVersionUnreadable
+#      (re-run), ErrConfigMalformed
 #      (fix config.toml, then re-run), ErrSchemaMismatch (install a newer
 #      agent-director), ErrSchemaVerifyFailed (needs a human),
 #      ErrMoveConflict (the directory layout cannot be moved as it is: the
@@ -268,7 +307,9 @@
 #   6  the MCP registration failed (--register-mcp): `claude mcp add` (or the
 #      `claude mcp remove` before the re-add of a registration that names the
 #      old directory's binary) exited non-zero. Every other step is done: the
-#      binaries, the store, the hooks and the links are installed and stay.
+#      completed binary, hook and link steps stay. On a later install the
+#      publication stays and the store schema was not inspected; only the
+#      exempt path installs or migrates the store.
 #      stderr gets the command run, its exit status, its stderr and the
 #      command to run by hand, e.g. `claude mcp add agent-director -- <path>
 #      serve --stdio`; the install's last line says so. The check of an earlier
@@ -338,9 +379,9 @@
 # server (`claude mcp get agent-director`, from the directory the install
 # runs in). Run the upgrade from a shell AD did not start.
 #
-# The hooks merge rewrites settings.json with no backup copy, as its env can
-# hold tokens (b.f3n). Each install that gets past the hooks step names, on
-# one line and each shell-quoted, the
+# When needed, the hooks merge rewrites settings.json with no backup copy,
+# as its env can hold tokens (b.f3n). Each install that gets past the hooks step
+# names, on one line and each shell-quoted, the
 # ~/.claude/settings.json.bak.<YYYYmmdd-HHMMSS> copies earlier releases kept
 # (they may hold those tokens and can be deleted), and never deletes them
 # itself.
@@ -349,7 +390,9 @@
 # binaries (a no-flag re-run outside a checkout picks the
 # agent-director on PATH and the installed agent-director-admin, as
 # above) and the same --no-hooks, symlink and --register-mcp choices,
-# ends in the same state and returns 0 on success. Its steps run
+# ends in the same state and returns 0 on success. On the exempt/legacy
+# branch, with no layout evidence:
+# Its steps run
 # again: the binaries are copied again (with --keep-prior, not
 # snapshotted: any earlier .prior files are kept), config.toml and the
 # templates are migrated only while the store is below the rename's version
@@ -357,12 +400,16 @@
 # and makes no new copy of it), the store is opened
 # (a state.db already at its target version is not migrated) and, with
 # hooks on, settings.json and config.toml are merged again (no hook is
-# added twice), config.toml after a fresh timestamped .bak. With
-# --register-mcp, `claude mcp add` refuses a name already registered in
+# added twice), config.toml after a fresh timestamped .bak.
+# With a versioned layout, the re-run publishes file-only: it never opens
+# the store and keeps already-correct references and config unchanged,
+# without new config backups. With --register-mcp, `claude mcp add`
+# refuses a name already registered in
 # its scope, so a re-run from a directory where `mcp get agent-director`
 # already shows this install's binary with `serve --stdio` adds nothing, says
-# so, and still returns 0. With --schedule, the entries are replaced, not
-# added (see "The schedule" above): a re-run leaves one copy of each.
+# so, and still returns 0. With --schedule, missing or changed entries
+# are installed or repaired; a re-run leaves one copy of each
+# (see "The schedule" above).
 
 # Bash parses this whole block before running it (SR-2.16). A piped install
 # has all its code before its first change, even if an interrupt ends curl
@@ -370,6 +417,22 @@
 # The body is deliberately not indented.
 {
 set -euo pipefail
+
+# Cleanup owns only paths this invocation assigns, never inherited values.
+# Clear every ad_exit_cleanup path before any EXIT or signal trap can run;
+# leave TMP/ADMIN_TMP empty until the swap owns their target paths.
+TMP=""
+ADMIN_TMP=""
+tmp_bin=""
+tmp_admin=""
+tmp_sentinel=""
+stage_bin=""
+stage_admin=""
+migrate_tmp=""
+link_tmp=""
+version_out=""
+version_err=""
+sched_tmp=""
 
 # HOME first, before anything is read or written: every path below is built
 # from it, and an empty or relative HOME would put the install root somewhere
@@ -722,7 +785,7 @@ ad_exit_cleanup() {
     local exit_rc=$?
     local f
     [[ "$AD_EXIT_CLEANUP_DONE" -eq 1 ]] && return 0
-    if [[ "${CUTOVER_PHASE:-}" == before_start ]]; then
+    if [[ "${LATER_INSTALL:-0}" -eq 0 && "${CUTOVER_PHASE:-}" == before_start ]]; then
         if [[ -n "$CUTOVER_INTERRUPTED" || "$exit_rc" -eq 129 || "$exit_rc" -eq 130 || "$exit_rc" -eq 143 ]]; then
             if [[ -z "$CUTOVER_INTERRUPTED" ]]; then
                 case "$exit_rc" in
@@ -741,12 +804,13 @@ ad_exit_cleanup() {
         printf '%s' "$MOVE_NOTES_DEFERRED" 2>/dev/null || true
     fi
     for f in "${TMP:-}" "${ADMIN_TMP:-}" "${tmp_bin:-}" "${tmp_admin:-}" \
-        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}" "${migrate_tmp:-}" "${link_tmp:-}"; do
+        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}" "${migrate_tmp:-}" "${link_tmp:-}" \
+        "${version_out:-}" "${version_err:-}"; do
         if [[ -n "$f" ]]; then
             rm -f "$f"
         fi
     done
-    if [[ "$RESTORE_KEEP_COPIES" -ne 1 ]]; then
+    if [[ "${LATER_INSTALL:-0}" -eq 0 && "$RESTORE_KEEP_COPIES" -ne 1 ]]; then
         ad_restore_copies_remove || true
     fi
     # The schedule step's download directory (b.wur), when an interrupt left it.
@@ -1050,6 +1114,8 @@ ad_db_path_refuse() {
 #           or check);
 #   launch  [launch] claude_path, then codex_path and cursor_path, resolved as above: each
 #           empty when unset or empty.
+# "launch-only" reads just those three launch keys, omitting the store path
+# and its validation. Later installers use it without consulting db_path.
 # Every line is printed, an empty one too, so a caller reads them by
 # position (command substitution drops trailing empty lines: read from a
 # here-string with `|| true` after each read). A '?' is refused in db_path
@@ -1058,7 +1124,7 @@ ad_db_path_refuse() {
 # the matching is bytewise whatever the caller's locale.
 ad_store_db_path() (
     LC_ALL=C
-    local config="$1" home="$2" base="$3" want_log=0 want_launch=0 n=0 line table=""
+    local config="$1" home="$2" base="$3" want_store=1 want_log=0 want_launch=0 n=0 line table=""
     local about_launch=0 seen_store=0 seen_log=0 seen_launch=0 have_value=0 have_log_value=0
     local have_claude=0 have_codex=0 have_cursor=0 claude_value="" codex_value="" cursor_value=""
     local value="" log_value="" key rest resolved name t k which parsed seen arg
@@ -1068,6 +1134,7 @@ ad_store_db_path() (
         case "$arg" in
             log) want_log=1; tables+=(log) ;;
             launch) want_launch=1; tables+=(launch) ;;
+            launch-only) want_store=0; want_launch=1; tables=(launch) ;;
         esac
     done
     local re_skip='^[[:blank:]]*(#.*)?$'
@@ -1380,7 +1447,7 @@ ad_store_db_path() (
                 fi
             done
             which=""
-            if [[ "$table" == store ]] && is_key "$key" store; then
+            if [[ "$want_store" -eq 1 && "$table" == store ]] && is_key "$key" store; then
                 which=store
             elif [[ "$want_log" -eq 1 && "$table" == log ]] && is_key "$key" log; then
                 which=log
@@ -1488,6 +1555,7 @@ ad_store_db_path() (
         done <"$config"
     fi
 
+    if [[ "$want_store" -eq 1 ]]; then
     case "$value" in
         "")    resolved="$(ad_clean_path "${base}/state.db")" ;;
         "~/"*) resolved="$(ad_clean_path "${home}/${value:2}")" ;;
@@ -1495,6 +1563,7 @@ ad_store_db_path() (
         *)     resolved="$(ad_clean_path "${base}/${value}")" ;;
     esac
     printf '%s\n' "$resolved"
+    fi
     if [[ "$want_log" -eq 1 ]]; then
         case "$log_value" in
             "")    resolved="" ;;
@@ -1543,7 +1612,7 @@ AGENT_RENAME_HOP_VERSION=9
 # prints before the swap. A Go test fails when either differs from
 # internal/store, so keep each assignment on a line of its own, in this form.
 INPUT_CUTOVER_VERSION=16
-STORE_SCHEMA_VERSION=20
+STORE_SCHEMA_VERSION=21
 
 # AD_OUTCOME_REASONS lists the reasons install.sh chooses itself for an
 # outcome envelope (ad_outcome_exit), never a relayed one. Tasks
@@ -2129,7 +2198,35 @@ ad_phys_place() {
 
 # Keep in step with uninstall.sh, which inlines this rule and
 # ad_is_compat_link ("Which AD directory this run works on").
+# Classify by program-layout evidence alone, before any legacy diagnostic
+# can inspect a store. A dangling entry is evidence too. Only the candidate
+# admin may validate or recover it; absence of current never permits a hop.
+LATER_INSTALL=0
+for layout_entry in install-contract.json install-initialization.json current versions publications install.lock; do
+    if [[ -e "$DEFAULT_INSTALL_ROOT/$layout_entry" || -L "$DEFAULT_INSTALL_ROOT/$layout_entry" ]]; then
+        LATER_INSTALL=1
+    fi
+done
+for layout_entry in "$DEFAULT_BIN_DIR/agent-director" "$DEFAULT_ADMIN_PATH"; do
+    if [[ -L "$layout_entry" ]]; then
+        layout_target="$(readlink "$layout_entry")"
+        [[ "$layout_target" == /* ]] || layout_target="${layout_entry%/*}/$layout_target"
+        layout_target="$(ad_clean_path "$layout_target")"
+        case "$layout_target" in
+            "$NEW_ROOT_CLEAN/current"|"$NEW_ROOT_CLEAN/current/"*|"$NEW_ROOT_CLEAN/versions"|"$NEW_ROOT_CLEAN/versions/"*) LATER_INSTALL=1 ;;
+        esac
+    fi
+done
+if [[ "$LATER_INSTALL" -eq 1 && "$CHECK_HOLDERS" -eq 1 ]]; then
+    echo "install.sh: holder check is unnecessary for file-only upgrades; nothing was installed or changed. Store schema was not inspected."
+    exit 0
+fi
+
+MOVE_DUE=0
+MOVE_PARTIAL=0
+OLD_PHYS=""
 OLD_PRESENT=0
+if [[ "$LATER_INSTALL" -eq 0 ]]; then
 if [[ -e "$OLD_INSTALL_ROOT" || -L "$OLD_INSTALL_ROOT" ]] && ! ad_is_compat_link "$OLD_INSTALL_ROOT"; then
     OLD_PRESENT=1
 fi
@@ -2234,6 +2331,9 @@ if [[ "$MOVE_DUE" -eq 1 ]]; then
 else
     PREFLIGHT_ROOT="$DEFAULT_INSTALL_ROOT"
 fi
+else
+    PREFLIGHT_ROOT="$DEFAULT_INSTALL_ROOT"
+fi
 PREFLIGHT_CONFIG="${PREFLIGHT_ROOT}/config.toml"
 
 # ad_key_class <resolved path> — place a config path key's resolved path
@@ -2293,7 +2393,19 @@ old_error_log=""
 LAUNCH_CLAUDE_PATH=""
 LAUNCH_CODEX_PATH=""
 LAUNCH_CURSOR_PATH=""
-if [[ "$MOVE_DUE" -eq 1 ]]; then
+state_db=""
+if [[ "$LATER_INSTALL" -eq 1 ]]; then
+    # The same strict config reader, restricted to launch keys: no db_path
+    # resolution or busy-timeout read participates in a file-only install.
+    if ! reader_out="$(ad_store_db_path "$PREFLIGHT_CONFIG" "$HOME" "$PREFLIGHT_ROOT" launch-only)"; then
+        ad_exit_5 ErrConfigMalformed
+    fi
+    {
+        IFS= read -r LAUNCH_CLAUDE_PATH || true
+        IFS= read -r LAUNCH_CODEX_PATH || true
+        IFS= read -r LAUNCH_CURSOR_PATH || true
+    } <<<"$reader_out"
+elif [[ "$MOVE_DUE" -eq 1 ]]; then
     # While the move is due the reader also reads [log] error_log_path. Its
     # lines come by position (store, error log, claude_path, codex_path, cursor_path), an
     # empty one included, which command substitution would drop at the end.
@@ -2341,7 +2453,7 @@ fi
 # Messages name the store "state.db" when it is the default one, as
 # before, and by its path when [store] db_path moves it.
 state_db_name="state.db"
-if [[ "$state_db" != "$(ad_clean_path "${PREFLIGHT_ROOT}/state.db")" ]]; then
+if [[ "$LATER_INSTALL" -eq 0 && "$state_db" != "$(ad_clean_path "${PREFLIGHT_ROOT}/state.db")" ]]; then
     state_db_name="$state_db"
 fi
 
@@ -2607,7 +2719,7 @@ ad_store_busy_timeout_ms() (
 
 # <<< ad_store_busy_timeout_ms (b.c7f) <<<
 
-if ! store_busy_timeout_ms="$(ad_store_busy_timeout_ms "$PREFLIGHT_CONFIG")"; then
+if [[ "$LATER_INSTALL" -eq 0 ]] && ! store_busy_timeout_ms="$(ad_store_busy_timeout_ms "$PREFLIGHT_CONFIG")"; then
     ad_exit_5 ErrConfigMalformed
 fi
 
@@ -2798,7 +2910,12 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
         echo "  Releases before 0.11.0 ship no agent-director-admin binary, so" >&2
         echo "  re-running this command will never find one. Instead:" >&2
         echo "    - install this release or later: bash $0 --from-release <tag of this release or later>" >&2
-        echo "    - or install an earlier release with that release's own install.sh (that release's install.sh must support this host), fetched from its tag, rather than this one" >&2
+        if [[ "$LATER_INSTALL" -eq 1 ]]; then
+            echo "    - for layout rollback, use rollback-version with a compatible retained stamp: docs/operator-actions.md \"Rolling back a versioned install\"" >&2
+            echo "      Returning across the exempt conversion requires stopped writers, teardown and pre-upgrade backup restore: see \"Returning across the exempt conversion\" in that document." >&2
+        else
+            echo "    - or install an earlier release with that release's own install.sh (that release's install.sh must support this host), fetched from its tag, rather than this one" >&2
+        fi
         exit 3
     }
 
@@ -3211,15 +3328,106 @@ if [[ "$main_config_dir" != "~/.config/agent-director" || "$admin_config_dir" !=
     echo "" >&2
     echo "  This release keeps AD's files in ~/.config/agent-director, and both of its" >&2
     echo "  binaries report that directory as config_dir in their version result." >&2
-    echo "  A binary that does not is from an earlier release, which an earlier" >&2
-    echo "  release's own install.sh installs (that release's install.sh must support this host): fetch that release's install.sh from its" >&2
-    echo "  tag and run it, rather than this one. To install this release instead:" >&2
+    if [[ "$LATER_INSTALL" -eq 1 ]]; then
+        echo "  This home has versioned-layout evidence: use a matching layout-aware pair." >&2
+        echo "  For rollback-version with a compatible retained stamp, see docs/operator-actions.md \"Rolling back a versioned install\"." >&2
+        echo "  Returning across the exempt conversion requires stopped writers, teardown and pre-upgrade backup restore: see \"Returning across the exempt conversion\" in that document." >&2
+        echo "  To install this release:" >&2
+    else
+        echo "  A binary that does not is from an earlier release, which an earlier" >&2
+        echo "  release's own install.sh installs (that release's install.sh must support this host): fetch that release's install.sh from its" >&2
+        echo "  tag and run it, rather than this one. To install this release instead:" >&2
+    fi
     echo "    - build both binaries from it: $build_advice" >&2
     echo "    - or download release:        rerun with --from-release (omit --binary and --admin-binary)" >&2
     exit 3
 fi
 
     SOURCE_BINARIES_READY=1
+}
+
+# Candidate capability checks are DB-free. Only the candidate admin owns
+# layout validation, locking, staging and recovery; help checks support
+# without starting a publication merely to discover an older executable.
+VERSION_CAPABLE=0
+ad_version_capability() {
+    local facts help all_help facts_rc=0 help_rc=0
+    all_help="$("$ADMIN_SRC" --home "$HOME" --help 2>&1)" || all_help=""
+    facts="$("$ADMIN_SRC" --home "$HOME" version-facts 2>&1)" || facts_rc=$?
+    help="$("$ADMIN_SRC" --home "$HOME" publish-version --help 2>&1)" || help_rc=$?
+    # Only an unambiguous older command surface permits the legacy path.
+    # A partial implementation, broken help or malformed facts is unusable,
+    # even without a layout; never infer this capability from a version tag.
+    if [[ "$facts_rc" -eq 1 && "$help_rc" -eq 1 \
+        && "$all_help" == *'Usage: agent-director-admin '* \
+        && "$all_help" != *version-facts* && "$all_help" != *publish-version* ]] \
+        && jq -e -s 'length == 2 and all(.[]; type == "object"
+            and .err_name == "ErrUnknownVerb" and (.err_description | type == "string"))' \
+            <<<"$facts
+$help" >/dev/null 2>&1; then
+        if [[ "$LATER_INSTALL" -eq 0 ]]; then
+            return 0
+        fi
+    elif [[ "$facts_rc" -eq 0 && "$help_rc" -eq 0 \
+        && "$all_help" == *version-facts* && "$all_help" == *publish-version* \
+        && "$help" == *'publish-version --binary'* ]] \
+        && jq -e -s 'length == 1 and (.[0] | type == "object"
+            and .format_version == 1 and (.version | type == "string" and length > 0)
+            and (.commit | type == "string" and length > 0)
+            and (.covered_agents | type == "array" and . == (sort | unique)
+                and all(.[]; type == "string" and test("^[a-z0-9_-]+$")))
+            and (.core_version | type == "string" and length > 0)
+            and (.core_declarations_sha256 | type == "string" and test("^[0-9a-f]{64}$")))' \
+            <<<"$facts" >/dev/null 2>&1; then
+        VERSION_CAPABLE=1
+        return 0
+    fi
+    echo "install.sh: candidate agent-director-admin lacks usable version-facts/publish-version support; refusing to install." >&2
+    echo "  Use a matching pair from a layout-aware release. Roll back an established layout with rollback-version." >&2
+    exit 3
+}
+
+ad_version_unknown() {
+    echo "install.sh: the admin publication result was unreadable or interrupted; rerun the SAME install to complete or report forward recovery." >&2 || true
+    printf '%s\n' '{"err_name":"ErrVersionInstallRefused","err_description":"admin publication result unreadable; rerun the same install for forward recovery","details":{"publication_state":"unknown"}}' >&2 || true
+    ad_exit_5 ErrVersionInstallRefused
+}
+
+# No migration trap is armed here. A signal, failed admin, or bad output
+# cannot restore binaries/store or discard a visible publication.
+ad_publish_version() {
+    local rc=0 result
+    version_out="$(mktemp -t agent-director.publish-out.XXXXXX)" || ad_version_unknown
+    version_err="$(mktemp -t agent-director.publish-err.XXXXXX)" || ad_version_unknown
+    trap ad_version_unknown INT TERM HUP
+    "$ADMIN_SRC" --home "$HOME" publish-version --binary "$BINARY_SRC" >"$version_out" 2>"$version_err" || rc=$?
+    if [[ "$rc" -eq 0 ]] && [[ ! -s "$version_err" ]] \
+        && jq -e -s 'length == 1 and (.[0] | type == "object"
+            and (.version_id | type == "string" and test("^[0-9a-f]{64}$"))
+            and (.version | type == "string" and length > 0)
+            and .published_version == .version and .publication_state == "published"
+            and .durable == true and .initialization_complete == true
+            and (.reused | type == "boolean")
+            and (.recovered_version | type == "null" or type == "string"))' "$version_out" >/dev/null 2>&1; then
+        result="$(jq -r '"  version : selected=\(.published_version | tojson) reused=\(.reused) recovered_version=\(.recovered_version | tojson) publication_state=\(.publication_state) durable=\(.durable) initialization_complete=\(.initialization_complete)"' "$version_out")" || ad_version_unknown
+        trap - INT TERM HUP
+        printf '%s\n' "$result"
+    elif [[ "$rc" -eq 1 && ! -s "$version_out" ]] \
+        && jq -e -s 'length == 1 and (.[0] | type == "object"
+            and .err_name == "ErrVersionInstallRefused" and (.err_description | type == "string")
+            and (.details | type == "object"
+                and (.reason | . == "lock_busy" or . == "core_mismatch" or . == "coverage_regression" or . == "version_conflict" or . == "layout_invalid" or . == "io_failure")
+                and (.retryable | type == "boolean") and (.durable | type == "boolean")
+                and (.publication_state | . == "not_published" or . == "published" or . == "unknown")))' "$version_err" >/dev/null 2>&1; then
+        trap - INT TERM HUP
+        cat "$version_err" >&2 || true
+        # Preserve the envelope verbatim, but keep the final cause on its
+        # own line even when a candidate omitted its terminating newline.
+        [[ -z "$(tail -c 1 "$version_err")" ]] || printf '\n' >&2
+        ad_exit_5 ErrVersionInstallRefused
+    else
+        ad_version_unknown
+    fi
 }
 
 # --------------------------------------------------------------------
@@ -3581,7 +3789,9 @@ ad_agent_rename_gate() {
 # left to the move's live-agents check below, which reads the same store and
 # refuses first (ErrAgentsLive, "the live rows could not be read"): the
 # gate then defers, and runs again once that check has passed.
-if [[ "$MOVE_DUE" -eq 1 && "$CHECK_HOLDERS" -eq 0 ]]; then
+if [[ "$LATER_INSTALL" -eq 1 ]]; then
+    : # No snapshot, schema, holder or agent-rename gate on this branch.
+elif [[ "$MOVE_DUE" -eq 1 && "$CHECK_HOLDERS" -eq 0 ]]; then
     ad_agent_rename_gate defer
 else
     ad_agent_rename_gate
@@ -3623,6 +3833,72 @@ fi
 # agent-director's TOML decoder matches names. With --no-hooks the file
 # is never merged and agent-director loads it, so it is not refused.
 # --------------------------------------------------------------------
+
+OLD_HOOK_PREFIX="${OLD_BIN_DIR}/agent-director"
+OLD_HOOK_OURS_JQ='
+    def ours:
+      type == "object"
+      and (.hooks | type) == "array"
+      and any(.hooks[]; type == "object"
+        and (.command | type) == "string"
+        and (.command | startswith($oldprefix)));
+'
+
+# Reuse the actual merge in preflight and at the write, so a semantic no-op
+# also works through a read-only settings symlink without replacing its file.
+ad_merge_help_hooks() {
+    jq \
+        --arg cmd "${DEFAULT_BIN_DIR}/agent-director help" --arg oldprefix "$OLD_HOOK_PREFIX" "$OLD_HOOK_OURS_JQ"'
+            .hooks //= {}
+            | .hooks.SessionStart //= []
+            | .hooks.SessionEnd //= []
+            | .hooks.SessionStart |= (if type == "array" then [.[] | select(ours | not)] else . end)
+            | .hooks.SessionEnd |= (if type == "array" then [.[] | select(ours | not)] else . end)
+            | (
+                if any(.hooks.SessionStart | arrays | .[]; .hooks | arrays | any(.[]; .command == $cmd))
+                  then .
+                  else .hooks.SessionStart += [{"hooks":[{"type":"command","command":$cmd}]}]
+                end
+            )
+            | (
+                if any(.hooks.SessionEnd | arrays | .[]; .matcher == "compact" and (.hooks | arrays | any(.[]; .command == $cmd)))
+                  then .
+                  else .hooks.SessionEnd += [{"matcher":"compact","hooks":[{"type":"command","command":$cmd}]}]
+                end
+            )
+        '
+}
+
+ad_help_hooks_unchanged() {
+    local merged
+    [[ "$LATER_INSTALL" -eq 1 && -f "$1" ]] || return 1
+    merged="$(ad_merge_help_hooks <"$1" 2>/dev/null)" || return 1
+    # Settings can contain tokens: carry the merged document over stdin,
+    # never in another process's argument list or in a backup file.
+    printf '%s\n' "$merged" | jq -e -s --slurpfile before "$1" \
+        'length == 1 and ($before | length) == 1 and .[0] == $before[0]' >/dev/null 2>&1
+}
+
+# The config reader and merge check retain their supported TOML forms.
+# Recognize one effective true key under any accepted defaults header,
+# retaining its spelling, comments, BOM and line endings on a later install.
+ad_config_help_unchanged() {
+    [[ "$LATER_INSTALL" -eq 1 && -f "$1" ]] || return 1
+    LC_ALL=C awk '
+        { line = $0 }
+        NR == 1 { sub(/^\357\273\277/, "", line) }
+        line ~ /^[[:blank:]]*\[/ {
+            in_defaults = (line ~ /^[[:blank:]]*\[[[:blank:]]*[Dd][Ee][Ff][Aa][Uu][Ll][Tt][Ss][[:blank:]]*\][[:space:]]*(#.*)?$/)
+            next
+        }
+        in_defaults && line ~ /^[[:blank:]]*[Ii][Nn][Jj][Ee][Cc][Tt]_[Hh][Ee][Ll][Pp]_[Hh][Oo][Oo][Kk][[:blank:]]*=/ {
+            count++
+            sub(/^[^=]*=[[:blank:]]*/, "", line)
+            if (line !~ /^true[[:space:]]*(#.*)?$/) bad = 1
+        }
+        END { exit !(count == 1 && !bad) }
+    ' "$1"
+}
 
 # ad_config_merge_check <config> — return 0 when the hooks-on config
 # merge can set inject_help_hook in <config> (or <config> is missing).
@@ -3839,7 +4115,8 @@ ad_link_refuse() {
 
 # settings.json is edited only with Claude Code installed, so it is checked
 # only then.
-if [[ "$NO_HOOKS" -eq 0 && "$CLAUDE_PRESENT" -eq 1 ]] && ! ad_link_write_check "$DEFAULT_SETTINGS_PATH"; then
+if [[ "$NO_HOOKS" -eq 0 && "$CLAUDE_PRESENT" -eq 1 ]] \
+    && ! ad_help_hooks_unchanged "$DEFAULT_SETTINGS_PATH" && ! ad_link_write_check "$DEFAULT_SETTINGS_PATH"; then
     ad_link_refuse "$DEFAULT_SETTINGS_PATH"
     exit 4
 fi
@@ -3863,7 +4140,7 @@ ad_migrate_link_checks() {
     done
 }
 ad_migrate_link_checks
-if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_link_write_check "$PREFLIGHT_CONFIG"; then
+if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_config_help_unchanged "$PREFLIGHT_CONFIG" && ! ad_link_write_check "$PREFLIGHT_CONFIG"; then
     ad_link_refuse "$PREFLIGHT_CONFIG"
     ad_exit_5 ErrConfigMalformed
 fi
@@ -4262,7 +4539,39 @@ MANAGED_LINK_DECIDED=0
 MANAGED_LINK_DECISION=""
 MANAGED_LINK_RECORD=""
 MANAGED_LINK_SKIP=""
+# A PATH link must never replace an engine-owned executable. Resolve the
+# directories physically so aliases outside the install root count too.
+# Check again at the write, even when pre-flight cached a target.
+ad_managed_link_protected() {
+    local physical namespace owned
+    [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" && -d "$SYMLINK_DIR" ]] || return 1
+    if [[ "$SYMLINK_DIR" -ef "$DEFAULT_BIN_DIR" ]]; then
+        MANAGED_LINK_SKIP="$SYMLINK_DIR already holds the permanent binary entry"
+        return 0
+    fi
+    # CDPATH must not redirect a relative destination away from the leaf
+    # that ln/mv will address in the installer's working directory.
+    if ! physical="$(CDPATH= cd -P -- "$SYMLINK_DIR" 2>/dev/null && pwd -P)"; then
+        MANAGED_LINK_SKIP="$SYMLINK_DIR cannot be resolved safely"
+        return 0
+    fi
+    for namespace in "$DEFAULT_INSTALL_ROOT/current" "$DEFAULT_INSTALL_ROOT/versions"; do
+        [[ -d "$namespace" ]] || continue
+        if ! owned="$(CDPATH= cd -P -- "$namespace" 2>/dev/null && pwd -P)"; then
+            MANAGED_LINK_SKIP="$SYMLINK_DIR cannot be checked against $namespace"
+            return 0
+        fi
+        case "$physical" in
+            "$owned"|"${owned%/}/"*)
+                MANAGED_LINK_SKIP="$SYMLINK_DIR is inside the versioned program layout"
+                return 0 ;;
+        esac
+    done
+    return 1
+}
+
 ad_managed_link_target() {
+    ad_managed_link_protected && return 0
     if [[ "$MANAGED_LINK_DECIDED" -eq 1 ]]; then
         if [[ -n "$MANAGED_LINK_DECISION" ]]; then
             printf '%s\n' "$MANAGED_LINK_DECISION"
@@ -5386,7 +5695,7 @@ ad_cutover_outcome() {
 
 CUTOVER_CROSSING=0
 ad_journal_args
-if [[ -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STORE_VERSION" -ne 0 ]]; then
+if [[ "$LATER_INSTALL" -eq 0 && -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STORE_VERSION" -ne 0 ]]; then
     if ((PREFLIGHT_STORE_VERSION < INPUT_CUTOVER_VERSION)); then
         CUTOVER_CROSSING=1
         # The real verifier always checks both HOME input roots, even
@@ -5654,6 +5963,49 @@ ad_stage_binary() {
         return 1
     fi
 }
+
+# Freeze any source a pre-consumption write/removal can change, aliases
+# included. Keep these destinations in step with the atomic-install block:
+# cp can overwrite a prior or sibling temp that already aliases either source.
+# Do not set TMP/ADMIN_TMP yet: EXIT cleanup must not remove those names before
+# the swap owns them. PATH .new and migration/config writes follow consumption.
+ad_sources_need_staging() {
+    [[ "$LATER_INSTALL" -eq 1 ]] && return 0
+    [[ "$MOVE_DUE" -eq 0 ]] || return 1 # the move stages both sources itself
+    [[ "$VERSION_CAPABLE" -eq 1 ]] && return 0
+    local source output
+    local -a outputs=("$CANONICAL" "$ADMIN_CANONICAL"
+        "${CANONICAL}.tmp.$$" "${ADMIN_CANONICAL}.tmp.$$")
+    if [[ "$KEEP_PRIOR" -eq 1 ]]; then
+        outputs+=("${CANONICAL}.prior" "${ADMIN_CANONICAL}.prior")
+    fi
+    for source in "$BINARY_SRC" "$ADMIN_SRC"; do
+        for output in "${outputs[@]}"; do
+            [[ "$source" -ef "$output" ]] && return 0
+        done
+    done
+    return 1
+}
+
+# Discover capability without allocating in TMPDIR. Independent legacy
+# sources must still reach their schema diagnostics when TMPDIR is full.
+ad_version_capability
+if ad_sources_need_staging; then
+    trap ad_exit_cleanup EXIT
+    if ! ad_stage_binary "$BINARY_SRC" stage_bin || ! ad_stage_binary "$ADMIN_SRC" stage_admin; then
+        echo "install.sh: $MOVE_CAUSE" >&2
+        exit 3
+    fi
+    BINARY_SRC="$stage_bin"
+    ADMIN_SRC="$stage_admin"
+fi
+if [[ "$LATER_INSTALL" -eq 1 ]]; then
+    ad_publish_version
+    echo "  schema  : not inspected (file-only upgrade)"
+    if [[ "$KEEP_PRIOR" -eq 1 ]]; then
+        echo "  prior   : --keep-prior unused; installed versions are retained automatically, with no .prior copy"
+    fi
+fi
 
 # ad_move_walk <copy|verify> <src dir> <dst dir> <depth> — copy, or check
 # byte for byte, the entries of <src dir> (a real directory) in <dst dir>,
@@ -6061,6 +6413,8 @@ fi
 # ~/.config is the directory the install root lives under (always under HOME;
 # XDG_CONFIG_HOME is never read); make it (mode 0700) only when it is missing,
 # and leave an existing one's mode alone.
+MANAGED_LINK=""
+if [[ "$LATER_INSTALL" -eq 0 ]]; then
 config_base="$(dirname "$DEFAULT_INSTALL_ROOT")"
 if [[ ! -d "$config_base" ]]; then
     mkdir -p "$config_base"
@@ -6085,10 +6439,8 @@ chmod 00755 "$DEFAULT_BIN_DIR"
 # A running process holds the old inode reference, so an in-flight
 # exec is unaffected by the swap.
 #
-# This is the standard pattern for single-binary CLI installers
-# (gh, kubectl, terraform). The version-manager pattern (canonical
-# symlink → versioned files) is only worth the complexity when you
-# actually manage multiple concurrent versions; we don't.
+# Only the exempt install uses these mutable entries. After its schema work
+# settles, the publication engine replaces them with permanent links.
 # --------------------------------------------------------------------
 
 MANAGED_LINK=""
@@ -6098,11 +6450,13 @@ ADMIN_PRIOR="${ADMIN_CANONICAL}.prior"
 ADMIN_TMP="${ADMIN_CANONICAL}.tmp.$$"
 
 # --keep-prior snapshots agent-director-admin too (b.vqr), before either
-# binary is replaced, so rolling both back restores a matching pair.
+# binary is replaced. Legacy rollback requires no layout evidence and a
+# prior pair compatible with the store schema and directory; capable installs
+# establish permanent entries after settlement and use publication rollback.
 # With no agent-director-admin installed yet but an agent-director
 # being replaced (an upgrade from a release before 0.11.0), there is
 # nothing to snapshot: a stale .prior, which would pair wrongly, is
-# removed, and the rollback is removing agent-director-admin.
+# removed. Only a legacy rollback can remove agent-director-admin directly.
 #
 # Whether to snapshot is decided once, for the pair (b.2wk). Neither
 # binary is snapshotted when agent-director is already byte-identical
@@ -6131,11 +6485,13 @@ if [[ "$KEEP_PRIOR" -eq 1 && "$MOVED" -eq 0 ]]; then
         if [[ -f "$ADMIN_PRIOR" ]]; then
             echo "  admin prior: kept $ADMIN_PRIOR ($not_snapshotted)"
         elif [[ -f "$PRIOR" ]]; then
-            # An agent-director.prior with no admin .prior beside it is
-            # from an upgrade from before 0.11.0, which removed the admin
-            # .prior: rolling back still means removing
-            # agent-director-admin, as that run said.
-            echo "  admin prior: none ($not_snapshotted); to roll back, remove $ADMIN_CANONICAL"
+            # Preserve pre-admin rollback advice only for a legacy candidate;
+            # a capable install will establish permanent entries below.
+            if [[ "$VERSION_CAPABLE" -eq 1 ]]; then
+                echo "  admin prior: none ($not_snapshotted)"
+            else
+                echo "  admin prior: none ($not_snapshotted); to roll back, remove $ADMIN_CANONICAL"
+            fi
         else
             echo "  admin prior: none ($not_snapshotted)"
         fi
@@ -6151,8 +6507,16 @@ if [[ "$KEEP_PRIOR" -eq 1 && "$MOVED" -eq 0 ]]; then
             echo "  admin prior: snapshotted to $ADMIN_PRIOR"
         elif [[ -f "$CANONICAL" ]]; then
             rm -f "$ADMIN_PRIOR"
-            echo "  admin prior: none (no agent-director-admin was installed); to roll back, remove $ADMIN_CANONICAL"
+            if [[ "$VERSION_CAPABLE" -eq 1 ]]; then
+                echo "  admin prior: none (no agent-director-admin was installed)"
+            else
+                echo "  admin prior: none (no agent-director-admin was installed); to roll back, remove $ADMIN_CANONICAL"
+            fi
         fi
+    fi
+    if [[ "$VERSION_CAPABLE" -eq 1 ]]; then
+        echo "  prior   : after layout establishment, use rollback-version with a compatible retained stamp; do not replace or remove permanent entries using .prior copies."
+        echo "            To return across this conversion, follow docs/operator-actions.md \"Returning across the exempt conversion\" (stopped writers, teardown and pre-upgrade backup restore)."
     fi
 fi
 
@@ -6188,6 +6552,7 @@ if [[ "$CUTOVER_CROSSING" -eq 1 ]]; then
 fi
 mv "$TMP" "$CANONICAL"
 mv "$ADMIN_TMP" "$ADMIN_CANONICAL"
+fi
 
 echo "  binary  : $CANONICAL" || ad_cutover_write_failed
 
@@ -6197,7 +6562,13 @@ echo "  binary  : $CANONICAL" || ad_cutover_write_failed
 # --------------------------------------------------------------------
 
 target="$(ad_managed_link_target)"
-if [[ -n "$target" ]]; then
+if ad_managed_link_protected; then
+    target=""
+fi
+if [[ -n "$target" && "$LATER_INSTALL" -eq 1 && -L "$target" && "$(readlink "$target")" == "$CANONICAL" ]]; then
+    MANAGED_LINK="$target"
+    echo "  symlink : $target → $CANONICAL (unchanged)"
+elif [[ -n "$target" ]]; then
     link_tmp="${target}.new"
     ln -sfn "$CANONICAL" "$link_tmp"
     mv -f "$link_tmp" "$target"
@@ -6478,6 +6849,7 @@ ad_fail_config_refused() {
 }
 
 # ---- Step 2: read the DB's ACTUAL current schema version ----
+if [[ "$LATER_INSTALL" -eq 0 ]]; then
 if [[ ! -e "$state_db" ]]; then
     # Fresh install: no DB on disk. No sentinel is needed — the step-4
     # open fresh-creates state.db at the binary's current schemaVersion.
@@ -6783,13 +7155,26 @@ fi
 if [[ "$CUTOVER_PHASE" == running && -n "$CUTOVER_INTERRUPTED" ]]; then
     ad_cutover_interrupted_committed
 fi
+fi # exempt schema work, including settlement
+
+# First layout evidence belongs to the engine, strictly after the exempt
+# schema step has settled. From that first evidence onward, every rerun is
+# file-only. No legacy signal/restore handler may straddle publication.
+if [[ "$LATER_INSTALL" -eq 0 ]]; then
+    ad_cutover_disarm_traps
+    if [[ "$VERSION_CAPABLE" -eq 1 ]]; then
+        ad_publish_version
+    else
+        echo "  version : candidate predates versioned installs; no versioned layout was created. The next install with a current release will be exempt again."
+    fi
+fi
 
 # --------------------------------------------------------------------
 # Hook injection — additive merge into ~/.claude/settings.json
 #
 # Skipped entirely under --no-hooks: settings.json is not written,
-# leaving it byte-identical to its pre-install state. With hooks on it is
-# rewritten with no backup copy (b.f3n; see the write below).
+# leaving it byte-identical to its pre-install state. With hooks on, a later
+# install preserves a semantic no-op; any merge writes no backup (b.f3n).
 # --------------------------------------------------------------------
 
 # (ad_mode_of is defined above, in the section on AD's directory move, which
@@ -6828,16 +7213,6 @@ ad_replace_keeping_mode() {
 # it: an object whose hooks list holds an object whose command is a string
 # starting with the old directory's bin/agent-director path. Other shapes are
 # never indexed, so they pass through untouched.
-OLD_HOOK_PREFIX="${OLD_BIN_DIR}/agent-director"
-OLD_HOOK_OURS_JQ='
-    def ours:
-      type == "object"
-      and (.hooks | type) == "array"
-      and any(.hooks[]; type == "object"
-        and (.command | type) == "string"
-        and (.command | startswith($oldprefix)));
-'
-
 if [[ "$CLAUDE_PRESENT" -eq 0 ]]; then
     # No Claude Code: settings.json is not touched, the old directory's help
     # hooks are neither removed nor printed, and this line wins over
@@ -6860,6 +7235,8 @@ elif [[ "$NO_HOOKS" -eq 1 ]]; then
             echo "    Fix: re-run this install without --no-hooks (it removes them and adds the new ones), or edit each command to start with ${CANONICAL} (or delete the entry)."
         fi
     fi
+elif ad_help_hooks_unchanged "$DEFAULT_SETTINGS_PATH"; then
+    echo "  hooks   : already present in $DEFAULT_SETTINGS_PATH; unchanged"
 else
     mkdir -p "$(dirname "$DEFAULT_SETTINGS_PATH")"
 
@@ -6892,7 +7269,6 @@ else
     # Our hook entries are uniquely identified by the command string
     # (the canonical binary path + " help"). Idempotency check: only add
     # if the command isn't already present in that event's hook list.
-    help_cmd="${CANONICAL} help"
 
     # Merge logic (jq):
     #   - Ensure hooks.SessionStart is an array; append our entry if not
@@ -6913,26 +7289,7 @@ else
     # each hook in an entry's hooks list (.command), so one that is
     # neither an object nor null (a string, say) fails the merge too. A
     # null one indexes to null and passes.
-    if ! new_settings=$(printf '%s' "$existing" | jq \
-        --arg cmd "$help_cmd" --arg oldprefix "$OLD_HOOK_PREFIX" "$OLD_HOOK_OURS_JQ"'
-            .hooks //= {}
-            | .hooks.SessionStart //= []
-            | .hooks.SessionEnd //= []
-            | .hooks.SessionStart |= (if type == "array" then [.[] | select(ours | not)] else . end)
-            | .hooks.SessionEnd |= (if type == "array" then [.[] | select(ours | not)] else . end)
-            | (
-                if any(.hooks.SessionStart | arrays | .[]; .hooks | arrays | any(.[]; .command == $cmd))
-                  then .
-                  else .hooks.SessionStart += [{"hooks":[{"type":"command","command":$cmd}]}]
-                end
-            )
-            | (
-                if any(.hooks.SessionEnd | arrays | .[]; .matcher == "compact" and (.hooks | arrays | any(.[]; .command == $cmd)))
-                  then .
-                  else .hooks.SessionEnd += [{"matcher":"compact","hooks":[{"type":"command","command":$cmd}]}]
-                end
-            )
-        '); then
+    if ! new_settings=$(printf '%s' "$existing" | ad_merge_help_hooks); then
         echo "install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)" >&2
         # Which side of the event lists is wrong (b.dzu): with the merge's
         # own fill-ins, an outer shape it takes yields the path of each
@@ -7025,7 +7382,9 @@ fi
 
 if [[ "$NO_HOOKS" -eq 0 ]]; then
     CONFIG_TOML="${DEFAULT_INSTALL_ROOT}/config.toml"
-    if [[ -f "$CONFIG_TOML" ]]; then
+    if ad_config_help_unchanged "$CONFIG_TOML"; then
+        echo "  config  : inject_help_hook is already true in $CONFIG_TOML; unchanged"
+    elif [[ -f "$CONFIG_TOML" ]]; then
         backup_cfg="${CONFIG_TOML}.bak.$(date +%Y%m%d-%H%M%S)"
         ad_backup_keeping_mode "$CONFIG_TOML" "$backup_cfg"
         # awk merge: rewrite an existing inject_help_hook line under
@@ -7265,7 +7624,10 @@ ad_mcp_report_failure() {
 }
 
 ad_mcp_step() {
-    local plain_add="$REGISTER_MCP" scope cmdline=""
+    local plain_add="$REGISTER_MCP" scope cmdline="" settled="The binaries, the store and the other install steps are done and stay in place."
+    if [[ "$LATER_INSTALL" -eq 1 ]]; then
+        settled="The published version and completed install steps stay in place. Store schema was not inspected."
+    fi
     if [[ "$CLAUDE_PRESENT" -eq 0 ]]; then
         # No Claude Code: no `mcp get`, no `mcp add`. --register-mcp says it
         # was skipped and the install goes on to success.
@@ -7287,7 +7649,7 @@ ad_mcp_step() {
                     printf -v cmdline '%q mcp remove agent-director -s %s' "$CLAUDE_PROG" "$MCP_SCOPE"
                     ad_mcp_exec "$CLAUDE_PROG" mcp remove agent-director -s "$MCP_SCOPE"
                     if [[ "$MCP_RC" -ne 0 ]]; then
-                        ad_mcp_report_failure "the registration (scope $MCP_SCOPE) names the old directory's binary, and removing it failed; nothing was added. The binaries, the store and the other install steps are done and stay in place. Re-point it by hand:" "$cmdline"
+                        ad_mcp_report_failure "the registration (scope $MCP_SCOPE) names the old directory's binary, and removing it failed; nothing was added. $settled Re-point it by hand:" "$cmdline"
                         ad_mcp_print_repoint "$MCP_SCOPE" >&2
                     else
                         printf -v cmdline '%q mcp add agent-director -s %s -- %q serve --stdio' "$CLAUDE_PROG" "$MCP_SCOPE" "$CANONICAL"
@@ -7295,7 +7657,7 @@ ad_mcp_step() {
                         if [[ "$MCP_RC" -eq 0 ]]; then
                             echo "  mcp     : re-registered with claude mcp (scope $MCP_SCOPE): it named the old directory's binary"
                         else
-                            ad_mcp_report_failure "the old registration (scope $MCP_SCOPE) was removed, but adding it again failed; nothing is registered now. The binaries, the store and the other install steps are done and stay in place. Add it by hand:" "$cmdline"
+                            ad_mcp_report_failure "the old registration (scope $MCP_SCOPE) was removed, but adding it again failed; nothing is registered now. $settled Add it by hand:" "$cmdline"
                             ad_mcp_print_add "$MCP_SCOPE" >&2
                         fi
                     fi
@@ -7329,7 +7691,7 @@ ad_mcp_step() {
         if [[ "$MCP_RC" -eq 0 ]]; then
             echo "  mcp     : registered with claude mcp"
         else
-            ad_mcp_report_failure "registration failed; nothing was registered. The binaries, the store and the other install steps are done and stay in place. Register it by hand:" "$cmdline"
+            ad_mcp_report_failure "registration failed; nothing was registered. $settled Register it by hand:" "$cmdline"
             ad_mcp_print_add >&2
         fi
     fi
@@ -7830,12 +8192,15 @@ ad_sched_fetch() {
             SCHED_FETCH_WHY="cannot create ${SCHEDULE_LOCAL_DIR}"
         else
             for f in "${SCHEDULE_ALL_FILES[@]}"; do
+                if [[ "$LATER_INSTALL" -eq 1 ]] && cmp -s "${tmpd}/${f}" "${SCHEDULE_LOCAL_DIR}/${f}"; then
+                    continue
+                fi
                 if ! mv -f "${tmpd}/${f}" "${SCHEDULE_LOCAL_DIR}/${f}" 2>/dev/null; then
                     SCHED_FETCH_WHY="cannot write ${SCHEDULE_LOCAL_DIR}/${f}"
                     break
                 fi
             done
-            if [[ -n "$SCHED_FETCH_WHY" ]]; then
+            if [[ -n "$SCHED_FETCH_WHY" && "$LATER_INSTALL" -eq 0 ]]; then
                 for f in "${SCHEDULE_ALL_FILES[@]}"; do
                     rm -f "${SCHEDULE_LOCAL_DIR}/${f}"
                 done
@@ -8095,7 +8460,9 @@ ad_sched_install_cron() {
 # removed (with its timer's enable link); units an earlier run installed and
 # this run did not touch stay.
 ad_sched_install_systemd() {
-    local dir sc f t tmp bak had_prev=" " before=0 mv_failed=0
+    local dir sc f t tmp bak had_prev=" " before=0 mv_failed=0 control_failed=0
+    local changed=" " replaced=" "
+    local -a enables=() restarts=() starts=()
     if ! ad_sched_systemd_usable; then
         return 1
     fi
@@ -8113,14 +8480,23 @@ ad_sched_install_systemd() {
             rm -f "${dir}"/.agent-director-*.tmp."$$"
             return 1
         fi
+        # Compare before creating a temp or backup, preserving the existing
+        # file and any link when publication leaves its content unchanged.
+        if [[ "$LATER_INSTALL" -eq 1 && -f "${dir}/${f}" ]] \
+            && printf '%s' "$SCHED_RENDERED" | cmp -s - "${dir}/${f}"; then
+            before=$((before + 1))
+            continue
+        fi
         if ! printf '%s' "$SCHED_RENDERED" >"$tmp" 2>/dev/null; then
             rm -f "${dir}"/.agent-director-*.tmp."$$"
             SCHED_WHY="cannot write $tmp"
             return 1
         fi
+        changed="${changed}${f} "
     done
     # Back up the unit files that are there now, for the rollback.
     for f in "${SCHEDULE_UNIT_FILES[@]}"; do
+        [[ "$changed" == *" ${f} "* ]] || continue
         if [[ -f "${dir}/${f}" ]]; then
             bak="${dir}/.${f}.prev.$$"
             if ! cp -p "${dir}/${f}" "$bak" 2>/dev/null; then
@@ -8132,6 +8508,7 @@ ad_sched_install_systemd() {
         fi
     done
     for f in "${SCHEDULE_UNIT_FILES[@]}"; do
+        [[ "$changed" == *" ${f} "* ]] || continue
         tmp="${dir}/.${f}.tmp.$$"
         if [[ -f "${dir}/${f}" ]] && cmp -s "$tmp" "${dir}/${f}"; then
             before=$((before + 1))
@@ -8140,16 +8517,51 @@ ad_sched_install_systemd() {
             mv_failed=1
             break
         fi
+        replaced="${replaced}${f} "
     done
     if [[ "$before" -eq "${#SCHEDULE_UNIT_FILES[@]}" ]]; then
         SCHED_RESULT=unchanged
     else
         SCHED_RESULT=installed
     fi
-    if [[ "$mv_failed" -eq 1 ]] \
-        || ! "$sc" --user daemon-reload >/dev/null 2>&1 </dev/null \
-        || ! "$sc" --user enable "${SCHEDULE_TIMERS[@]}" >/dev/null 2>&1 </dev/null \
-        || ! "$sc" --user restart "${SCHEDULE_TIMERS[@]}" >/dev/null 2>&1 </dev/null; then
+    if [[ "$mv_failed" -eq 0 ]]; then
+        if [[ "$changed" != " " ]] && ! "$sc" --user daemon-reload >/dev/null 2>&1 </dev/null; then
+            control_failed=1
+        fi
+        if [[ "$control_failed" -eq 0 ]]; then
+            for t in "${SCHEDULE_TIMERS[@]}"; do
+                if [[ "$changed" == *" ${t} "* || "$changed" == *" ${t%.timer}.service "* ]]; then
+                    enables+=("$t")
+                    restarts+=("$t")
+                else
+                    # Explicit --schedule repairs enablement/activity even
+                    # when the unit bytes already match. Never restart a
+                    # healthy, unchanged timer merely to publish a version.
+                    if ! "$sc" --user is-enabled --quiet "$t" >/dev/null 2>&1 </dev/null; then
+                        enables+=("$t")
+                    fi
+                    if ! "$sc" --user is-active --quiet "$t" >/dev/null 2>&1 </dev/null; then
+                        starts+=("$t")
+                    fi
+                fi
+            done
+            if [[ "${#enables[@]}" -gt 0 ]] && ! "$sc" --user enable "${enables[@]}" >/dev/null 2>&1 </dev/null; then
+                control_failed=1
+            fi
+            if [[ "$control_failed" -eq 0 && "${#restarts[@]}" -gt 0 ]] \
+                && ! "$sc" --user restart "${restarts[@]}" >/dev/null 2>&1 </dev/null; then
+                control_failed=1
+            fi
+            if [[ "$control_failed" -eq 0 && "${#starts[@]}" -gt 0 ]] \
+                && ! "$sc" --user start "${starts[@]}" >/dev/null 2>&1 </dev/null; then
+                control_failed=1
+            fi
+            if [[ "$changed" == " " && $(( ${#enables[@]} + ${#starts[@]} )) -gt 0 ]]; then
+                SCHED_RESULT=repaired
+            fi
+        fi
+    fi
+    if [[ "$mv_failed" -eq 1 || "$control_failed" -eq 1 ]]; then
         if [[ "$mv_failed" -eq 1 ]]; then
             SCHED_WHY="cannot write the unit files in $dir"
         else
@@ -8157,6 +8569,7 @@ ad_sched_install_systemd() {
         fi
         rm -f "${dir}"/.agent-director-*.tmp."$$"
         for f in "${SCHEDULE_UNIT_FILES[@]}"; do
+            [[ "$replaced" == *" ${f} "* ]] || continue
             if [[ "$had_prev" == *" ${f} "* ]]; then
                 mv -f "${dir}/.${f}.prev.$$" "${dir}/${f}" 2>/dev/null || true
             else
@@ -8164,11 +8577,14 @@ ad_sched_install_systemd() {
             fi
         done
         for t in "${SCHEDULE_TIMERS[@]}"; do
-            if [[ "$had_prev" != *" ${t} "* ]]; then
+            if [[ "$replaced" == *" ${t} "* && "$had_prev" != *" ${t} "* ]]; then
                 rm -f "${dir}/timers.target.wants/${t}"
             fi
         done
-        "$sc" --user daemon-reload >/dev/null 2>&1 </dev/null || true
+        rm -f "${dir}"/.agent-director-*.prev."$$"
+        if [[ "$replaced" != " " ]]; then
+            "$sc" --user daemon-reload >/dev/null 2>&1 </dev/null || true
+        fi
         return 1
     fi
     rm -f "${dir}"/.agent-director-*.prev."$$"
@@ -8349,7 +8765,13 @@ ad_sched_step() {
                 fi
             else
                 if [[ "$SCHED_RESULT" == unchanged ]]; then
-                    echo "  schedule: systemd: the user timers already held these units; enabled again, nothing changed (${dir})"
+                    if [[ "$LATER_INSTALL" -eq 1 ]]; then
+                        echo "  schedule: systemd: the user timers already hold these units and are enabled and active; unchanged (${dir})"
+                    else
+                        echo "  schedule: systemd: the user timers already held these units; enabled again, nothing changed (${dir})"
+                    fi
+                elif [[ "$SCHED_RESULT" == repaired ]]; then
+                    echo "  schedule: systemd: kept unchanged units; repaired timer enablement or activity (${dir})"
                 else
                     echo "  schedule: systemd: user timers ${SCHEDULE_TIMERS[0]} (every 2 minutes) and ${SCHEDULE_TIMERS[1]} (daily at 03:17) installed in ${dir} and enabled."
                 fi
@@ -8376,7 +8798,9 @@ ad_sched_step() {
 # refusal/after-open diagnostic and the MCP failure's final exit-6 line.
 ad_unused_journal_warn() {
     if [[ "$CUTOVER_CROSSING" -eq 0 && "$JOURNAL_FLAGS_GIVEN" -eq 1 ]]; then
-        if [[ -n "$PREFLIGHT_STORE_VERSION" ]]; then
+        if [[ "$LATER_INSTALL" -eq 1 ]]; then
+            echo "install.sh: journal flags were unused for this file-only upgrade; no journal backup was made. Store schema was not inspected." >&2
+        elif [[ -n "$PREFLIGHT_STORE_VERSION" ]]; then
             echo "install.sh: warning: $state_db_name was at v${PREFLIGHT_STORE_VERSION} before this install; journal flags were not used and no journal backup was made." >&2
         else
             echo "install.sh: warning: there was no store before this install; journal flags were not used and no journal backup was made." >&2

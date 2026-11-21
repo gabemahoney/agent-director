@@ -27,8 +27,8 @@ func TestJournalRejectsCorruptIntent(t *testing.T) {
 				if mode == "proof wrong payload" {
 					text += "x"
 				}
-				raw := claudeRecord(t, s, text, nil)
-				a.Proof = &Proof{SessionID: s.manifest.SessionID, Raw: raw, RawSHA256: Hash(raw)}
+				raw := codexRecord(t, "turn", text)
+				a.Proof = &Proof{SessionID: "session", Raw: raw, RawSHA256: Hash(raw)}
 				if mode == "proof hash changed" {
 					a.Proof.RawSHA256 = "wrong"
 				}
@@ -54,10 +54,11 @@ func TestReadyRequiresFreshSupportedLaunch(t *testing.T) {
 				id.Agent, id.Token, id.Socket, id.InstanceID = agent, "0123456789abcdef", "/own/socket", "own"
 				s.manifest.Agent, s.manifest.Token, s.manifest.Socket, s.manifest.InstanceID, s.manifest.Safe = agent, id.Token, id.Socket, id.InstanceID, true
 				s.manifest.KeymapPinned = true
-				file, marker := "claude-debug.log", "Terminal capabilities:"
+				file, marker, version := "claude-debug.log", "Terminal capabilities:", "2.1.280"
 				if agent == "codex" {
-					file, marker, s.manifest.Version = "codex-tui.log", "tui startup initial frame scheduled", "0.159.2"
+					file, marker, version = "codex-tui.log", "tui startup initial frame scheduled", "0.159.2"
 				}
+				s.manifest.Version = version
 				switch mode {
 				case "unpinned keymap":
 					s.manifest.KeymapPinned = false

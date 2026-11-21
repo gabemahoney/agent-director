@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"reflect"
 	"testing"
@@ -398,7 +399,7 @@ func TestCursorStaleReportCannotMutateReplacementLaunch(t *testing.T) {
 	}
 	fresh := reuseFresh("", true)
 	fresh.Agent = store.AgentCursor
-	if applied, _, _, err := f.s.ResetForReuse(row.InstanceID, old.Snapshot, store.AgentCursor, fresh); err != nil || applied != store.CondApplied {
+	if applied, _, _, err := f.s.ResetForReuse(row.InstanceID, old.Snapshot, store.AgentCursor, storefix.WithExit(t, f.s, row.InstanceID, fresh)); err != nil || applied != store.CondApplied {
 		t.Fatalf("replacement write %v %v", applied, err)
 	}
 	before := hgColumns(t, f, row.InstanceID)

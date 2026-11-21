@@ -68,6 +68,7 @@ func unsettle(t *testing.T, _ *api.Client, dbPath, id, reported string, at time.
 func TestSettleGuardSendKeysState(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
+	e.rowAgent = store.AgentCodex
 	r := e.seedRow(t, killRowSpec{})
 	c := e.settleClient(t)
 	unsettle(t, c, e.dbPath, r.ID, store.StatePending, e.clock.Now())
@@ -88,6 +89,7 @@ func TestSettleGuardSendKeysRelay(t *testing.T) {
 		t.Run(map[bool]string{false: "fallen back", true: "decided, unproven"}[decided], func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex
 			r := seedRelayRow(t, e, storefix.TestRequestTokenA)
 			now := time.Now()
 			if decided {

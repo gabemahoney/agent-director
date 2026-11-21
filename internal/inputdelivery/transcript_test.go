@@ -1,6 +1,7 @@
 package inputdelivery
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -12,12 +13,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// evidenceSession is an uncovered (Codex) launch's native session and an
+// attempt whose Enter was pressed. codexRollout gives it a rollout.
 func evidenceSession(t *testing.T) (*nativeSession, *Attempt) {
 	t.Helper()
 	dir := t.TempDir()
-	s := &nativeSession{dir: dir, ctx: context.Background(), manifest: manifest{Agent: "claude", SessionID: uuid.NewString(), CWD: "/work", Version: "2.1.280", Created: time.Now()}}
-	s.manifest.Transcript = filepath.Join(dir, "native.jsonl")
-	a, err := NewAttempt(Identity{Agent: "claude", CWD: "/work"}, "hello\n🌍", nil)
+	s := &nativeSession{dir: dir, ctx: context.Background(), manifest: manifest{Agent: "codex", CWD: "/work", Version: "0.159.2", Created: time.Now(), KeymapPinned: true}}
+	a, err := NewAttempt(Identity{Agent: "codex", CWD: "/work"}, "hello\n🌍", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,17 +77,44 @@ func reopenEvidence(s *nativeSession) *nativeSession {
 	return &nativeSession{dir: s.dir, manifest: s.manifest, ctx: s.ctx, store: s.store, launch: s.launch}
 }
 
-func claudeRecord(t *testing.T, s *nativeSession, text string, change func(map[string]any)) []byte {
+// codexRollout gives a a fresh Codex native session: a's rollout path in a
+// sessions directory, its session metadata line and a's exact user record
+// (recordID). Process ownership is the caller's (codexEvidence on Linux).
+func codexRollout(t *testing.T, s *nativeSession, a *Attempt, recordID string) (string, []byte, []byte) {
 	t.Helper()
-	r := map[string]any{"type": "user", "uuid": uuid.NewString(), "sessionId": s.manifest.SessionID, "cwd": s.manifest.CWD, "version": s.manifest.Version, "isSidechain": false, "message": map[string]any{"role": "user", "content": text}}
-	if change != nil {
-		change(r)
+	s.manifest.Created = time.Now().Add(-time.Minute)
+	a.Identity.CWD = t.TempDir()
+	s.manifest.CWD = a.Identity.CWD
+	a.NativeSessionID = uuid.NewString()
+	dir := filepath.Join(t.TempDir(), "sessions")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
 	}
-	b, err := json.Marshal(r)
+	return filepath.Join(dir, "rollout.jsonl"), codexMetadataRecord(t, a, s.manifest.Created.Add(time.Second)), codexRecord(t, recordID, a.Payload)
+}
+
+func codexMetadataRecord(t *testing.T, a *Attempt, created time.Time) []byte {
+	t.Helper()
+	meta, err := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]any{"id": a.NativeSessionID, "cwd": a.Identity.CWD, "cli_version": "0.159.2", "timestamp": created.Format(time.RFC3339Nano)}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return append(b, '\n')
+	return append(meta, '\n')
+}
+
+func codexRecord(t *testing.T, recordID, text string) []byte {
+	t.Helper()
+	record, err := json.Marshal(map[string]any{"type": "response_item", "payload": map[string]any{"type": "message", "role": "user", "id": recordID, "content": []map[string]string{{"type": "input_text", "text": text}}, "internal_chat_message_metadata_passthrough": map[string]any{"content_item_kinds": []string{"user.text"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(record, '\n')
+}
+
+// codexMark is the watermark Watermark validates for rollout data that starts
+// with meta: durable ownership that needs no live descriptor.
+func codexMark(data, meta []byte, session string) Watermark {
+	return Watermark{Size: int64(len(data)), PrefixSHA256: Hash(data), SessionID: session, MetadataSHA256: Hash(bytes.TrimSuffix(meta, []byte("\n")))}
 }
 
 func writeEvidence(t *testing.T, path string, data []byte) {
@@ -95,60 +124,30 @@ func writeEvidence(t *testing.T, path string, data []byte) {
 	}
 }
 
-func TestConfirmRequiresNewExactLaunchRecord(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name string
-		edit func(map[string]any)
-	}{
-		{"other session", func(r map[string]any) { r["sessionId"] = uuid.NewString() }},
-		{"other cwd", func(r map[string]any) { r["cwd"] = "/other" }},
-		{"other version", func(r map[string]any) { r["version"] = "2.1.281" }},
-		{"sidechain", func(r map[string]any) { r["isSidechain"] = true }},
-		{"invalid uuid", func(r map[string]any) { r["uuid"] = "invalid" }},
-		{"event mirror", func(r map[string]any) { r["type"] = "event_msg" }},
-		{"different payload", func(r map[string]any) { r["message"] = map[string]any{"role": "user", "content": "hello"} }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s, a := evidenceSession(t)
-			writeEvidence(t, s.manifest.Transcript, claudeRecord(t, s, a.Payload, tc.edit))
-			proof, err := s.Confirm(a)
-			if err != nil || proof != nil {
-				t.Fatalf("unrelated evidence confirmed: %+v, %v", proof, err)
-			}
-		})
-	}
-}
-
 func TestConfirmWatermarkBoundaries(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"historic only", "new exact", "unfinished historic", "partial new", "two exact records", "truncated", "prefix rewritten", "wrong bound session", "no Enter"} {
 		t.Run(mode, func(t *testing.T) {
 			s, a := evidenceSession(t)
-			old := claudeRecord(t, s, a.Payload, nil)
+			path, meta, record := codexRollout(t, s, a, "old-turn")
+			full := append(append([]byte(nil), meta...), record...)
+			old := full
 			if mode == "unfinished historic" {
-				old = old[:len(old)/2]
+				old = full[:len(meta)+len(record)/2]
 			}
-			writeEvidence(t, s.manifest.Transcript, old)
-			var err error
-			a.Watermark, err = s.Watermark(a.Identity)
-			if err != nil {
-				t.Fatal(err)
-			}
+			a.Watermark = map[string]Watermark{path: codexMark(old, meta, a.NativeSessionID)}
 			data := append([]byte(nil), old...)
+			next := codexRecord(t, "new-turn", a.Payload)
 			switch mode {
 			case "new exact", "wrong bound session", "no Enter":
-				data = append(data, claudeRecord(t, s, a.Payload, nil)...)
+				data = append(data, next...)
 			case "unfinished historic":
-				data = claudeRecord(t, s, a.Payload, nil)
 				// Complete the same record that was already partial at snapshot.
-				data = append(append([]byte(nil), old...), data[len(old):]...)
+				data = full
 			case "partial new":
-				newRecord := claudeRecord(t, s, a.Payload, nil)
-				data = append(data, newRecord[:len(newRecord)-1]...)
+				data = append(data, next[:len(next)-1]...)
 			case "two exact records":
-				data = append(data, claudeRecord(t, s, a.Payload, nil)...)
-				data = append(data, claudeRecord(t, s, a.Payload, nil)...)
+				data = append(append(data, next...), codexRecord(t, "other-turn", a.Payload)...)
 			case "truncated":
 				data = data[:len(data)-1]
 			case "prefix rewritten":
@@ -160,13 +159,13 @@ func TestConfirmWatermarkBoundaries(t *testing.T) {
 			if mode == "no Enter" {
 				a.EnterAttempted = false
 			}
-			writeEvidence(t, s.manifest.Transcript, data)
+			writeEvidence(t, path, data)
 			proof, err := s.Confirm(a)
 			wantErr := mode == "two exact records" || mode == "truncated" || mode == "prefix rewritten"
 			if (err != nil) != wantErr || (proof != nil) != (mode == "new exact") {
 				t.Fatalf("proof=%+v err=%v; mode=%s", proof, err, mode)
 			}
-			if proof != nil && (proof.Offset != int64(len(old)) || proof.RawSHA256 != Hash(proof.Raw) || proof.RecordID == "" || proof.SessionID != s.manifest.SessionID) {
+			if proof != nil && (proof.Path != path || proof.Offset != int64(len(old)) || proof.RawSHA256 != Hash(proof.Raw) || proof.RecordID != "new-turn" || proof.SessionID != a.NativeSessionID) {
 				t.Fatalf("proof lost record provenance: %+v", proof)
 			}
 		})
@@ -210,7 +209,6 @@ func TestCodexRecordRequiresUserTextMetadata(t *testing.T) {
 	for _, mode := range []string{"exact segments", "event mirror", "assistant", "no user metadata", "image", "extra text", "malformed"} {
 		t.Run(mode, func(t *testing.T) {
 			s, a := evidenceSession(t)
-			a.Identity.Agent = "codex"
 			payload := map[string]any{"type": "message", "role": "user", "id": "turn-1", "content": []map[string]string{{"type": "input_text", "text": "hello\n"}, {"type": "input_text", "text": "🌍"}}, "internal_chat_message_metadata_passthrough": map[string]any{"content_item_kinds": []string{"user.text"}}}
 			r := map[string]any{"type": "response_item", "payload": payload}
 			switch mode {

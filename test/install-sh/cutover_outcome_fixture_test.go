@@ -39,18 +39,26 @@ type cutoverFixture struct {
 }
 
 func newCutoverFixture(t *testing.T, h *moveHome) *cutoverFixture {
+	return newOutcomeFixture(t, h, "migrate-journal")
+}
+
+// newOutcomeFixture also routes publication outcomes through the same
+// supervisor and causal FIFO machinery; no second outcome runner is needed.
+func newOutcomeFixture(t *testing.T, h *moveHome, verb string) *cutoverFixture {
 	t.Helper()
-	outcomeChild.once.Do(func() {
-		outcomeChild.path = filepath.Join(h.S.Root, "admin-child.test")
-		cmd := exec.Command("go", "test", "-c", "-o", outcomeChild.path, "./cmd/agent-director-admin")
-		cmd.Dir = filepath.Join("..", "..")
-		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			outcomeChild.err = fmt.Errorf("build administrator child: %v: %s", err, out)
+	if verb == "migrate-journal" {
+		outcomeChild.once.Do(func() {
+			outcomeChild.path = filepath.Join(h.S.Root, "admin-child.test")
+			cmd := exec.Command("go", "test", "-c", "-o", outcomeChild.path, "./cmd/agent-director-admin")
+			cmd.Dir = filepath.Join("..", "..")
+			cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				outcomeChild.err = fmt.Errorf("build administrator child: %v: %s", err, out)
+			}
+		})
+		if outcomeChild.err != nil {
+			t.Fatal(outcomeChild.err)
 		}
-	})
-	if outcomeChild.err != nil {
-		t.Fatal(outcomeChild.err)
 	}
 	f := &cutoverFixture{h: h}
 	for name, p := range map[string]*string{"control": &f.Control, "after": &f.After, "output": &f.Output,
@@ -59,6 +67,14 @@ func newCutoverFixture(t *testing.T, h *moveHome) *cutoverFixture {
 	}
 	h.Write(f.Output, "", 0o600) // before-start outcomes have no attempt to relay
 	router := filepath.Join(h.Root, "cutover-router")
+	redirect := " >" + moveQuote(f.Output) + " 2>&1"
+	relay := "cat " + moveQuote(f.Output)
+	if verb != "migrate-journal" {
+		// Publication distinguishes successful stdout from an exact stderr
+		// refusal envelope. Preserve both streams through the shared runner.
+		redirect = " >" + moveQuote(f.Output) + " 2>" + moveQuote(f.Output+".stderr")
+		relay += "\ncat " + moveQuote(f.Output+".stderr") + " >&2"
+	}
 	// The control's first line is real, child:<seams>, canned, block, or signal.
 	// block takes its eventual mode from line two. An absent control delegates
 	// to the real administrator, including when advice is followed literally.
@@ -67,7 +83,7 @@ printf '%s\n' "$*" >>`+moveQuote(f.Calls)+`
 attempt=0
 for a; do
     case "$a" in
-        migrate-journal) attempt=1 ;;
+        `+verb+`) attempt=1 ;;
         --check-only|--help) attempt=0; break ;;
     esac
 done
@@ -104,11 +120,11 @@ case "$mode" in
         exit 96 ;;
     *) echo "unknown outcome mode: $mode" >&2; exit 98 ;;
 esac
-) >`+moveQuote(f.Output)+` 2>&1
+)`+redirect+`
 rc=$?
 printf '%s\n' "$rc" >`+moveQuote(f.Finished)+`
 if [[ -f `+moveQuote(f.After)+` ]]; then bash `+moveQuote(f.After)+`; fi
-cat `+moveQuote(f.Output)+`
+`+relay+`
 exit "$rc"
 `, 0o755)
 	h.Pair = movePair{h.S.Current.Main, h.S.ScheduleProbe.Main}

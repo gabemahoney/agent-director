@@ -97,8 +97,7 @@ func ssgResumed(t *testing.T, id string) (*store.Store, string) {
 	t.Helper()
 	st, dbPath := ssgSeed(t, id, store.StateEnded, ssgKept,
 		apitest.WithJsonlPath("/x/"+ssgKept+".jsonl"), apitest.WithLaunchIdentity(ssgOldPane))
-	res, moved, err := st.MoveToPending(id, mustGetSpawn(t, st, id).Snapshot, time.Now().UnixMilli(),
-		ssgNewPane.Token, ssgNewPane.Socket, "", store.LaunchOwner{})
+	res, moved, err := st.MoveToPendingWithExit(id, mustGetSpawn(t, st, id).Snapshot, time.Now().UnixMilli(), ssgNewPane.Token, ssgNewPane.Socket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, st, id))
 	if err != nil || res != store.CondApplied {
 		t.Fatalf("MoveToPending(%q) = %v, %v; want applied", id, res, err)
 	}
@@ -196,7 +195,9 @@ func ssgHistory(t *testing.T, dbPath, id string) []ssgArchived {
 // every source and row state, a pending row find-missing noted unreported
 // included (b.kdf), moves it to waiting, records the new session, archives the
 // old pair, records the parent as pid/proc_starttime and clears any liveness
-// note (SR-22.9, AC-HOOK-02).
+// note (SR-22.9, AC-HOOK-02). The resumed row's covered Claude Launch,
+// whose resume recorded its route, also names its wake endpoint to watch
+// (SR-3.4); the seeded rows record none, so they write nothing.
 func TestSessionStartGateApplied(t *testing.T) {
 	outgoing := []ssgArchived{{ssgOutgoing, "/x/" + ssgOutgoing + ".jsonl", 2}}
 	cases := []struct {
@@ -226,8 +227,16 @@ func TestSessionStartGateApplied(t *testing.T) {
 			prior := mustGetSpawn(t, st, id)
 			before := len(readTrailLines(t, trailFile()))
 
-			if out := ssgHandle(t, st, id, agent, payload, nil); out != "" {
-				t.Errorf("stdout = %q; want empty", out)
+			want := ""
+			if tc.name == "resumed pending row, kept session id and new pane" {
+				wake, err := store.BusySendWakePath(st.StoreID(), prior.Identity.Token)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want = `{"hookSpecificOutput":{"hookEventName":"SessionStart","watchPaths":["` + wake + `"]}}` + "\n"
+			}
+			if out := ssgHandle(t, st, id, agent, payload, nil); out != want {
+				t.Errorf("stdout = %q; want %q", out, want)
 			}
 
 			row := mustGetSpawn(t, st, id)

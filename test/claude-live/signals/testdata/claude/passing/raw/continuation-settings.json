@@ -1,0 +1,1 @@
+{"hooks":{"Stop":[{"hooks":[{"args":["continue-stop","--evidence","/home/horde/ad-test/ci-signals-fixture","--run-id","00000000-0000-4000-8000-000000000021","--variant","held-steer-v1"],"command":"/home/horde/ad-test/ci-kit-fixture/kit/bin/claude-live","timeout":3,"type":"command"}]}]}}

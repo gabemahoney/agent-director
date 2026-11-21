@@ -9,7 +9,11 @@ package store_test
 // hook_gate_session_start_test.go.
 
 import (
+	"context"
+	"errors"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -464,6 +468,168 @@ func TestHookGatePermissionRequestInsert(t *testing.T) {
 			}
 			if after := hgColumns(t, f, id); !reflect.DeepEqual(after, before) {
 				t.Errorf("the request INSERT changed the spawns row:\n before %+v\n after  %+v", before, after)
+			}
+		})
+	}
+}
+
+// hgRawRow reads every column of id's spawns row by name, as stored.
+func hgRawRow(t *testing.T, f *v5Store, id string) map[string]any {
+	t.Helper()
+	rows, err := openBusySendRaw(t, f.path).Query(`SELECT * FROM spawns WHERE instance_id = ?`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rows.Next() {
+		t.Fatalf("no spawns row %s: %v", id, rows.Err())
+	}
+	vals, ptrs := make([]any, len(cols)), make([]any, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	if err := rows.Scan(ptrs...); err != nil {
+		t.Fatal(err)
+	}
+	out := make(map[string]any, len(cols))
+	for i, c := range cols {
+		out[c] = vals[i]
+	}
+	return out
+}
+
+// TestHookGateClaudeTurnStart (b.7si t1.7si.nc SR-1.4; Task t2.xis.oo.u8): an
+// owned main-agent Claude UserPromptSubmit (gate.ClaudeTurnStart) advances
+// turn_starts by one in the statement of its applied working write, or of its
+// held write under an open permission request, which changes nothing else but
+// idle_since (cleared) and the version, even when idle_since was already NULL.
+// A Codex row, another session's row, a hook the handler did not mark (a
+// subagent's) or one whose gate does not hold counts nothing, and a held write
+// that counts nothing writes nothing. A transaction failing at COMMIT after
+// its counting statement leaves the row as it was. A request recorded between
+// the hold's read and the working write (b.36h) holds the row at
+// check_permission, and the turn is counted once, by the held write.
+func TestHookGateClaudeTurnStart(t *testing.T) {
+	f := newV5Store(t)
+	injected := errors.New("injected COMMIT failure")
+	var fail, counted atomic.Bool
+	store.ObserveDecisionBoundaryForTest(t, f.s, f.path, func(_ context.Context, q string) error {
+		if fail.Load() && strings.Contains(q, "turn_starts = turn_starts +") {
+			counted.Store(true)
+		}
+		if q == "COMMIT" && counted.CompareAndSwap(true, false) {
+			fail.Store(false)
+			return injected
+		}
+		return nil
+	}, nil)
+	const waiting, working, held = store.StateWaiting, store.StateWorking, store.StateCheckPermission
+	applied := store.HookApplied{Applied: true}
+	own := hgRow{state: waiting, session: hgHookSession}
+	holding := hgRow{state: held, session: hgHookSession}
+	for _, tc := range []struct {
+		name    string
+		row     hgRow
+		request bool // an open permission request holds the row before the hook
+		race    bool // the request is recorded after the hold's read, before the working write
+		foreign bool // the hook's parent is not the row's pane process
+		noFlag  bool // a UserPromptSubmit the handler does not mark
+		fail    bool // the hook's transaction fails at COMMIT
+		state   string
+		turns   int64
+		want    store.HookApplied
+	}{
+		{name: "working write", row: own, state: working, turns: 1, want: applied},
+		{name: "row with no session yet", row: hgRow{state: waiting}, state: working, turns: 1, want: applied},
+		{name: "another session's row", row: hgRow{state: waiting, session: "sess-row"}, state: working, want: applied},
+		{name: "Codex row", row: hgRow{state: waiting, session: hgHookSession,
+			opts: []apitest.SpawnOption{apitest.WithAgent(store.AgentCodex)}}, state: working, want: applied},
+		{name: "not marked", row: own, noFlag: true, state: working, want: applied},
+		{name: "other process", row: own, foreign: true, want: store.HookApplied{Reason: store.HookReasonPIDMismatch}},
+		{name: "working write fails", row: own, fail: true},
+		{name: "held", row: holding, request: true, state: held, turns: 1, want: applied},
+		{name: "held, idle_since set", row: hgRow{state: held, session: hgHookSession,
+			opts: []apitest.SpawnOption{apitest.WithIdleSince("2026-10-01 00:00:00")}}, request: true, state: held, turns: 1, want: applied},
+		{name: "held, another session's row", row: hgRow{state: held, session: "sess-row"}, request: true, want: applied},
+		{name: "held write fails", row: holding, request: true, fail: true},
+		{name: "request recorded after the hold's read", row: own, race: true, state: held, turns: 1, want: applied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := hgSeed(t, f, tc.row)
+			if tc.request {
+				if _, err := apitest.SeedPermissionRequest(f.path, id, "Bash"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			parent := hgAgentParent(t, f, id)
+			gate := hgGate("UserPromptSubmit", parent, hgHookSession)
+			if tc.foreign {
+				gate = hgGate("UserPromptSubmit", hgParent{storefix.ForeignHookParentPID(parent.pid), parent.start}, hgHookSession)
+			}
+			gate.ClaudeTurnStart = !tc.noFlag
+			before, mark := hgRawRow(t, f, id), store.TrailMark(t)
+			raced := false
+			if tc.race {
+				t.Cleanup(func() { store.SetHookBeforeUpdateForTest(f.s, nil) })
+				store.SetHookBeforeUpdateForTest(f.s, func() {
+					store.SetHookBeforeUpdateForTest(f.s, nil) // the PermissionRequest below must not re-enter
+					raced = true
+					if _, err := apitest.SeedPermissionRequest(f.path, id, "Bash"); err != nil {
+						t.Fatal(err)
+					}
+					if got, err := f.s.ApplyHookTransition(id, hgGate("PermissionRequest", parent, hgHookSession), held, false,
+						"PermissionRequest", hgHookPath, true); err != nil || !got.Applied {
+						t.Fatalf("PermissionRequest = %+v, %v; want applied", got, err)
+					}
+					before, mark = hgRawRow(t, f, id), store.TrailMark(t)
+				})
+			}
+			fail.Store(tc.fail)
+			out, got, err := f.s.ApplyHookTransitionResult(id, gate, working, false, "UserPromptSubmit", hgHookPath, true)
+			fail.Store(false)
+			after, lines := hgRawRow(t, f, id), store.TrailEventsSince(t, mark, "ad.spawn.state_transition", id)
+			if tc.race && !raced {
+				t.Fatal("the seam never ran between the hold's read and the working write; the test proves nothing")
+			}
+			if tc.fail {
+				if !errors.Is(err, injected) || out != store.UpsertError || !reflect.DeepEqual(after, before) || len(lines) != 0 {
+					t.Fatalf("failed write = %q, %v, %d lines, row changed %t; want the injected error, the row as it was, no line",
+						out, err, len(lines), !reflect.DeepEqual(after, before))
+				}
+				return
+			}
+			wantOut := store.UpsertNoChange
+			if tc.state == working {
+				wantOut = store.UpsertUpdated
+			}
+			if err != nil || out != wantOut || got != tc.want {
+				t.Fatalf("UserPromptSubmit = %q, %+v, %v; want %q, %+v", out, got, err, wantOut, tc.want)
+			}
+			if n := boolCount(tc.want.Applied); len(lines) != n {
+				t.Errorf("%d state transition lines; want %d", len(lines), n)
+			}
+			want := before
+			switch tc.state {
+			case working:
+				if after["state"] != working || after["turn_starts"] != before["turn_starts"].(int64)+tc.turns ||
+					after["row_version"] != before["row_version"].(int64)+1 {
+					t.Errorf("state, turn_starts, row_version = %v, %v, %v; want working, %d, %d (one statement)", after["state"],
+						after["turn_starts"], after["row_version"], before["turn_starts"].(int64)+tc.turns, before["row_version"].(int64)+1)
+				}
+				return
+			case held:
+				want = make(map[string]any, len(before))
+				for k, v := range before {
+					want[k] = v
+				}
+				want["turn_starts"], want["row_version"], want["idle_since"] = before["turn_starts"].(int64)+tc.turns, before["row_version"].(int64)+1, nil
+			}
+			if !reflect.DeepEqual(after, want) {
+				t.Errorf("row after the hook:\n got  %v\n want %v", after, want)
 			}
 		})
 	}

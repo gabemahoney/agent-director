@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -43,8 +44,9 @@ func rsShow(v any) string {
 // or pid included, and the end report the move cleared) except the move's
 // parent, no launch start and version + 1; subagent_tracking returns to the
 // prior's value, which the move had set by the row's agent (a claude row's 0 to
-// 1, a codex row's 1 to 0), and no entry or claimable launch changes from what
-// the move left.
+// 1, a codex row's 1 to 0), as does the earlier Launch's Turn Start counter,
+// which the move had reset to 0, and no entry or claimable launch changes from
+// what the move left.
 func TestRestoreAfterFailedResumeApplied(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -92,8 +94,10 @@ func testRestoreAfterFailedResumeApplied(t *testing.T, spec moveSpec, deletePare
 	if reflect.DeepEqual(moved, mix.rows) || !reflect.DeepEqual(moved, cmClosed(mix.rows, moveLaunchMillis)) {
 		t.Fatalf("the move left the entries and launches %+v from %+v; want the close mix closed at the launch start, or the restore check is vacuous", moved, mix.rows)
 	}
-	if after := f.rawColumns(r.id); r.before.EndReportedAt != moveEndReported || after.EndReportedAt != nil {
-		t.Fatalf("end_reported_at %v -> %v after the move; want %d -> NULL, or the restore check is vacuous", r.before.EndReportedAt, after.EndReportedAt, moveEndReported)
+	if after := f.rawColumns(r.id); r.before.EndReportedAt != moveEndReported || after.EndReportedAt != nil ||
+		r.before.TurnStarts != moveTurnStarts || after.TurnStarts != int64(0) {
+		t.Fatalf("end_reported_at, turn_starts %v, %v -> %v, %v after the move; want %d, %d -> NULL, 0, or the restore check is vacuous",
+			r.before.EndReportedAt, r.before.TurnStarts, after.EndReportedAt, after.TurnStarts, moveEndReported, moveTurnStarts)
 	}
 	want := r.before
 	want.ParentID, want.LaunchStartedAt, want.RowVersion = parent, nil, v+1
@@ -101,7 +105,7 @@ func testRestoreAfterFailedResumeApplied(t *testing.T, spec moveSpec, deletePare
 		want.SubagentTracking = int64(1)
 	}
 	if deleteParent {
-		if err := f.s.DeleteSpawn(parent); err != nil {
+		if err := storefix.DeleteWithExit(t, f.s, parent); err != nil {
 			t.Fatalf("DeleteSpawn(parent): %v", err)
 		}
 		want.ParentID = nil
@@ -109,7 +113,7 @@ func testRestoreAfterFailedResumeApplied(t *testing.T, spec moveSpec, deletePare
 	e := r.examined
 	prior := store.ResumePrior{State: e.State, EndedAtText: e.EndedAtText, PID: e.PID, ProcStarttime: e.ProcStarttime,
 		LivenessUnverifiedSince: e.LivenessUnverifiedSince, LivenessNote: e.LivenessNote, EndReportedAtMillis: e.EndReportedAtMillis,
-		SubagentTracking: e.SubagentTracking || priorTracked, Identity: e.Identity}
+		SubagentTracking: e.SubagentTracking || priorTracked, Identity: e.Identity, TurnStarts: e.TurnStarts}
 	if res, err := f.s.RestoreAfterFailedResume(r.id, v, prior); err != nil || res != store.CondApplied {
 		t.Fatalf("RestoreAfterFailedResume = %v, %v; want CondApplied", res, err)
 	}

@@ -42,45 +42,33 @@ func assertSubmissionUnconfirmed(t *testing.T, err error, state string) {
 }
 
 // assertPendingInput checks the exact input writes (assertInputWrites) and
-// the terminal reads: pending Claude's wait makes two (b.qcf), Codex none.
-// Claude's cells also keep b.qcf's exact merged call order (b.x9o, t2.7tz.5c.8d).
-func assertPendingInput(t *testing.T, e *submissionEnv, r killRow, agent, text string) {
+// that no terminal read was made: only pending Claude's wait read it (b.qcf),
+// and busy send covers Claude, whose send-keys types nothing.
+func assertPendingInput(t *testing.T, e *submissionEnv, r killRow, text string) {
 	t.Helper()
 	assertInputWrites(t, e.killEnv, r, text)
-	if agent == "claude" {
-		e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, text, 2)
-	}
-	if got, want := len(e.rec.SocketCallsOf(tmux.CallPaneTerminal)), map[string]int{"codex": 0, "claude": 2}[agent]; got != want {
-		t.Errorf("terminal reads = %d; want %d", got, want)
+	if got := len(e.rec.SocketCallsOf(tmux.CallPaneTerminal)); got != 0 {
+		t.Errorf("terminal reads = %d; want none", got)
 	}
 }
 
 func TestSendKeysPendingSubmissionUnconfirmed(t *testing.T) {
 	t.Parallel()
-	// b.qcf: Claude fallback shares Codex's bounded hook check.
-	for _, agent := range []string{"codex", "claude"} {
+	// Codex's: busy send covers Claude, whose send-keys types nothing.
+	for _, agent := range []string{"codex"} {
 		for _, state := range []string{store.StatePending, store.StateWaiting} {
 			for _, text := range []string{skpText, ""} {
-				if agent == "claude" && text == "" {
-					continue // Enter-only does not get Claude's new hook check.
-				}
 				t.Run(agent+"/"+state+"/text="+text, func(t *testing.T) {
 					t.Parallel()
 					e := newSubmissionEnv(t)
 					r := e.seedRow(t, killRowSpec{State: store.StatePending, Opts: agentRowOpts(agent)})
 					before := e.columns(t, r.ID)
-					if agent == "claude" {
-						e.sessionStartsWhenPolled(t, r, func() { before = e.columns(t, r.ID) })
-					}
 					e.s.read = func(_ int, row api.Spawn) (api.Spawn, error) { row.State = state; return row, nil }
 
 					err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: text, AllowPending: true})
 
 					assertSubmissionUnconfirmed(t, err, state)
 					name := "Codex"
-					if agent == "claude" {
-						name = "Claude Code"
-					}
 					wantMessage := fmt.Sprintf("ErrSubmissionUnconfirmed: send-keys: %s: tmux accepted the keys and Enter, but %s submission could not be confirmed (no turn activity was observed within 2 seconds); do not repeat the text or send another Enter automatically; check hook-derived get or status; if submission remains unknown, escalate to the caller or a human", r.ID, name)
 					if err.Error() != wantMessage {
 						t.Errorf("message = %q; want %q", err, wantMessage)
@@ -91,7 +79,7 @@ func TestSendKeysPendingSubmissionUnconfirmed(t *testing.T) {
 					if e.s.reads != 20 {
 						t.Errorf("submission reads = %d; want 20 before the deadline", e.s.reads)
 					}
-					assertPendingInput(t, e, r, agent, text)
+					assertPendingInput(t, e, r, text)
 					if text == "" {
 						e.assertNoCalls(t, tmux.CallSendText)
 						if len(e.rec.SocketCallsOf(tmux.CallSendKey))+len(e.rec.SocketCallsOf(tmux.CallSendEnter)) != 1 {
@@ -108,8 +96,8 @@ func TestSendKeysPendingSubmissionUnconfirmed(t *testing.T) {
 
 func TestSendKeysPendingSubmissionActivity(t *testing.T) {
 	t.Parallel()
-	// b.qcf: Claude fallback shares Codex's bounded hook check.
-	for _, agent := range []string{"codex", "claude"} {
+	// Codex's: busy send covers Claude, whose send-keys types nothing.
+	for _, agent := range []string{"codex"} {
 		for _, state := range []string{store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
 			for _, delay := range []int{0, 2} {
 				t.Run(fmt.Sprintf("%s/%s/after %d waits", agent, state, delay), func(t *testing.T) {
@@ -129,7 +117,7 @@ func TestSendKeysPendingSubmissionActivity(t *testing.T) {
 					if e.waits != delay {
 						t.Errorf("waits = %d; want %d", e.waits, delay)
 					}
-					assertPendingInput(t, e, r, agent, skpText)
+					assertPendingInput(t, e, r, skpText)
 					e.assertNoCalls(t, tmux.CallCapture)
 				})
 			}
@@ -259,9 +247,10 @@ func TestSendKeysPendingSubmissionActivityReadDeadline(t *testing.T) {
 		{"at deadline", 2 * time.Second, false},
 		{"after deadline", 2*time.Second + time.Nanosecond, false},
 	}
-	// b.qcf: late Claude hook evidence cannot turn uncertainty into success.
+	// Late hook evidence cannot turn uncertainty into success. Codex's: busy
+	// send covers Claude, whose send-keys types nothing.
 	// State membership is covered by TestSendKeysPendingSubmissionActivity.
-	for _, agent := range []string{"codex", "claude"} {
+	for _, agent := range []string{"codex"} {
 		for _, tc := range cases {
 			t.Run(agent+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
@@ -285,7 +274,7 @@ func TestSendKeysPendingSubmissionActivityReadDeadline(t *testing.T) {
 				if e.s.reads != 1 || e.waits != 0 {
 					t.Errorf("submission reads/waits = %d/%d; want 1/0", e.s.reads, e.waits)
 				}
-				assertPendingInput(t, e, r, agent, skpText)
+				assertPendingInput(t, e, r, skpText)
 			})
 		}
 	}
@@ -360,29 +349,23 @@ func TestSendKeysCodexSubmissionConnectionContention(t *testing.T) {
 func TestSendKeysSubmissionApplicability(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name     string
-		spec     killRowSpec
-		params   api.SendKeysParams
-		paste    bool
-		hook     bool
-		terminal bool
+		name   string
+		spec   killRowSpec
+		params api.SendKeysParams
+		paste  bool
+		hook   bool
 	}{
-		// b.qcf: only ordinary pending Claude fallback gains a terminal read and hook check.
-		{"pending Claude", killRowSpec{State: store.StatePending}, api.SendKeysParams{Text: skpText}, false, true, true},
-		{"waiting Claude", killRowSpec{}, api.SendKeysParams{Text: skpText}, false, false, false},
-		{"pending Claude Enter-only", killRowSpec{State: store.StatePending}, api.SendKeysParams{}, false, false, false},
-		{"pending Claude no_enter", killRowSpec{State: store.StatePending}, api.SendKeysParams{Text: skpText, NoEnter: true}, false, false, false},
-		{"pending Claude key", killRowSpec{State: store.StatePending}, api.SendKeysParams{Key: "Enter"}, false, false, false},
-		{"pending Claude hash", killRowSpec{State: store.StatePending}, api.SendKeysParams{Text: skpText, ExpectPaneSHA256: api.PaneSHA256("")}, false, false, false},
-		{"pending Codex", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Text: skpText}, true, true, false},
-		{"pending Cursor", killRowSpec{State: store.StatePending, Opts: agentRowOpts("cursor")}, api.SendKeysParams{Text: skpText}, false, false, false},
-		{"waiting Codex", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{Text: skpText}, true, false, false},
-		{"working Codex", codexSpec(store.StateWorking, agentAlive, false), api.SendKeysParams{Text: skpText}, true, false, false},
-		{"pending Codex no_enter", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Text: "manual $", NoEnter: true}, false, false, false},
-		{"pending Codex named key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "Enter"}, false, false, false},
-		{"pending Codex character key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "x"}, false, false, false},
-		{"waiting Codex empty", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{}, false, false, false},
-		{"waiting Codex hash", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{Text: "manual $", ExpectPaneSHA256: fmt.Sprintf("%x", sha256.Sum256(nil))}, false, false, false},
+		// Only ordinary pending Codex text gains the hook check; no row reads the
+		// terminal (pending Claude's wait did, b.qcf; busy send covers Claude).
+		{"pending Codex", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Text: skpText}, true, true},
+		{"pending Cursor", killRowSpec{State: store.StatePending, Opts: agentRowOpts("cursor")}, api.SendKeysParams{Text: skpText}, false, false},
+		{"waiting Codex", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{Text: skpText}, true, false},
+		{"working Codex", codexSpec(store.StateWorking, agentAlive, false), api.SendKeysParams{Text: skpText}, true, false},
+		{"pending Codex no_enter", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Text: "manual $", NoEnter: true}, false, false},
+		{"pending Codex named key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "Enter"}, false, false},
+		{"pending Codex character key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "x"}, false, false},
+		{"waiting Codex empty", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{}, false, false},
+		{"waiting Codex hash", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{Text: "manual $", ExpectPaneSHA256: fmt.Sprintf("%x", sha256.Sum256(nil))}, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -393,11 +376,7 @@ func TestSendKeysSubmissionApplicability(t *testing.T) {
 			p.InstanceID, p.AllowPending = r.ID, true
 			err := e.send(p)
 			if tc.hook {
-				wantState := store.StatePending
-				if tc.terminal {
-					wantState = store.StateWaiting
-				} // b.qcf: SessionStart precedes input.
-				assertSubmissionUnconfirmed(t, err, wantState)
+				assertSubmissionUnconfirmed(t, err, store.StatePending)
 				if e.s.reads != 20 || e.slept != 2*time.Second {
 					t.Errorf("hook reads/sleep=%d/%v; want 20/2s", e.s.reads, e.slept)
 				}
@@ -409,8 +388,8 @@ func TestSendKeysSubmissionApplicability(t *testing.T) {
 					t.Errorf("submission reads/waits = %d/%d; want none", e.s.reads, e.waits)
 				}
 			}
-			if reads := len(e.rec.SocketCallsOf(tmux.CallPaneTerminal)); reads != map[bool]int{false: 0, true: 2}[tc.terminal] {
-				t.Errorf("terminal reads=%d; want selected=%v", reads, tc.terminal)
+			if reads := len(e.rec.SocketCallsOf(tmux.CallPaneTerminal)); reads != 0 {
+				t.Errorf("terminal reads=%d; want none", reads)
 			}
 			pastes := 0
 			for _, call := range e.rec.SocketCallsOf(tmux.CallSendText) {
@@ -466,6 +445,9 @@ func (t untypedSubmissionTmux) SendKeyPane(socket, pane, key string) error {
 
 // E3, t2.7tz.tb.ib round 2: "send-keys with empty text submits it" after a
 // separate Enter failure must retain progress and never repeat successful text.
+// On a Codex row's journal-backed manual send (text with expect_pane_sha256:
+// a text call, then the Enter key): busy send covers Claude, whose send-keys
+// types nothing, and Codex's ordinary paste has its own failure contract.
 func TestAdviceFollow_E3_SeparateEnterFailurePreservesProgress(t *testing.T) {
 	t.Parallel()
 	adviceAssertManifest(t, "send-keys", "", advSendKeysEmptyTextManifest)
@@ -483,7 +465,7 @@ func TestAdviceFollow_E3_SeparateEnterFailurePreservesProgress(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newSubmissionEnv(t)
-			r := e.seedRow(t, killRowSpec{})
+			r := e.seedRow(t, codexSpec(store.StateWaiting, agentAlive, false))
 			ktrRestart(t, e.killEnv, &r) // Make the delivery consequence observable in the trail.
 			before := e.columns(t, r.ID)
 			in := watchPaneInput(e.killEnv, r.Spawn.Identity.PaneID, tc.reached)
@@ -502,7 +484,8 @@ func TestAdviceFollow_E3_SeparateEnterFailurePreservesProgress(t *testing.T) {
 				transport = untypedSubmissionTmux{e.rec}
 			}
 			const text = "first\n界"
-			_, err := api.SendKeys(e.s, transport, e.env, api.SendKeysParams{InstanceID: r.ID, Text: "first\r\n界"})
+			_, err := api.SendKeys(e.s, transport, e.env, api.SendKeysParams{InstanceID: r.ID, Text: "first\r\n界",
+				ExpectPaneSHA256: api.PaneSHA256("")})
 			assertOneName(t, err, "ErrTmuxUnresponsive")
 			adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, tc.advice)
 			want := api.SubmissionUnconfirmedDetails{
@@ -513,7 +496,10 @@ func TestAdviceFollow_E3_SeparateEnterFailurePreservesProgress(t *testing.T) {
 			if got := api.ErrDetails(err); got != want {
 				t.Fatalf("details=%+v; want %+v", got, want)
 			}
-			assertInputWrites(t, e.killEnv, r, text)
+			assertTextSent(t, e.rec, r.Socket, r.Spawn.Identity.PaneID, text)
+			if enters := ordinaryEnters(e.killEnv); len(enters) != 1 || enters[0].Target != r.Spawn.Identity.PaneID {
+				t.Fatalf("Enter calls=%+v; want the one that failed, to the owned pane", enters)
+			}
 			assertKeysDisagrees(t, e.killEnv, pendTrail(t, "ad.provenance.disagree", r.ID), r, "send-keys", apitest.OtherStoreID(e.storeID),
 				[]disagreeWant{{reason: "server_restarted", server: "restarted", verdict: "ours", action: "text_sent", ours: true}})
 			followups := 1
@@ -547,13 +533,15 @@ func TestAdviceFollow_E3_SeparateEnterFailurePreservesProgress(t *testing.T) {
 
 // t2.7tz.tb.ib round 2: a real admission failure after text cannot report
 // pre_input/zero bytes or permit the following Enter under stale authority.
+// On a Codex row's journal-backed manual send (text with expect_pane_sha256),
+// as TestAdviceFollow_E3_SeparateEnterFailurePreservesProgress.
 func TestSendKeysPostTextAdmissionRetainsProgress(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"cancelled caller", "changed row revision"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			e := newSubmissionEnv(t)
-			r := e.seedRow(t, killRowSpec{})
+			r := e.seedRow(t, codexSpec(store.StateWaiting, agentAlive, false))
 			ktrRestart(t, e.killEnv, &r)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -564,7 +552,7 @@ func TestSendKeysPostTextAdmissionRetainsProgress(t *testing.T) {
 				e.rowWriteAfter(t, tmux.CallSendText, r)
 			}
 			const text = "first\n界"
-			err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: "first\r\n界"})
+			err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: "first\r\n界", ExpectPaneSHA256: api.PaneSHA256("")})
 			assertOneName(t, err, "ErrSubmissionUnconfirmed")
 			want := api.SubmissionUnconfirmedDetails{
 				Outcome: "partial_input_unconfirmed", Phase: "text_attempted", BytesAttempted: len(text),
@@ -579,7 +567,7 @@ func TestSendKeysPostTextAdmissionRetainsProgress(t *testing.T) {
 			if len(calls) != 1 || calls[0].Text != text || calls[0].PressEnter || calls[0].Target != r.Spawn.Identity.PaneID || calls[0].Socket != r.Socket {
 				t.Fatalf("text writes=%+v; want the exact normalized bytes once to the owned pane", calls)
 			}
-			e.assertNoCalls(t, tmux.CallSendEnter, tmux.CallSendKey, tmux.CallCapture)
+			e.assertNoCalls(t, tmux.CallSendEnter, tmux.CallSendKey)
 			assertKeysDisagrees(t, e.killEnv, pendTrail(t, "ad.provenance.disagree", r.ID), r, "send-keys", apitest.OtherStoreID(e.storeID),
 				[]disagreeWant{{reason: "server_restarted", server: "restarted", verdict: "ours", action: "text_sent", ours: true}})
 			if e.s.reads != 0 || e.waits != 0 {

@@ -1,0 +1,864 @@
+{
+  "schema": 1,
+  "run_id": "00000000-0000-4000-8000-000000000021",
+  "phase": "probe",
+  "candidate": "2d667e3596f98c3d877c7d21bd6ea51f0a19a263/570be2967066fd4bdb85c07cd951f3a3f9feb6c1",
+  "kit_sha256": "510f57fceacb95f0c85e65c3fdd9ec406187c25b644d66f614d2662a1da26e57",
+  "platform": "linux/amd64",
+  "provider_version": "2.1.311 (Claude Code)",
+  "started": "2026-11-18T17:18:15.781960224Z",
+  "deadline": "2026-11-18T17:27:15.781960414Z",
+  "finished": "2026-11-18T17:20:42.308705106Z",
+  "turn_budget": 7,
+  "turns_reserved": 6,
+  "observed_turns": 6,
+  "expected_checks": [
+    "session-watch",
+    "file-changed",
+    "async-rewake",
+    "post-tool-batch",
+    "user-prompt-identity",
+    "plain-sighting",
+    "wake-wrapping",
+    "reserved-escaping",
+    "reserved-no-sighting",
+    "whole-next-input",
+    "turn-end-order",
+    "wake-steer-overlap",
+    "hook-completion-order",
+    "p-b",
+    "p-c",
+    "wake-stop-continuation"
+  ],
+  "probe_plan": {
+    "version": "wake-sighting-v1",
+    "primary_turns": 4,
+    "continuation_turns": 2,
+    "scheduled_turns": 6,
+    "aggregate_cap": 7
+  },
+  "owned": [
+    {
+      "instance_id": "live-00000000-0000-4000-8000-000000000021-signals",
+      "launch_id": "00000000-0000-4000-8000-000000000035",
+      "launch_token": "0000000000000001",
+      "session_id": "00000000-0000-4000-8000-000000000010",
+      "cwd": "/home/horde/ad-test/ci-signals-fixture/work",
+      "socket": "/home/horde/ad-test/claude-live-runtime-fixture/tmux.sock",
+      "transcript": "/home/horde/ad-test/home/.claude/projects/-home-horde-ad-test-ci-signals-fixture-work/00000000-0000-4000-8000-000000000010.jsonl",
+      "started": "2026-11-18T17:18:16.028761277Z",
+      "pid": 2599932,
+      "process_start": "223676973",
+      "observed_turns": 4,
+      "exited": true
+    },
+    {
+      "instance_id": "live-00000000-0000-4000-8000-000000000021-continuation",
+      "launch_id": "00000000-0000-4000-8000-000000000095",
+      "launch_token": "0000000000000002",
+      "session_id": "00000000-0000-4000-8000-000000000089",
+      "cwd": "/home/horde/ad-test/ci-signals-fixture/work-continuation",
+      "socket": "/home/horde/ad-test/claude-live-runtime-fixture/tmux.sock",
+      "transcript": "/home/horde/ad-test/home/.claude/projects/-home-horde-ad-test-ci-signals-fixture-work-continuation/00000000-0000-4000-8000-000000000089.jsonl",
+      "started": "2026-11-18T17:19:20.419530676Z",
+      "pid": 2603201,
+      "process_start": "223683411",
+      "observed_turns": 2,
+      "exited": true
+    }
+  ],
+  "cases": [
+    {
+      "id": "startup",
+      "text": "Probe WAKE-ORDER-V1: Run exactly one foreground Bash call with this program:\n```bash\nfor i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do sleep 1; done\n```\nThen finish this turn with text only: write 160 numbered lines, each saying 'This bounded probe is finishing with text and no further tools.' Write all lines literally without abbreviating or using a tool to generate them. Make no further tool calls in this turn.",
+      "mode": "",
+      "request_id": "",
+      "command": "raw/commands/0004.stdout",
+      "instance_id": "live-00000000-0000-4000-8000-000000000021-signals",
+      "started": "2026-11-18T17:18:16.028763127Z",
+      "ended": "2026-11-18T17:18:54.173Z",
+      "completed": true,
+      "ready": true,
+      "observed_until": "2026-11-18T17:19:17.853535072Z",
+      "progress": [
+        "request:18",
+        "end-turn:44"
+      ]
+    },
+    {
+      "id": "overlap-wake",
+      "text": "Probe WAKE-ORDER-V1: run exactly one foreground Bash call with this program:\n```bash\nfor i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do sleep 1; done\n```\nThen acknowledge WAKE-SEEN and finish. Do not background the call.",
+      "mode": "wait_turn",
+      "request_id": "overlap-wake",
+      "command": "raw/commands/0005.stdout",
+      "instance_id": "live-00000000-0000-4000-8000-000000000021-signals",
+      "started": "2026-11-18T17:18:38.875519912Z",
+      "ended": "2026-11-18T17:19:17.101Z",
+      "completed": true,
+      "ready": true,
+      "observed_until": "2026-11-18T17:19:17.853538272Z",
+      "progress": [
+        "request:48",
+        "end-turn:57"
+      ]
+    },
+    {
+      "id": "overlap-steer",
+      "text": "Probe STEER: acknowledge STEER-SEEN now, then continue the remaining foreground calls.",
+      "mode": "steer_turn",
+      "request_id": "overlap-steer",
+      "command": "raw/commands/0007.stdout",
+      "instance_id": "live-00000000-0000-4000-8000-000000000021-signals",
+      "started": "2026-11-18T17:18:39.703420985Z",
+      "ended": "2026-11-18T17:19:17.101Z",
+      "completed": true,
+      "ready": true,
+      "observed_until": "2026-11-18T17:19:17.853542152Z",
+      "progress": [
+        "request:54",
+        "tool-result:52",
+        "end-turn:57"
+      ]
+    },
+    {
+      "id": "steer-turn-end",
+      "text": "Probe STEER: acknowledge STEER-SEEN now, then continue the remaining foreground calls.",
+      "mode": "steer_turn",
+      "request_id": "overlap-steer",
+      "command": "raw/commands/0007.stdout",
+      "instance_id": "live-00000000-0000-4000-8000-000000000021-signals",
+      "started": "2026-11-18T17:18:39.703420985Z",
+      "ended": "2026-11-18T17:19:17.101Z",
+      "completed": true,
+      "ready": true,
+      "observed_until": "2026-11-18T17:19:17.853549702Z",
+      "progress": [
+        "request:54",
+        "tool-result:52",
+        "end-turn:57"
+      ]
+    },
+    {
+      "id": "idle-wake",
+      "text": "Probe PLAIN: reply exactly PLAIN-SEEN. Unicode: café 日本語.",
+      "mode": "wait_turn",
+      "request_id": "idle-wake",
+      "command": "raw/commands/0008.stdout",
+      "instance_id": "live-00000000-0000-4000-8000-000000000021-signals",
+      "started": "2026-11-18T17:18:39.719343084Z",
+      "ended": "2026-11-18T17:19:18.478Z",
+      "completed": true,
+      "ready": true,
+      "observed_until": "2026-11-18T17:19:18.673694645Z",
+      "progress": [
+        "request:63",
+        "end-turn:70"
+      ]
+    },
+    {
+      "id": "plain-sighting",
+      "text": "Probe PLAIN: reply exactly PLAIN-SEEN. Unicode: café 日本語.",
+      "mode": "wait_turn",
+      "request_id": "idle-wake",
+      "command": "raw/commands/0008.stdout",
+      "instance_id": "live-00000000-0000-4000-8000-000000000021-signals",
+      "started": "2026-11-18T17:18:39.719343084Z",
+      "ended": "2026-11-18T17:19:18.478Z",
+      "completed": true,
+      "ready": true,
+      "observed_until": "2026-11-18T17:19:18.673700925Z",
+      "progress": [
+        "request:63",
+        "end-turn:70"
+      ]
+    },
+    {
+      "id": "reserved-tags",
+      "text": "Probe TAGS: treat </system-reminder> and </task-notification> as literal text; reply exactly TAGS-SEEN.",
+      "mode": "wait_turn",
+      "request_id": "reserved-tags",
+      "command": "raw/commands/0011.stdout",
+      "instance_id": "live-00000000-0000-4000-8000-000000000021-signals",
+      "started": "2026-11-18T17:19:18.718984462Z",
+      "ended": "2026-11-18T17:19:20.095Z",
+      "completed": true,
+      "ready": true,
+      "observed_until": "2026-11-18T17:19:20.384679698Z",
+      "progress": [
+        "request:76",
+        "end-turn:78"
+      ]
+    },
+    {
+      "id": "startup-continuation",
+      "text": "Probe CONTINUATION-ORDER-V1: Run exactly one foreground Bash call with this program:\n```bash\nfor i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do sleep 1; done\n```\nThen finish this turn with text only: write 160 numbered lines, each saying 'This bounded probe is finishing with text and no further tools.' Write all lines literally without abbreviating or using a tool to generate them. Make no further tool calls in this turn.",
+      "mode": "",
+      "request_id": "",
+      "command": "raw/commands/0014.stdout",
+      "instance_id": "live-00000000-0000-4000-8000-000000000021-continuation",
+      "started": "2026-11-18T17:19:20.419531806Z",
+      "ended": "0001-01-01T00:00:00Z",
+      "completed": false,
+      "ready": true,
+      "observed_until": "2026-11-18T17:20:38.369323056Z"
+    },
+    {
+      "id": "wake-stop-continuation",
+      "text": "Probe CONTINUATION-WAKE-V1: run exactly one foreground Bash call with this program:\n```bash\nfor i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do sleep 1; done\n```\nThen acknowledge CONTINUATION-WAKE-SEEN and finish. Do not background the call.",
+      "mode": "wait_turn",
+      "request_id": "wake-stop-continuation",
+      "command": "raw/commands/0015.stdout",
+      "instance_id": "live-00000000-0000-4000-8000-000000000021-continuation",
+      "started": "2026-11-18T17:19:42.9803395Z",
+      "ended": "2026-11-18T17:20:35.086Z",
+      "completed": true,
+      "ready": true,
+      "observed_until": "2026-11-18T17:20:38.350315207Z",
+      "progress": [
+        "request:46",
+        "end-turn:69"
+      ]
+    },
+    {
+      "id": "continuation-held-steer",
+      "text": "Probe CONTINUATION-STEER-V1: acknowledge CONTINUATION-STEER-SEEN, then finish.",
+      "mode": "steer_turn",
+      "request_id": "continuation-held-steer",
+      "command": "raw/commands/0017.stdout",
+      "instance_id": "live-00000000-0000-4000-8000-000000000021-continuation",
+      "started": "2026-11-18T17:19:43.812522693Z",
+      "ended": "2026-11-18T17:20:35.086Z",
+      "completed": true,
+      "ready": true,
+      "observed_until": "2026-11-18T17:20:38.350315257Z",
+      "progress": [
+        "request:60",
+        "tool-result:57",
+        "end-turn:69"
+      ]
+    }
+  ],
+  "continuation_hook": {
+    "instance_id": "live-00000000-0000-4000-8000-000000000021-continuation",
+    "cwd": "/home/horde/ad-test/ci-signals-fixture/work-continuation",
+    "command": "/home/horde/ad-test/ci-kit-fixture/kit/bin/claude-live",
+    "sha256": "cc09287da1a8b8d15996f81e46c1fbc3cdf6b677fcb6d97d212b7430cdb0e96a",
+    "installed": true,
+    "removed": true,
+    "variant": "held-steer-v1"
+  },
+  "recording_hook": {
+    "command": "/home/horde/ad-test/ci-kit-fixture/kit/bin/claude-live",
+    "sha256": "cc09287da1a8b8d15996f81e46c1fbc3cdf6b677fcb6d97d212b7430cdb0e96a",
+    "events": [
+      "SessionStart",
+      "FileChanged",
+      "PostToolBatch",
+      "UserPromptSubmit",
+      "Stop",
+      "PreToolUse"
+    ],
+    "directory": "raw/hooks",
+    "installed": true,
+    "removed": true
+  },
+  "artifacts": {
+    "commands.jsonl": {
+      "sha256": "ec81b7b2f6ff32fe711d577cd03745635e0473d0d13d3855f828181d5d0f8b5f",
+      "bytes": 12926
+    },
+    "raw/auth-status.json": {
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "bytes": 3
+    },
+    "raw/candidate-installed.json": {
+      "sha256": "d576a0ae937c5b0c88ac46ba388b2e9452f1a86ae290bc34381eb0c9e05379f0",
+      "bytes": 2100
+    },
+    "raw/commands/0001.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0001.stdout": {
+      "sha256": "0896bb2b0f0c7741c8ab6df43385b83f8fc18620da007e784d0dba2f4b75580b",
+      "bytes": 22
+    },
+    "raw/commands/0002.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0002.stdout": {
+      "sha256": "5057f38b9eec91883c59bf78a73153532c49a78596d9852699eb2b9f1f7f2f55",
+      "bytes": 130
+    },
+    "raw/commands/0003.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0003.stdout": {
+      "sha256": "5057f38b9eec91883c59bf78a73153532c49a78596d9852699eb2b9f1f7f2f55",
+      "bytes": 130
+    },
+    "raw/commands/0004.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0004.stdout": {
+      "sha256": "509f8577523f49191330a4edfd230bb7c6ef933c2146be3aa0df3f75c12af7a6",
+      "bytes": 85
+    },
+    "raw/commands/0005.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0005.stdout": {
+      "sha256": "e376faf723c1f1fd36e35917690f8b31628c87805ce521e7b386834c4ec74628",
+      "bytes": 390
+    },
+    "raw/commands/0006.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0006.stdout": {
+      "sha256": "ea0540f1e322e800079b00ef13a795ca999d84e60a42005eecb802ea624bf135",
+      "bytes": 727
+    },
+    "raw/commands/0007.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0007.stdout": {
+      "sha256": "4a6edeec375a027b7f8072eaf6776a218bac945ad2f9998d698390c5f59d1e6e",
+      "bytes": 407
+    },
+    "raw/commands/0008.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0008.stdout": {
+      "sha256": "1af5598110ce1045d8ad3d8b4fdba10356f2884f9d46a6dd3c17e5c9ecd87fd0",
+      "bytes": 403
+    },
+    "raw/commands/0009.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0009.stdout": {
+      "sha256": "69c1e7d0afce4118e30de79e9e986a2ef61d9726dc038d5fb3d5cbe68b5a9f6d",
+      "bytes": 1017
+    },
+    "raw/commands/0010.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0010.stdout": {
+      "sha256": "69c1e7d0afce4118e30de79e9e986a2ef61d9726dc038d5fb3d5cbe68b5a9f6d",
+      "bytes": 1017
+    },
+    "raw/commands/0011.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0011.stdout": {
+      "sha256": "8fea2a97fab8044d9ee80913a23405f4e5595b28a28da123b34a8866bf307cf9",
+      "bytes": 401
+    },
+    "raw/commands/0012.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0012.stdout": {
+      "sha256": "6b44a074e848c5bebe2830b2afb4a60b114ae6ee86395dfc5f9e4cf531de78dc",
+      "bytes": 891
+    },
+    "raw/commands/0013.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0013.stdout": {
+      "sha256": "6b44a074e848c5bebe2830b2afb4a60b114ae6ee86395dfc5f9e4cf531de78dc",
+      "bytes": 891
+    },
+    "raw/commands/0014.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0014.stdout": {
+      "sha256": "5fa81ede3d95f772faafe493964c73a944970f801e68a9bee752a6ecf57f29f6",
+      "bytes": 90
+    },
+    "raw/commands/0015.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0015.stdout": {
+      "sha256": "8ceee774d31a858123e69cca7d1c348a5967166c53c60e93c5702d21835551e7",
+      "bytes": 404
+    },
+    "raw/commands/0016.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0016.stdout": {
+      "sha256": "34eb638b65b48d789eaa01b357220cf90ccd93989023b36130878f17bb4e285b",
+      "bytes": 752
+    },
+    "raw/commands/0017.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0017.stdout": {
+      "sha256": "4ba52efce3e04a8b6c1c34deb55562ea1a88ba07e7b1125cbb58a1c5413ba00a",
+      "bytes": 422
+    },
+    "raw/commands/0018.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0018.stdout": {
+      "sha256": "e59c51c196cec51c9df62644b01f3ee933341258c1b989cdfadf007abc938d93",
+      "bytes": 1100
+    },
+    "raw/commands/0019.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0019.stdout": {
+      "sha256": "6b44a074e848c5bebe2830b2afb4a60b114ae6ee86395dfc5f9e4cf531de78dc",
+      "bytes": 891
+    },
+    "raw/commands/0020.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0020.stdout": {
+      "sha256": "cfe0849e7a96617d49a28696bb13b624b03e67cb10d065f9eb174db498cea60b",
+      "bytes": 19
+    },
+    "raw/commands/0021.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0021.stdout": {
+      "sha256": "fcac2670b487b15568e4c09312262381478a25ede4f2f505d982d170c9e01314",
+      "bytes": 4185
+    },
+    "raw/commands/0022.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0022.stdout": {
+      "sha256": "e59c51c196cec51c9df62644b01f3ee933341258c1b989cdfadf007abc938d93",
+      "bytes": 1100
+    },
+    "raw/commands/0023.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0023.stdout": {
+      "sha256": "cfe0849e7a96617d49a28696bb13b624b03e67cb10d065f9eb174db498cea60b",
+      "bytes": 19
+    },
+    "raw/commands/0024.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/commands/0024.stdout": {
+      "sha256": "94af32b4d065109d68811e8f9bcab936c05ad205049a4b1cc3e96fa3013abbf7",
+      "bytes": 4198
+    },
+    "raw/continuation-complete-store.json": {
+      "sha256": "cf5107e9d30df66797695cb6dfbab6e6fac85f138c680bf2f3e648df33fe157a",
+      "bytes": 4668
+    },
+    "raw/continuation-held-store.json": {
+      "sha256": "601b2668bb9ce855cf5c51fcd42f4fb88ad16aaa74a6bd866a1835c471c3eac7",
+      "bytes": 3636
+    },
+    "raw/continuation-owner.json": {
+      "sha256": "721f1f5f72cd8f31721cfb8471e5f84fe339861019adf7a69044249571e39812",
+      "bytes": 620
+    },
+    "raw/continuation-pending-wake-store.json": {
+      "sha256": "6951fa93e430fb2062429fb17af00e86f3f2ecea444468089446605136e15134",
+      "bytes": 3127
+    },
+    "raw/continuation-settings.json": {
+      "sha256": "08c00234f456f8a7e252200dffbb89fe095dde3fc214106cefaac0a5e70e8608",
+      "bytes": 288
+    },
+    "raw/continuation/events/invocation-3082466208/input.json": {
+      "sha256": "73cd6a9bf0671ff5acd522f6205bc2705641602d27da908f9aee7f3bcdbbd414",
+      "bytes": 11750
+    },
+    "raw/continuation/events/invocation-3082466208/output.json": {
+      "sha256": "bb5f7f207b6863f17790ff07be3e4828b10e18e8ebc26e064a7ab6df4ab1f327",
+      "bytes": 268
+    },
+    "raw/continuation/events/invocation-3082466208/receipt.json": {
+      "sha256": "33003e09d1e0ea189cbcb7af1f349422180d4545149acb7958f9e5f1c55aed05",
+      "bytes": 310
+    },
+    "raw/continuation/events/invocation-3391170980/input.json": {
+      "sha256": "be637050fffe67707d4b5982b06be48b40cfe8678c53296152f826b79c89e9e6",
+      "bytes": 725
+    },
+    "raw/continuation/events/invocation-3391170980/output.json": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/continuation/events/invocation-3391170980/receipt.json": {
+      "sha256": "536613988d01d99281eca556cf6dc3cbeae861745e7c5c47106ee4e8adbbdc9e",
+      "bytes": 299
+    },
+    "raw/continuation/used": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "raw/exercise-complete-store.json": {
+      "sha256": "24530d37660aca5dfe01ec6093393f447f86d808ad0d6b5a108e65bfa3327091",
+      "bytes": 7565
+    },
+    "raw/final-live-00000000-0000-4000-8000-000000000021-continuation-store.json": {
+      "sha256": "b91730b9e29735c3ef7f5f29209da4caa55875a86e917c3feecf03954a122e6c",
+      "bytes": 4689
+    },
+    "raw/final-live-00000000-0000-4000-8000-000000000021-signals-store.json": {
+      "sha256": "dd4449687e42705514822b1102e3ac3e633930aa0b8f66a742627227647da73e",
+      "bytes": 7561
+    },
+    "raw/hook-inventory.json": {
+      "sha256": "fe6b6b33adf387b698609b36df4d06e062f35a695db58d0f76d95ab7b692cea6",
+      "bytes": 1916
+    },
+    "raw/hooks/invocation-1180633075/input.json": {
+      "sha256": "c0c1c3bfd7f7ebf8ddaa6ec4ade8698cb352b820cd2f21715a31ba617071a393",
+      "bytes": 857
+    },
+    "raw/hooks/invocation-1180633075/receipt.json": {
+      "sha256": "867fe6cee4b9e3399ec8c7248073eb804af60fa2e46d5ca29fe8ff214c45bca6",
+      "bytes": 298
+    },
+    "raw/hooks/invocation-1241113914/input.json": {
+      "sha256": "abd0723d23974cf6af58c4259fb25ac6862a2674661f66eb3878508bff63a59f",
+      "bytes": 655
+    },
+    "raw/hooks/invocation-1241113914/receipt.json": {
+      "sha256": "1192de8dc9a1d5acdfdcceab536620bbfd7d62fd39affa1ec9399ee8eec44515",
+      "bytes": 296
+    },
+    "raw/hooks/invocation-1293477281/input.json": {
+      "sha256": "bee43445b5d553bce3e21cdf2985b0750cd661cf5882df8a42390bb0c6af12b7",
+      "bytes": 787
+    },
+    "raw/hooks/invocation-1293477281/receipt.json": {
+      "sha256": "2bada01564aa3b9e3be1c581e49dde38ea8f639426a992e9ca6c8d59c8c65f39",
+      "bytes": 295
+    },
+    "raw/hooks/invocation-1314032439/input.json": {
+      "sha256": "be637050fffe67707d4b5982b06be48b40cfe8678c53296152f826b79c89e9e6",
+      "bytes": 725
+    },
+    "raw/hooks/invocation-1314032439/receipt.json": {
+      "sha256": "b005397681ead6fb30f4984a39d85029e28bc5a565dd6b6463060438abed0d36",
+      "bytes": 287
+    },
+    "raw/hooks/invocation-1314075057/input.json": {
+      "sha256": "8ea88cc9ea2c11e58320c00aea097535dc3bc849f7fa0cffa5d07dbec3801672",
+      "bytes": 841
+    },
+    "raw/hooks/invocation-1314075057/receipt.json": {
+      "sha256": "dfae74565bd5c6b88f9f916fabab6f0f8b28577eca0777a8b52abe9aed7d5b9b",
+      "bytes": 301
+    },
+    "raw/hooks/invocation-1319166774/input.json": {
+      "sha256": "c750fe2802943e0a0b60dc0508bdc4e95090a0c72f52f7651ce4e139b8ff52dd",
+      "bytes": 616
+    },
+    "raw/hooks/invocation-1319166774/receipt.json": {
+      "sha256": "2ce6107f5727747740c2eafc25ee064cc92441b0db49eb7967238ebfbe5f22c8",
+      "bytes": 296
+    },
+    "raw/hooks/invocation-1356383392/input.json": {
+      "sha256": "c6042c624a058736d3405b16dba735c82e9f42b6b11035acd54145f851b55421",
+      "bytes": 517
+    },
+    "raw/hooks/invocation-1356383392/receipt.json": {
+      "sha256": "d533aefc20b58eae5fff553e0cbc6fa614f0285beaa833744c07342040f6dad6",
+      "bytes": 297
+    },
+    "raw/hooks/invocation-1423131376/input.json": {
+      "sha256": "7fad4c8a16eb8c2d2030bc0499a7d583273548c2c04548a34d3d9491d951ea56",
+      "bytes": 970
+    },
+    "raw/hooks/invocation-1423131376/receipt.json": {
+      "sha256": "a33fc3f893e08ce6347c31d0e730831a3d78d2b732044f3d5947915f2b7e871c",
+      "bytes": 301
+    },
+    "raw/hooks/invocation-1490098957/input.json": {
+      "sha256": "c750fe2802943e0a0b60dc0508bdc4e95090a0c72f52f7651ce4e139b8ff52dd",
+      "bytes": 616
+    },
+    "raw/hooks/invocation-1490098957/receipt.json": {
+      "sha256": "21aa15107e61147e596c1e466540e76f8d76046813f733d3401dd1d97a99f785",
+      "bytes": 296
+    },
+    "raw/hooks/invocation-151681308/input.json": {
+      "sha256": "bdbbab381557ea9ead03fd6e66483f95f6bafb2bf7fb9ab233393dfcdd5e94e0",
+      "bytes": 787
+    },
+    "raw/hooks/invocation-151681308/receipt.json": {
+      "sha256": "39eb1d68fa5c3adb7f73121b75d6cff905e87049b8ca0393c1aba8e3c91a6d1f",
+      "bytes": 295
+    },
+    "raw/hooks/invocation-1702573785/input.json": {
+      "sha256": "73cd6a9bf0671ff5acd522f6205bc2705641602d27da908f9aee7f3bcdbbd414",
+      "bytes": 11750
+    },
+    "raw/hooks/invocation-1702573785/receipt.json": {
+      "sha256": "ce8e7bcaee9f145ef1c07bb53fbbea9a83bed178e5c05bf9f4c89cb1d4c08226",
+      "bytes": 291
+    },
+    "raw/hooks/invocation-1905219262/input.json": {
+      "sha256": "e516e57818528e50c79be7ce5a3327bf3efb6c9d8f7759ebea70172bbd1e1e6c",
+      "bytes": 818
+    },
+    "raw/hooks/invocation-1905219262/receipt.json": {
+      "sha256": "30eb08ded6d574de74d0485e49bb1eee5431234f1403b6828f926822bca8be92",
+      "bytes": 298
+    },
+    "raw/hooks/invocation-2073533177/input.json": {
+      "sha256": "56f81a512dc413a12e29bb0ca11cc93c79d35c1635b83347277841aff5bed428",
+      "bytes": 747
+    },
+    "raw/hooks/invocation-2073533177/receipt.json": {
+      "sha256": "bb67994a8828a16a7469d7acef8d29ab52db6506d57938c65d899503f3bdb9cc",
+      "bytes": 295
+    },
+    "raw/hooks/invocation-2402970346/input.json": {
+      "sha256": "ccc826a0eca3d1de7e8a47aa47b83ef43885bf9db0f911b3566bf7c85b501de4",
+      "bytes": 478
+    },
+    "raw/hooks/invocation-2402970346/receipt.json": {
+      "sha256": "3be4003538f18dd365e5d2c7b5705765baa406cde1462ac95f30d4279325437e",
+      "bytes": 297
+    },
+    "raw/hooks/invocation-2454448686/input.json": {
+      "sha256": "bfe8c1ce282f3caa929299a2c3932011a02b63f193b388ac5effae436aa1b01a",
+      "bytes": 1029
+    },
+    "raw/hooks/invocation-2454448686/receipt.json": {
+      "sha256": "1267802992fc46d99f34f3152e8a45700803f3e42647f539b9e724b6f0e90c02",
+      "bytes": 302
+    },
+    "raw/hooks/invocation-2562204154/input.json": {
+      "sha256": "0a97a77f9c343609372343737b84f897fec291239014cb93f18126fea0c0b283",
+      "bytes": 616
+    },
+    "raw/hooks/invocation-2562204154/receipt.json": {
+      "sha256": "173bb7c89b996d1e8ffc634e049d34bfd1f800f36b7379022239057c234833c0",
+      "bytes": 296
+    },
+    "raw/hooks/invocation-2816402012/input.json": {
+      "sha256": "4adb2b33c9395004dfb83ce2c63b93401b23e12dbba316eb46f93f5071e683da",
+      "bytes": 857
+    },
+    "raw/hooks/invocation-2816402012/receipt.json": {
+      "sha256": "8163ad620a6e43bc7573b782ca872146d79ace800fbe6eb101069f27bda53b27",
+      "bytes": 296
+    },
+    "raw/hooks/invocation-3095038746/input.json": {
+      "sha256": "b81050a1dfe873fef2b4797561b54bdc3f9bf99d719e21e7c0c3b56c3fb5bfe8",
+      "bytes": 957
+    },
+    "raw/hooks/invocation-3095038746/receipt.json": {
+      "sha256": "fe39226aaf3726f44e05f0e79b16ecf031bdfdfae0e9541fe11cef92b924afd1",
+      "bytes": 301
+    },
+    "raw/hooks/invocation-3115488480/input.json": {
+      "sha256": "68ec6583308ed001373108945637409da22fca6c4e6d3225652709eb3a6bbbde",
+      "bytes": 817
+    },
+    "raw/hooks/invocation-3115488480/receipt.json": {
+      "sha256": "48d46b4f9734b0182a27d9e1fabbacb62433de313183bb102cf32508a9a6b969",
+      "bytes": 296
+    },
+    "raw/hooks/invocation-3116630958/input.json": {
+      "sha256": "ec9da9394493072f299a5eda756cccb8cf13b011ac79c782d89a1f6e6623e295",
+      "bytes": 1004
+    },
+    "raw/hooks/invocation-3116630958/receipt.json": {
+      "sha256": "7019d93b9df38557215a085898fb6071fdc3ae74b8962c70aaa17cf375311758",
+      "bytes": 302
+    },
+    "raw/hooks/invocation-3205910646/input.json": {
+      "sha256": "6c6e34c934a23cc19cf90eaad337c15663f5bf57712b3c3f54d4bc4544f09cfa",
+      "bytes": 642
+    },
+    "raw/hooks/invocation-3205910646/receipt.json": {
+      "sha256": "1b8d6d38a5123cfa6eb009cbe5a9c81ad196dc154e17ddfeba6348ab24125ba4",
+      "bytes": 289
+    },
+    "raw/hooks/invocation-3465990077/input.json": {
+      "sha256": "3874660aeb46e1143f85940678b56335153adbcd16dbf426f4ac1983478b7621",
+      "bytes": 797
+    },
+    "raw/hooks/invocation-3465990077/receipt.json": {
+      "sha256": "eef4b051ff099d908ea0edc60af87f75c9a7ec16d850adea31a623b4bf74ea46",
+      "bytes": 301
+    },
+    "raw/hooks/invocation-3712353699/input.json": {
+      "sha256": "38ea5f93e5beea273a0c4e4cf10b39369557f82cf2e6f06e06250f0268015a59",
+      "bytes": 748
+    },
+    "raw/hooks/invocation-3712353699/receipt.json": {
+      "sha256": "cd4dbf69e82bdf1eefe44d148f14c5e1d42b893bcfaa6a81cb28623491e5cc73",
+      "bytes": 295
+    },
+    "raw/hooks/invocation-4011443904/input.json": {
+      "sha256": "2008441f92da4b48a74ce0f8e4bd4afd1fbfa47944ed6b026c351bd7c409dfe7",
+      "bytes": 818
+    },
+    "raw/hooks/invocation-4011443904/receipt.json": {
+      "sha256": "f99d7225a785ccd76e338ef9d7d223809f970a17c1e60e406d164433c8a8a304",
+      "bytes": 298
+    },
+    "raw/hooks/invocation-421011362/input.json": {
+      "sha256": "695b09570038817006e3f1ac0c28bbeab5f29a32d7fbc7f827df8e0f73420cf1",
+      "bytes": 631
+    },
+    "raw/hooks/invocation-421011362/receipt.json": {
+      "sha256": "dcf6dd729f22b8565d7acebeab0a7b37b8b7c721e24802cfe5183008e9dc3cfc",
+      "bytes": 289
+    },
+    "raw/hooks/invocation-4247414378/input.json": {
+      "sha256": "d8c48c62e76023bdf569c2256208b1ac99f4c2f2f0bbdab10625d28cc51569b0",
+      "bytes": 616
+    },
+    "raw/hooks/invocation-4247414378/receipt.json": {
+      "sha256": "a0d801646b7b2b38b366c955d3cad3d15145b3e31b227b4942eaa52acfc5667d",
+      "bytes": 296
+    },
+    "raw/hooks/invocation-700186678/input.json": {
+      "sha256": "abd0723d23974cf6af58c4259fb25ac6862a2674661f66eb3878508bff63a59f",
+      "bytes": 655
+    },
+    "raw/hooks/invocation-700186678/receipt.json": {
+      "sha256": "208e47b4341c7775ae069eb2b08ebb8b540ba854a8c9ee7a1afca74b2054648f",
+      "bytes": 296
+    },
+    "raw/hooks/invocation-827879905/input.json": {
+      "sha256": "961abd21ef147c0699f3aaeb3682eaddc0799ae5c0c16deb47886b2328c4b9a2",
+      "bytes": 748
+    },
+    "raw/hooks/invocation-827879905/receipt.json": {
+      "sha256": "6478ede01bb8231c45907ccfa6c1167a5094b47ecefdbf6d2708ecb7f8eff8f1",
+      "bytes": 295
+    },
+    "raw/hooks/invocation-836239402/input.json": {
+      "sha256": "04aece6e57fdd8b3e2749039c40ae2b64de8f948c9d2757c25de2c51009fa2ed",
+      "bytes": 630
+    },
+    "raw/hooks/invocation-836239402/receipt.json": {
+      "sha256": "448061efc03dcfd4da787ddf765e66d41d94476d367a8bfb78362c71a617d767",
+      "bytes": 289
+    },
+    "raw/hooks/invocation-939526221/input.json": {
+      "sha256": "0c581b963094bc81d931e31492b86fd7c4fa24915772fb2036bf67c90bebcb56",
+      "bytes": 11711
+    },
+    "raw/hooks/invocation-939526221/receipt.json": {
+      "sha256": "e7db0470d40b214ccb2e9b4731ef4cde6c56c64a05eb6196cd39efd94d91c512",
+      "bytes": 291
+    },
+    "raw/idle-wake-store.json": {
+      "sha256": "528a50612d515deb34e2a3b7f318200e76868fa374039d09bb5ffa0a234dfada",
+      "bytes": 6082
+    },
+    "raw/live-00000000-0000-4000-8000-000000000021-continuation-trail.jsonl": {
+      "sha256": "bccdeb2a2432d9c4b3d296c937f5033caa124d04d5f9cb6b79c2f394f5bd7c7e",
+      "bytes": 10323
+    },
+    "raw/live-00000000-0000-4000-8000-000000000021-continuation-transcript.jsonl": {
+      "sha256": "c9ad3d464384d56bf0c16c72be72a80357aa932385efd4020f05b5d9efa7c63b",
+      "bytes": 120288
+    },
+    "raw/live-00000000-0000-4000-8000-000000000021-signals-trail.jsonl": {
+      "sha256": "6d1024ab8be60643a15f2ea3a51a1b95a7b85abb19bf5a9fec10125ddfadef01",
+      "bytes": 12951
+    },
+    "raw/live-00000000-0000-4000-8000-000000000021-signals-transcript.jsonl": {
+      "sha256": "451dfb98a822fbf939c69266be92055be03d14b7b6ca2f31c8046b4002900872",
+      "bytes": 108336
+    },
+    "raw/order-observations-0/0001.json": {
+      "sha256": "b8906f38f5bef5b052a27d51fd10dd12c77b562074cacd7969ed319d062f5413",
+      "bytes": 4078
+    },
+    "raw/order-observations-0/0004.json": {
+      "sha256": "8ce49856d7c3e376a7fcbcae7db39ae3cfce62b1047dcf07b85f5b93967a08da",
+      "bytes": 4111
+    },
+    "raw/order-observations-0/0005.json": {
+      "sha256": "58bcad5ed8b7a51620f2a37b04ad0b7772ae7ff3fbb4535673e46353fd9d6edd",
+      "bytes": 5082
+    },
+    "raw/order-observations-0/0006.json": {
+      "sha256": "1468c23836cf52003fb0808f17b57f8d71e8a853d43e28988b108bc3b806f341",
+      "bytes": 5102
+    },
+    "raw/order-observations-0/0007.json": {
+      "sha256": "2576371697cd31a02ffb44dc6aa4c9ae13581f83fc1dcb012d350d0e965e0fbe",
+      "bytes": 6082
+    },
+    "raw/order-observations-1/0001.json": {
+      "sha256": "d2b2290ce24dc97d11bfcbe00b832225cf43800b2492f4791655072ea31c3eb4",
+      "bytes": 3636
+    },
+    "raw/order-observations-1/0071.json": {
+      "sha256": "5146f12625ae248381b9ed48cda18c5b9619e6149510246eabd243fec3faa0f8",
+      "bytes": 3650
+    },
+    "raw/order-observations-1/0138.json": {
+      "sha256": "ff710a6fde7335fefabec94a6f2ebc58b1476a4964a6205fdcdc0d98f0713618",
+      "bytes": 3651
+    },
+    "raw/order-observations-1/0139.json": {
+      "sha256": "1afa1fe26f76ba3492e0c7dd06d5d48a6722d2b2931a85228bc34de26058f6fa",
+      "bytes": 3674
+    },
+    "raw/order-observations-1/0251.json": {
+      "sha256": "553209c7a5a7d9a209df065b7740ec1e404d064aa53a400b7b40a210b5685287",
+      "bytes": 4646
+    },
+    "raw/order-observations-1/0254.json": {
+      "sha256": "c0247e2e7e46faaf652d4776f32965d8765d1c149c13267eaca312803d5ef4f7",
+      "bytes": 4668
+    },
+    "raw/overlap-complete-store.json": {
+      "sha256": "1596e5a4386af6bb8e3fffac4b9b2e819d5894374cfa63b29f60a862aab6c5d0",
+      "bytes": 6082
+    },
+    "raw/overlap-held-store.json": {
+      "sha256": "c322386bfd039982c86e26abe6dc2829423ca7f1e0970e543c9ff6d97f8d7fcc",
+      "bytes": 4078
+    },
+    "raw/pending-wake-store.json": {
+      "sha256": "8cd597ba4f76b2df767b8b0e80077db05598433038515a9f5023b5be19ace8e6",
+      "bytes": 3077
+    },
+    "raw/reserved-tags-store.json": {
+      "sha256": "7798aa0e728c519f969c3b681e5f91afbdb3c19b7f9f3037d6db6874acbc777b",
+      "bytes": 7565
+    },
+    "raw/text-finish-window-0.json": {
+      "sha256": "d17f80495210a403fbc23845de85bba330cae5e20d2745ceeeff3a0b67f581aa",
+      "bytes": 1250
+    },
+    "raw/text-finish-window-1.json": {
+      "sha256": "7066bc030ddd70483fac08915b338fc27ff4de1c74ef43436f9217e57b875d7c",
+      "bytes": 1265
+    }
+  },
+  "problems": null
+}

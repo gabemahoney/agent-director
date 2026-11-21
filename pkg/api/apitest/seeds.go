@@ -88,7 +88,10 @@ import (
 // never absolute values, except for a row the test inserted itself.
 //
 // Every seeded row is a Claude row (agent claude, no end report) unless
-// WithAgent or WithEndReportedAt says otherwise.
+// WithAgent or WithEndReportedAt says otherwise. Options also seed matching
+// core provider/life/token facts, and the final agent's busy-send coverage
+// (seedAgentCoverage), in their transaction. Its Turn Start counter is
+// the insert's 0 unless WithTurnStarts says otherwise.
 //
 // Returns the instance_id that was written.
 func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool, opts ...SpawnOption) (string, error) {
@@ -238,11 +241,62 @@ func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 			return fmt.Errorf("SeedSpawn: default launch start UPDATE: %w", err)
 		}
 	}
+	// Options can replace the insertion's provider, life and token. Keep the
+	// permanent core consistent in this same fixture transaction; production
+	// resume deliberately refuses a provider change within a conversation.
+	if _, err := tx.Exec(`UPDATE busy_conversations SET provider = (
+	    SELECT CASE WHEN COALESCE(agent, '') = '' THEN 'claude' ELSE agent END FROM spawns WHERE instance_id = ?)
+	    WHERE conversation_id = (SELECT busy_conversation_id FROM spawns WHERE instance_id = ?)`, id, id); err != nil {
+		return fmt.Errorf("SeedSpawn: core provider: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE busy_send_launches SET
+	    provider = (SELECT CASE WHEN COALESCE(agent, '') = '' THEN 'claude' ELSE agent END FROM spawns WHERE instance_id = ?),
+	    life_number = (SELECT life_number FROM spawns WHERE instance_id = ?),
+	    launch_token = (SELECT CASE WHEN typeof(launch_token) = 'text' THEN launch_token END FROM spawns WHERE instance_id = ?)
+	    WHERE instance_id = ? AND phase = 'current'`, id, id, id, id); err != nil {
+		return fmt.Errorf("SeedSpawn: core Launch identity: %w", err)
+	}
+	if err := seedAgentCoverage(tx, id, o); err != nil {
+		return err
+	}
 	if err := insertSessionHistory(tx, id, o.history); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("SeedSpawn: commit options tx: %w", err)
+	}
+	return nil
+}
+
+// seedAgentCoverage records, on tx, the busy-send coverage of id's final
+// agent (store.BusySendCoverageForAgent) on its row, current Launch and
+// published conversation, as that agent's own insertion records it: the seed
+// inserts a Claude row, and WithAgent changes the agent afterwards. A Launch
+// that is not a covered Claude one keeps no route, as recordBusySendClaudeRoute
+// records none for it.
+func seedAgentCoverage(tx *sql.Tx, id string, o *spawnOpts) error {
+	var agent string
+	if err := tx.QueryRow(`SELECT COALESCE(agent, '') FROM spawns WHERE instance_id = ?`, id).Scan(&agent); err != nil {
+		return fmt.Errorf("SeedSpawn: core coverage: %w", err)
+	}
+	coverage := store.BusySendCoverageForAgent(agent)
+	var capabilities []*store.BusySendLaunchCapabilities
+	if o.busyCapabilitiesSet {
+		coverage = store.BusySendNotCovered
+		if o.busyCapabilities != nil {
+			coverage = store.BusySendCovered
+		}
+		capabilities = append(capabilities, o.busyCapabilities)
+	}
+	if err := seedBusySendCoverageTx(tx, id, coverage, coverage, capabilities...); err != nil {
+		return fmt.Errorf("SeedSpawn: core coverage: %w", err)
+	}
+	if coverage == store.BusySendCovered && (agent == "" || agent == store.AgentClaude) {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE busy_send_launches SET route_kind = NULL, route_id = NULL, wake_path = NULL
+	    WHERE instance_id = ? AND phase = 'current'`, id); err != nil {
+		return fmt.Errorf("SeedSpawn: core route: %w", err)
 	}
 	return nil
 }

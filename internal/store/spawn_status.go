@@ -16,7 +16,7 @@ const statusRowColumns = `instance_id, state, launch_started_at, family_state,
  relay_mode, COALESCE(life_number, 0), agent, jsonl_path, end_reported_at,
  codex_startup, claude_capacity, permission_epoch, observation_version,
  COALESCE(display_observation, ''), ` + lifeColumns + `, ` + paneColumns + `,
- state_changed_ms, ` + evidenceColumns
+ state_changed_ms, ` + evidenceColumns + `, busy_send`
 
 // SpawnStatusRow is the partial Spawn reader: it reads only status, context
 // and display-observation evidence in one snapshot. It fills InstanceID,
@@ -26,9 +26,10 @@ const statusRowColumns = `instance_id, state, launch_started_at, family_state,
 // (Snapshot.StartedAt as stored text), with RowVersion, SessionID, PID,
 // ProcStarttime and TmuxSessionName taken from Snapshot; PermissionEpoch,
 // ObservationVersion and DisplayObservation; and the idle_screen timeout
-// override and committed pane baseline (paneColumns); and StateChangedMillis
+// override and committed pane baseline (paneColumns); StateChangedMillis
 // with the main-field evidence (evidenceColumns), which StateConfirmation
-// applies to the reported state.
+// applies to the reported state; and BusySend, the current Launch's recorded
+// coverage, which decides whether status reads delivery facts.
 //
 // All other fields stay unpopulated; their zero values do not establish stored
 // absence. These include LaunchOwner, IdleSince,
@@ -86,7 +87,7 @@ func scanSpawnStatusExtra(sc rowScanner, reported bool, extra []any) (Spawn, err
 	var life lifeScan
 	var pane paneScan
 	var evidence evidenceScan
-	var launch, agent, path, endReport, startup, capacity any
+	var launch, agent, path, endReport, startup, capacity, busySend any
 	dest := []any{&row.InstanceID, &row.State, &launch, &row.FamilyState,
 		&row.RelayMode, &row.LifeNumber, &agent, &path, &endReport,
 		&startup, &capacity, &row.PermissionEpoch, &row.ObservationVersion, &row.DisplayObservation}
@@ -94,6 +95,7 @@ func scanSpawnStatusExtra(sc rowScanner, reported bool, extra []any) (Spawn, err
 	dest = append(dest, pane.dest()...)
 	dest = append(dest, &row.StateChangedMillis)
 	dest = append(dest, evidence.dest()...)
+	dest = append(dest, &busySend)
 	dest = append(dest, extra...)
 	if reported {
 		dest = append(dest, &row.ReportedState, &row.FamilyState)
@@ -116,6 +118,10 @@ func scanSpawnStatusExtra(sc rowScanner, reported bool, extra []any) (Spawn, err
 	row.ClaudeCapacity = decodeClaudeCapacity(capacity)
 	pane.apply(&row)
 	evidence.apply(&row)
+	var err error
+	if row.BusySend, err = decodeBusySendCoverage(busySend); err != nil {
+		return Spawn{}, err
+	}
 	return row, nil
 }
 
@@ -124,10 +130,17 @@ func scanSpawnStatusExtra(sc rowScanner, reported bool, extra []any) (Spawn, err
 // other agents. It also carries the exact stored CWD required by native input
 // proof identity. A nil IDs slice means all rows; an empty slice means none.
 func (s *Store) RecoveryRows(ids []string, settle SettleRead) ([]Spawn, error) {
-	return s.recoveryRows(ids, settle, nil)
+	return s.recoveryRows(ids, settle, nil, nil)
 }
 
-func (s *Store) recoveryRows(ids []string, settle SettleRead, proofs []CursorMissingProof) ([]Spawn, error) {
+// RecoveryRowsWithDelivery is RecoveryRows that also takes the selected
+// covered rows' delivery facts into delivery, in the same read transaction
+// as the rows, begun before their SELECT (BusySendDeliveries).
+func (s *Store) RecoveryRowsWithDelivery(ids []string, settle SettleRead, delivery *BusySendDeliveries) ([]Spawn, error) {
+	return s.recoveryRows(ids, settle, nil, delivery)
+}
+
+func (s *Store) recoveryRows(ids []string, settle SettleRead, proofs []CursorMissingProof, delivery *BusySendDeliveries) ([]Spawn, error) {
 	raw, args, err := cursorMissingState("state", nil, proofs)
 	if err != nil {
 		return nil, err
@@ -151,11 +164,17 @@ func (s *Store) recoveryRows(ids []string, settle SettleRead, proofs []CursorMis
 	out := []Spawn{}
 	stale := &CursorMissingReadError{}
 	err = s.readWithin(0, "store: recovery selection", func(ctx context.Context, conn *sql.Conn) error {
+		end, err := delivery.beginRead(ctx, conn)
+		if err != nil {
+			return err
+		}
+		defer end()
 		rows, err := conn.QueryContext(ctx, q, args...)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
+		var read []Spawn
 		for rows.Next() {
 			var owner LaunchOwner
 			var note, cwd string
@@ -169,9 +188,19 @@ func (s *Store) recoveryRows(ids []string, settle SettleRead, proofs []CursorMis
 				continue
 			}
 			row.LaunchOwner, row.LivenessNote, row.CWD = owner, note, cwd
-			out = append(out, row)
+			read = append(read, row)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := delivery.read(ctx, conn, s.StoreID(), read); err != nil {
+			return err
+		}
+		out = append(out, read...)
+		return nil
 	})
 	if err != nil {
 		return nil, err

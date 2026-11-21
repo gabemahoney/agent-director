@@ -28,7 +28,10 @@ type idShapedWorld struct {
 func newIDShapedWorld(t *testing.T, f *killFix) idShapedWorld {
 	t.Helper()
 	dollar, percent := idtIDShapedName(t, '$'), idtIDShapedName(t, '%')
-	w := idShapedWorld{NotFound: f.liveRow(t, killRowSpec{PaneID: percent.Raw}), Gone: f.liveRow(t, killRowSpec{Name: dollar.Raw})}
+	// Codex rows: busy send doesn't cover Codex, so all three verbs target its pane.
+	codex := []apitest.SpawnOption{apitest.WithAgent("codex")}
+	w := idShapedWorld{NotFound: f.liveRow(t, killRowSpec{PaneID: percent.Raw, Opts: codex}),
+		Gone: f.liveRow(t, killRowSpec{Name: dollar.Raw, Opts: codex})}
 	f.must(t, "kill-session", "-t", w.Gone.Reply.SessionID)
 	waitPidGone(t, w.Gone.Reply.PanePID)
 	w.Dollar, w.Percent, w.Barrier = f.startSession(t, dollar.Raw), f.startSession(t, percent.Raw), f.startSession(t, "")
@@ -87,15 +90,13 @@ func TestPaneVerbBaseIndexOneReachesPaneByID(t *testing.T) {
 		state string
 	}{
 		{apitest.PaneReadPane, "pending"},
-		// b.qcf: use a live row for targeting/adoption; pending Claude's
-		// raw-mode wait is covered by the send-keys regression test.
 		{apitest.PaneSendKeys, "waiting"},
 		{apitest.PanePause, "waiting"},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.verb), func(t *testing.T) {
 			f := newKillFix(t)
-			r := f.baseIndexOneLostReply(t, tc.state, nil)
+			r := f.baseIndexOneLostReply(t, tc.state, nil, paneVerbRow(tc.verb)...)
 			text := paneMarker(t)
 			if tc.verb == apitest.PaneReadPane {
 				text = idtSendAndSee(t, f.realTmux, f.Client, r.Reply.PaneID)

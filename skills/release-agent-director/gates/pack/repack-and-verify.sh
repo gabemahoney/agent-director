@@ -65,6 +65,9 @@ fi
 # the rest of this script (SECOND_TARBALL via `ls "$STAGING2"/*.tgz`) use in a
 # location-independent way.
 STAGING2="$(mktemp -d "${TMPDIR:-/tmp}/pack-staging2.XXXXXX")"
+# Clear inherited paths before cleanup can run; extraction starts after packing.
+EXTRACT_DIR1=""
+EXTRACT_DIR2=""
 trap 'rm -rf "$STAGING2" "${EXTRACT_DIR1:-}" "${EXTRACT_DIR2:-}"' EXIT
 
 (cd pkg/ts-bun-client && bun pm pack --destination "$STAGING2") >/dev/null 2>&1

@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -63,10 +64,13 @@ func rhdRun(t *testing.T, tc rhdCase, prior string) {
 		tc.spec.Created = rlkSettled(e)
 	}
 	sc := e.arrangeHeld(t, r, tc.spec)
+	priorBusy := seedBusyCoveredConversation(t, e.dbPath, r.ID)
 	start := e.clock.Now()
 
 	_, err := e.resume(r.ID)
 
+	assertBusyProjection(t, e.dbPath, r.ID, priorBusy)
+	assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "failed", store.BusySendCovered)
 	assertOneSentinel(t, err, tc.want)
 	if err == nil {
 		t.Fatal("resume err = nil; want the held-name refusal")
@@ -242,7 +246,7 @@ func rhdSpoilRestore(t *testing.T, e *killEnv, id, other string, outcome apitest
 	case apitest.RestoreRowChanged:
 		write = func() error { return e.st.SetParentID(id, other) }
 	case apitest.RestoreRowRemoved:
-		write = func() error { return e.st.DeleteSpawn(id) }
+		write = func() error { return storefix.DeleteWithExit(t, e.st, id) } // a covered conversation needs exit evidence
 	default:
 		failRestore()
 		return

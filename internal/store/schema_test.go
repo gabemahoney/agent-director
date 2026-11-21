@@ -249,13 +249,16 @@ func TestFreshStoreSchema(t *testing.T) {
 	assertColumnSpecs(t, db, v17ColumnSpecs)
 	assertColumnSpecs(t, db, v19ColumnSpecs)
 	assertColumnSpecs(t, db, v20ColumnSpecs)
+	// v21's spawns columns; its core tables, indexes and declarations are
+	// TestBusySendCoreContract's.
+	assertColumnSpecs(t, db, v21ColumnSpecs)
 	// The v14 columns' earlier names are gone; an upgrade's schema is this one.
 	for _, old := range []string{"stuck_version", "stuck_observation", "stuck_exit", "no_screen_change_timeout_seconds"} {
 		if slices.Contains(tableColumnNames(t, db, "spawns"), old) {
 			t.Errorf("spawns keeps the earlier column %s", old)
 		}
 	}
-	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames(), []string{"family_state", "family_settled_state", "family_changed_ms", "codex_startup", "claude_capacity"}, v14ColumnNames("spawns"), v15ColumnNames(), v19ColumnNames(), []string{"display_evidence", "observation_writer"})
+	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames(), []string{"family_state", "family_settled_state", "family_changed_ms", "codex_startup", "claude_capacity"}, v14ColumnNames("spawns"), v15ColumnNames(), v19ColumnNames(), []string{"display_evidence", "observation_writer", "busy_send", "busy_conversation_id", "turn_starts"})
 	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
 		t.Errorf("spawns columns = %v; want the v6, v7, v8 then v9 columns last, in order %v", cols, wantSpawnsTail)
 	}
@@ -356,8 +359,9 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			assertV8Defaults(t, path, "pre")
 			assertV9Defaults(t, path, "pre")
 			assertV15Defaults(t, path, "pre")
+			assertV21Backfill(t, path, "pre")
 			meta, present := readStoreMeta(t, path)
-			wantMeta := []storeMetaRow{{inputAuthorityKey, inputAuthorityVersion + id, "text"}, {"store_id", id, "text"}}
+			wantMeta := []storeMetaRow{{busySendCoreKey, busySendCoreVersion + id, "text"}, {inputAuthorityKey, inputAuthorityVersion + id, "text"}, {"store_id", id, "text"}}
 			if !present || !wellFormedID.MatchString(id) || !reflect.DeepEqual(meta, wantMeta) {
 				t.Errorf("store metadata = %+v; want exact identity and authority %+v", meta, wantMeta)
 			}
@@ -611,6 +615,14 @@ func TestMigrationStepReentry(t *testing.T) {
 			preV9Subagent(allSubagent...)(t, path)
 			setRowAgent(t, path, v8LiveID, AgentCodex)
 		}, 2, ""},
+		// v21's values and bindings on reentry are busy_send_schema_test.go's.
+		{"v20→v21 run twice", 20, nil, 2, ""},
+		{"v20→v21 after the core tables and indexes, before the spawns columns", 20, func(t *testing.T, path string) {
+			preAddV21Core(t, path, allV21Core()[:len(busySendCoreObjects)]...)
+		}, 1, ""},
+		{"v20→v21 after the spawns columns alone", 20, func(t *testing.T, path string) {
+			preAddV21Core(t, path, allV21Core()[len(busySendCoreObjects):]...)
+		}, 1, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -666,7 +678,9 @@ func TestMigrationStepReentry(t *testing.T) {
 // failing at its agent backfill leaves no rename and no column, and failing
 // part-way through the folded subagent tables (after the renames and columns, at
 // the first table or at the second) leaves no rename, no column and no subagent
-// table.
+// table; and a v20→v21 hop over makeV20Fixture's rows failing in its backfill,
+// at its core identity or at its COMMIT leaves no core object, column, record
+// or identity.
 func TestMigrationRollback(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -691,11 +705,16 @@ func TestMigrationRollback(t *testing.T) {
 		{"v8→v9 at the agent backfill, after every rename and column", 8, breakV9Backfill, "backfill agent"},
 		{"v8→v9 at subagents, after every rename and column", 8, breakV9FirstSubagentTable, "create subagent tables"},
 		{"v8→v9 at subagent_launches, after subagents was created", 8, breakV9SecondSubagentTable, "create subagent tables"},
+		{"v20→v21 in the backfill, after the core DDL", 20, breakV21Backfill, "injected backfill failure"},
+		{"v20→v21 at the core identity, after the whole backfill", 20, breakV21CoreIdentity, "injected identity failure"},
+		{"v20→v21 at its COMMIT, a deferred foreign key", 20, breakV21Commit, "FOREIGN KEY constraint failed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var path string
 			switch tc.from {
+			case 20:
+				path = makeV20Fixture(t, t.TempDir()).path
 			case 4:
 				path = makeV4HistoryFixture(t, t.TempDir()).path
 			case 5:

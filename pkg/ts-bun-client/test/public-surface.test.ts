@@ -421,3 +421,61 @@ test("public-surface: only status, get and list agent results carry confirmation
       /^\s*(confirmations|process_liveness)\??\s*:/m);
   }
 });
+
+
+// SR-4.1, SR-4.3, SR-5.4: a lookup answers found, unknown or retention_expired, its payload null unless
+// found; force-delivery's own force_result is never null, a forced send's is optional, only a pending or
+// running force lacks ended_at, and every force_result lists carried_results; running is a fifth outcome
+// (MI decision 10).
+test("public-surface: lookups answer a Lookup with a payload null unless found", () => {
+  const types = typesGolden();
+  expect(types).toMatch(/export type Lookup = "found" \| "unknown" \| "retention_expired";/);
+  expect(types).toMatch(/export type ForceOutcome = "handed_over" \| "pending" \| "refused" \| "failed" \| "running";/);
+  for (const [iface, shape] of [
+    ["GetForceResult", /\blookup\s*:\s*Lookup\s*;/],
+    ["GetForceResult", /\bforce_result\s*:\s*ForceResult\s*\|\s*null\s*;/],
+    ["GetDeliveryResult", /\blookup\s*:\s*Lookup\s*;/],
+    ["GetDeliveryResult", /\bresult\s*:\s*DeliveryResult\s*\|\s*null\s*;/],
+    ["ForceDeliveryResult", /\bforce_result\s*:\s*ForceResult\s*;/],
+    ["SendKeysResult", /\bforce_result\?\s*:\s*ForceResult\s*;/],
+    ["ForceResult", /\boutcome\s*:\s*ForceOutcome\s*;/],
+    ["ForceResult", /\bended_at\s*:\s*string\s*\|\s*null\s*;/],
+    ["ForceResult", /\bcarried_results\s*:\s*DeliveryResult\[\]\s*;/],
+  ] as const) expect(interfaceBody(types, iface), iface).toMatch(shape);
+});
+
+test("public-surface: only get rows require the persisted busy_send union", () => {
+  const types = typesGolden();
+  expect(interfaceBody(types, "GetResult")).toMatch(/\bbusy_send\s*:\s*"covered"\s*\|\s*"not_covered"\s*;/);
+  for (const iface of ["ListRow", "StatusResult"]) expect(interfaceBody(types, iface)).not.toMatch(/\bbusy_send\b/);
+});
+
+// SR-5.6: the covered-only read blocks are optional (omitted for an uncovered row), each only where it is shown.
+test.each([
+  ["GetResult", ["agent_defaults", "delivery", "delivery_capabilities"]],
+  ["StatusResult", ["agent_defaults", "delivery"]],
+  ["ListRow", ["agent_defaults"]],
+] as const)("public-surface: %s carries exactly its optional covered-only blocks", (iface, want) => {
+  const declared = [...interfaceBody(typesGolden(), iface).matchAll(/^\s*(agent_defaults|delivery|delivery_capabilities)(\??)\s*:/gm)];
+  expect(declared.map(([, name, optional]) => `${name}${optional}`)).toEqual(want.map((name) => `${name}?`));
+});
+
+test("public-surface: the covered-only blocks' types are exported from the package root", () => {
+  const index = fs.readFileSync(path.join(fixtureDir, "index.d.ts.golden"), "utf8");
+  for (const name of ["AgentDefaults", "DeliveryFacts", "DeliveryCapabilities", "DeliveryModeLimits", "ForceCapability",
+    "ForceStateCapability", "ConfirmFromTranscriptsCapability"]) expect(index, name).toMatch(new RegExp(`\\b${name}\\b`));
+});
+
+// SR-4.4, SR-4.5 (E5 Main Agent decision 4): delivery_capabilities carries a nullable force object and the closed
+// Confirm From Transcripts capability with its reason code.
+test("public-surface: delivery_capabilities declares force and Confirm From Transcripts", () => {
+  const types = typesGolden();
+  expect(types).toMatch(/export type ConfirmFromTranscriptsCapability = "can_confirm" \| "not_needed" \| "cannot_confirm";/);
+  for (const [iface, shape] of [
+    ["DeliveryCapabilities", /\bforce\s*:\s*ForceCapability\s*\|\s*null\s*;/],
+    ["DeliveryCapabilities", /\bconfirm_from_transcripts_capability\s*:\s*ConfirmFromTranscriptsCapability\s*;/],
+    ["DeliveryCapabilities", /\bconfirm_from_transcripts_reason\s*:\s*string\s*;/],
+    ["ForceCapability", /\bstates\s*:\s*ForceStateCapability\[\]\s*;/],
+    ["ForceStateCapability", /\boutcome\s*:\s*"handed_over"\s*\|\s*"pending"\s*\|\s*"refused"\s*;/],
+  ] as const) expect(interfaceBody(types, iface), iface).toMatch(shape);
+});

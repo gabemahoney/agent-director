@@ -202,5 +202,11 @@ func (s *Store) CursorMissingReadContextErr() error {
 
 // RecoveryRows projects a fixed lightweight selection under the same proof guard.
 func (s *CursorMissingReads) RecoveryRows(ids []string, settle SettleRead) ([]Spawn, error) {
-	return s.Store.recoveryRows(ids, settle, s.proofs)
+	return s.Store.recoveryRows(ids, settle, s.proofs, nil)
+}
+
+// RecoveryRowsWithDelivery is RecoveryRows with Store.RecoveryRowsWithDelivery's
+// delivery facts.
+func (s *CursorMissingReads) RecoveryRowsWithDelivery(ids []string, settle SettleRead, delivery *BusySendDeliveries) ([]Spawn, error) {
+	return s.Store.recoveryRows(ids, settle, s.proofs, delivery)
 }

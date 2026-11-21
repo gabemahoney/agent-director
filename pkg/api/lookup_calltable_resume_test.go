@@ -24,14 +24,15 @@ import (
 
 // callTableResumeAgents are the agent processes a Gone cell runs with, each
 // leaving the lookup to decide (LFR M6); a running one gives the
-// starting-session rule with no session instead (callTableResumeOwnOld).
+// starting-session rule with no session instead (callTableResumeOwnOld). The
+// rows are Claude's, covered, so an unreadable process refuses resume and
+// reuse before the lookup (TestBusySendLifecycleOwnedIssuerExclusion).
 var callTableResumeAgents = []struct {
 	name  string
 	agent agentState
 }{
 	{"process gone", agentGone},
 	{"no process recorded", agentNotRecorded},
-	{"process unreadable", agentUnreadable},
 }
 
 // runCallTableResume runs cell once, or, for a Gone column (its agent gone),

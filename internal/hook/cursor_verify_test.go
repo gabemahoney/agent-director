@@ -86,7 +86,7 @@ func TestCursorHandleRequiresIndependentVerifier(t *testing.T) {
 								t.Fatalf("incorrect verifier evidence: %+v, %q, ended=%v", got, transcript, ended)
 							}
 							if tc.verifier == "replacement" {
-								if err := st.DeleteSpawn(id); err != nil {
+								if err := storefix.DeleteWithExit(t, st, id); err != nil {
 									t.Fatal(err)
 								}
 								seedGateRow(t, dbPath, id, store.StateWaiting, "replacement-session", apitest.WithAgent(store.AgentCursor), apitest.WithLaunchIdentity(ssgNewPane))

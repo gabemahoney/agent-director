@@ -66,10 +66,17 @@ func matrixCases() map[string]matrixCase {
 		"list-subagents": {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
 
 		"send-keys": {args: `{"instance_id":"` + matrixID + `","text":"hi"}`, setup: seedEnded("off")},
-		"read-pane": {args: `{"instance_id":"` + matrixID + `","n_lines":1,"ansi":false}`, setup: seedEnded("off")},
-		"kill":      {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
-		"pause":     {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
-		"resume":    {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+
+		// force-delivery refuses the seeded row's force and succeeds; the
+		// lookups' ids must decode, or the verb refuses an empty one with
+		// ErrInvalidFlags, which the decode check below fails on.
+		"force-delivery": {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+		"get-force":      {args: `{"force_id":"aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"}`},
+		"get-delivery":   {args: `{"caller_uuid":"aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa","delivery_request_id":"matrix-request"}`},
+		"read-pane":      {args: `{"instance_id":"` + matrixID + `","n_lines":1,"ansi":false}`, setup: seedEnded("off")},
+		"kill":           {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+		"pause":          {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+		"resume":         {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
 
 		// decide: relay_mode must be "on" so the row passes the
 		// ErrRelayModeOff check after the id lookup succeeds.

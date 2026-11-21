@@ -10,13 +10,15 @@ import (
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// The real dispatcher preserves the inspection outcome in JSON-RPC error data.
+// The real dispatcher preserves the inspection outcome in JSON-RPC error data,
+// on a Codex row: a Claude row's pause is keyless, with no exit keys to time out.
 func TestMCPPauseTimeoutInspectionRequired(t *testing.T) {
 	e := newEnv(t)
 	const id = "mcp-pause-timeout"
-	e.seed(t, id, store.StateWaiting)
+	e.seed(t, id, store.StateWaiting, apitest.WithAgent("codex"))
 	e.rec.SeedRowSession(t, e.storePath, id)
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(configPath, []byte("[pause]\ntimeout_seconds = 1\n"), 0600); err != nil {

@@ -37,6 +37,9 @@
 //	set-settle           Write an existing row's settle columns: its settled
 //	                     state and the time of its last raw state change
 //	                     (apitest.SetSettle; b.3ie).
+//	seed-pause-surface   Seed a covered Claude row in one conditional pause
+//	                     shape and print its exact err_details
+//	                     (apitest.SeedPauseSurface; t2.xis.8a.sv).
 //	json-schema          Print the result shapes of every subcommand.
 //	install-write-failure Install canonical failure SQL on an existing temp DB;
 //	                     returns a handle, without opening/migrating a Store.
@@ -80,6 +83,7 @@ var availableSubcmds = []string{
 	"seed-needs-intelligence-surface",
 	"seed-idle-screen-surface",
 	"set-settle",
+	"seed-pause-surface",
 	"install-write-failure",
 	"remove-write-failure",
 	"json-schema",
@@ -123,6 +127,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return cmdSeedReadSurfaceStore(args[1:], stdout, stderr)
 	case "set-settle":
 		return cmdSetSettle(args[1:], stdout, stderr)
+	case "seed-pause-surface":
+		return cmdSeedPauseSurface(args[1:], stdout, stderr)
 	case "install-write-failure", "remove-write-failure":
 		return cmdWriteFailure(args[0], args[1:], stdout, stderr)
 	case "write-family-transition":
@@ -158,6 +164,7 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		noPreTrust         = fs.Bool("no-pre-trust", false, "record the pre-trust opt-out on the row (apitest.WithNoPreTrust); default records pre-trust allowed")
 		agent              = fs.String("agent", "", "the row's agent (claude|codex|cursor|droid); empty keeps SeedSpawn's claude (apitest.WithAgent)")
 		noSubagentTracking = fs.Bool("no-subagent-tracking", false, "disable subagent tracking on the row (apitest.WithNoSubagentTracking); default keeps tracking enabled")
+		wakePath           = fs.String("busy-send-wake", "", "seed a Claude hook route and wake endpoint for busy-send tests")
 		noIdentity         = fs.Bool("no-launch-identity", false, "seed a row from before the release: no launch token, socket or identity (apitest.WithNoLaunchToken); not with --socket")
 	)
 
@@ -260,6 +267,12 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		printError(stderr, err)
 		return 1
+	}
+	if *wakePath != "" {
+		if err := apitest.SeedBusySendRoute(*storePath, instanceID, "claude_hooks", *wakePath); err != nil {
+			printError(stderr, err)
+			return 1
+		}
 	}
 	if startupSession != "" {
 		if err := apitest.AdmitContextStartup(*storePath, instanceID, startupSession, startupPath, *contextWriterPID); err != nil {
@@ -623,6 +636,7 @@ var resultSchemas = map[string]map[string]string{
 	"set-settle": {
 		"instance_id": "string",
 	},
+	"seed-pause-surface": {"instance_id": "string", "err_details": "object"},
 }
 
 func cmdJSONSchema(_ []string, stdout, stderr io.Writer) int {

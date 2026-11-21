@@ -102,7 +102,7 @@ Exported factories (in pkg/api/apitest/seeds.go):
   fallen back) and records its `hook_gone_at` in the past (old enough for
   `record-pane-answer`); each only when positive.
 - `SeedTemplate(templatesDir, name, body string) (string, error)`
-- `TemplateBody(TemplateFields{Agent, AgentArgs, CWD, RelayMode, ExtraEnv, Labels, Permissions, RawKeys}) string`
+- `TemplateBody(TemplateFields{Agent, AgentArgs, CWD, RelayMode, ExtraEnv, Labels, Permissions, SendMode, ConfirmedDelivery, ConfirmFromTranscripts, RawKeys}) string`
   (pkg/api/apitest/template_body.go) — builds the `body` for `SeedTemplate`,
   encoded as `make-template` encodes it. A new template body MUST be built
   with it, not held as template TOML text of the test's own; `RawKeys` carries
@@ -417,41 +417,52 @@ build each case's old-layout install with the fixture in
 
 ## Ordinary input delivery tests
 
-Run these tests only through `make sandbox CMD="…"`, as required by
-`CLAUDE.md`. A supported delivery test needs native evidence, not a hook-state
-transition or a tmux send returning nil. In `pkg/api`, reuse
-`newNativeSubmissionEnv` and `deliveryBackend` from
-`sendkeys_submission_fixture_test.go`: they keep real store and tmux ownership
-guards while replacing native readiness, terminal samples and proof I/O through
-`SendKeysEnv.Input`. Advance the fixture clock through its injected `Sleep`;
-do not add wall-clock sleeps or weaken readiness for a recorder. Test native
-behavior in dedicated feature tests using these explicit helpers. Keep the
-shared pane, relay, pending-submission and runnable-example fixtures on their
-established input contract; do not make their default helpers enable native
-delivery or change their assertions to accommodate it. Test native
-capability separately from readiness: an unsupported launch retains literal text
-and one Enter with no exact-proof result, while a supported launch lacking
-readiness attempts no input. Compatibility regressions in
-`sendkeys_compatibility_regression_test.go` cover the existing state, relay and
-dialog refusals before native selection, pending Claude terminal readiness and
-hook observation, and unresolved native ownership blocking fallback resends.
-`sendkeys_submission_test.go` covers bounded pending Codex and Claude hook
-observation. Tests of manual transport should explicitly choose a manual operation.
+Run suites on the scheduler; use the build guide fast checks and targeted
+race runs for changed packages. Test each behavior at its owning Go API/store
+layer first, without repeating it at the same level. Docker covers actual
+tmux/hook paths. Reuse injected clocks; do not add wall-clock sleeps.
 
-Native adapter/parser tests in `internal/inputdelivery` reuse `evidenceSession`
-with its in-memory `evidencePersistence`, plus private native JSONL records from
-`claudeRecord`, `writeEvidence` and the Codex fixtures. SQLite authority tests
-reuse `sqliteSubmission`/`sqliteDeliveryBackend` in `pkg/api`; the parser fixture
-does not prove persistence. Check exact new content and
-session/process provenance, prefix watermarks, late evidence and durable
-reconciliation. Include an older identical record in a newly discovered Codex
-path so a descriptor discovered after input cannot masquerade as fresh proof.
-For unresolved delivery, assert conservative outcome fields and absence of
-replayed text or Enter. An empty queue never suffices for a submitted result.
-`launch_identity_regression_test.go` records the version probe's and real
-launch's environments: the probe must receive no
-`AGENT_DIRECTOR_*`, `TMUX` or `TMUX_PANE`, while the real launch retains its
-environment.
+**Covered Claude.** Test durable Message admission and Results, confirmed pair
+repeats/conflicts, byte-preserved text, limits, waits and accepted order through
+`pkg/api/busy_send_admission_test.go` and the `internal/store/busy_send_*`
+fixtures. Reuse `apitest` busy-send seed/read helpers and `storefix` exit evidence,
+not direct record edits. Exercise the shipped covered set for activation;
+seed different coverage only to test deliberately different persisted facts.
+State, readiness, permission and dialog boundaries hold accepted Messages;
+empty text and raw-key parameter presence are malformed. Never expect a
+covered send to type, parse native transcript proof or make a fallback resend.
+
+For the owned Claude route, reuse `newWakeEnv`/`newResumedWakeEnv` in
+`internal/hook/busy_send_claude_test.go`, their captured parent identities and
+injected I/O. Follow the [admission and order distinction](architecture.md#busy-send-admission-and-results).
+Assert one
+whole prompt per wake, subsequent prompts at subsequent turn ends, stale-owner
+exclusion, lost-wake delay, no delivery from reads and conservative Results.
+`TestClaudeWakeDrainsBacklog` owns the 1,000-Message regression; do not duplicate
+it. Lifecycle tests reuse `newKeylessEnv`, `killEnv` and the shared exit-evidence
+helpers for Held carry, no startup replay and retirement after exit evidence.
+Docker cases extend `busy-send-claude-wait-turn` through
+`test/driver/busy-send-claude.sh` and `pane-hook.sh --stderr-pipe`; their tmux
+call recorder proves no product typing, including permission recovery.
+
+**Uncovered agents.** Native/manual tests choose an uncovered provider explicitly.
+In `pkg/api`, reuse `newNativeSubmissionEnv` and `deliveryBackend` from
+`sendkeys_submission_fixture_test.go`, advancing the injected clock. Keep
+state, permission, dialog, readiness and unresolved-ownership refusals, manual
+transport and bounded pending Codex observation. Unsupported launches retain
+fallback transport without exact proof; supported but unready launches send
+nothing. Do not enable native input in shared pane or relay fixtures.
+
+Native parser tests in `internal/inputdelivery` reuse `evidenceSession`,
+`evidencePersistence`, `writeEvidence` and provider records. SQLite journal
+authority stays covered in `internal/inputdelivery`, store and admin migration
+tests; do not recreate the retired Claude API journal fixture. Check exact new
+content, session/process provenance, watermarks and late evidence, including an
+older identical record in a newly discovered Codex path. Unresolved outcomes
+never replay text or Enter; an empty queue is not proof. Keep
+`launch_identity_regression_test.go` environment checks: no
+`AGENT_DIRECTOR_*`, `TMUX` or `TMUX_PANE` reaches a version probe, while the real
+launch retains its environment.
 
 ## Synthetic-regression test convention
 

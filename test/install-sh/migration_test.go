@@ -323,6 +323,77 @@ func TestMigrationWhileTheMoveIsDue(t *testing.T) {
 	})
 }
 
+// TestMigrationExemptCoreHop: the exempt v20→v21 hop through the real
+// installer (SR-7.1; Plan b.xis "Exempt-hop authorization"). A genuine
+// v0.18.4 install's v20 store, upgraded by this tree's installer, takes the
+// post-v16 path: the ordinary list open with the exact sentinel step 3 writes
+// beside the resolved store, no migrate-journal. It lands at the current
+// version with the busy-send core and the row's conversation and current
+// Launch, and consumes the sentinel. A second install is file-only and
+// writes no sentinel; v0.18.4's own binary then refuses the store
+// (ErrSchemaMismatch) and leaves it as it is, so the way back is the
+// restore of docs/migration-guide.md §5.
+func TestMigrationExemptCoreHop(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and installs v0.18.4")
+	}
+	r := genuineRelease(t, "v0.18.4")
+	h := newMoveHome(t)
+	h.InstallRelease(r)
+	db := filepath.Join(h.New, "state.db")
+	if v := moveUserVersion(t, h, db); v != "20" {
+		t.Fatalf("v0.18.4 made a store at v%s; want v20", v)
+	}
+	h.Sqlite(db, "INSERT INTO spawns (instance_id, state, cwd, tmux_session_name, relay_mode, agent, life_number, launch_token) "+
+		"VALUES ('kept', 'ended', '/work/kept', 'ad-kept', 'off', 'codex', 2, '0123456789abcdef');")
+	current := moveCurrentVersion(t, h)
+	sentinel := filepath.Join(h.New, "migrate-authorized")
+
+	res := moveMustInstall(t, h)
+	for _, line := range []string{"  schema  : authorized migration v20→v" + current + " (sentinel " + sentinel + ")",
+		"  schema  : migration verified — state.db now at v" + current} {
+		if !strings.Contains(res.Stdout, line+"\n") {
+			t.Errorf("stdout lacks %q:\n%s", line, res.Stdout)
+		}
+	}
+	for _, crossing := range []string{"  journal :", "  cutover :"} {
+		if strings.Contains(res.Stdout, crossing) {
+			t.Errorf("a post-v16 upgrade took the cutover path (%q):\n%s", crossing, res.Stdout)
+		}
+	}
+	if _, err := os.Lstat(sentinel); !os.IsNotExist(err) {
+		t.Errorf("the hop's authorization was not consumed: %v", err)
+	}
+	want := fmt.Sprintf("codex|%s|migrated|current|2|0123456789abcdef|1|0\n", store.BusySendCoverageForAgent("codex"))
+	if got := h.Sqlite(db, "SELECT c.provider, c.busy_send, l.kind, l.phase, l.life_number, l.launch_token, "+
+		"s.busy_conversation_id = c.conversation_id, s.turn_starts FROM spawns s JOIN busy_conversations c USING (instance_id) "+
+		"JOIN busy_send_launches l ON l.conversation_id = c.conversation_id WHERE s.instance_id = 'kept';", "-readonly"); got != want {
+		t.Errorf("the row's recorded conversation and Launch = %q; want %q", got, want)
+	}
+	if got := h.Sqlite(db, "SELECT value = 'busy-send-core-v1:' || (SELECT value FROM store_meta WHERE key = 'store_id') FROM store_meta WHERE key = 'busy_send_core';", "-readonly"); got != "1\n" {
+		t.Errorf("busy-send core identity check = %q; want 1", got)
+	}
+
+	migrated := h.Sqlite(db, ".dump")
+	res = moveMustInstall(t, h)
+	if line := "  schema  : not inspected (file-only upgrade)"; !strings.Contains(res.Stdout, line+"\n") {
+		t.Errorf("the second install's stdout lacks %q:\n%s", line, res.Stdout)
+	}
+	if _, err := os.Lstat(sentinel); !os.IsNotExist(err) {
+		t.Errorf("the second install wrote a sentinel: %v", err)
+	}
+	if got := h.Sqlite(db, ".dump"); got != migrated {
+		t.Error("the second install changed the store")
+	}
+	old := h.Run(r.Pair.Main, "list")
+	if old.Code == 0 || !strings.Contains(old.Stderr, `"err_name":"ErrSchemaMismatch"`) {
+		t.Errorf("v0.18.4's list over the v%s store: exit %d, stderr %q; want an ErrSchemaMismatch refusal", current, old.Code, old.Stderr)
+	}
+	if got := h.Sqlite(db, ".dump"); got != migrated {
+		t.Error("v0.18.4's refused open changed the store")
+	}
+}
+
 // G10 (doc-review D3): after a committed cutover's verification failed, the
 // operator's direct command refuses the unresolved root with
 // legacy_root_access_unestablished's action, "make the store and every legacy
@@ -522,7 +593,11 @@ func TestAdviceFollow_G14_AuthorizationMissingRunsInstaller(t *testing.T) {
 		t.Skip("administrator process inventory requires Linux")
 	}
 	h := newMoveHome(t)
-	moveMustInstall(t, h)
+	// This is legacy/exempt authorization advice. A versioned layout with an
+	// old configured store instead follows the explicit non-purge recovery
+	// covered by TestStagedRetainedCustomStoreExemptRecovery.
+	h.Copy(h.Pair.Main, filepath.Join(h.New, "bin/agent-director"), 0755)
+	h.Copy(h.Pair.Admin, filepath.Join(h.New, "admin/agent-director-admin"), 0700)
 	current := moveCurrentVersion(t, h)
 	db := filepath.Join(h.Home, "custom", "state.db")
 	h.WriteStore(db) // genuine released schema, with the fixture's journal flags and no sentinel

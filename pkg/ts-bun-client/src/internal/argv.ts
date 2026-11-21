@@ -12,8 +12,12 @@
  *   - Mapping between camelCase method name and kebab CLI verb follows the
  *     same mapping in src/internal/verbs.ts.
  *   - Optional fields are omitted when undefined / falsy.
- *   - Boolean flags (--no-pre-trust, --reuse-finished, --ansi, --overwrite)
- *     are only appended when the field is explicitly true.
+ *   - Boolean flags (--no-pre-trust, --reuse-finished, --ansi, --overwrite,
+ *     --only-if-waiting) are only appended when the field is explicitly true.
+ *   - Busy send's options (send_mode, confirmed_delivery, caller_uuid, force,
+ *     confirm_from_transcripts) are appended whenever the field is present
+ *     (!== undefined), a boolean as --flag=true or --flag=false, so an explicit
+ *     false or wait_turn reaches the verb's coverage check.
  *   - Global flags (b.32k: --store-path, --home, --tmux-command; b.78b:
  *     --create-if-missing) appear BEFORE the verb token so the CLI's
  *     global-flag parser in internal/clisetup/globalflags.go strips them
@@ -52,6 +56,10 @@ import type {
   ListParams,
   ListSubagentsParams,
   PauseParams,
+  ForceDeliveryParams,
+  GetForceParams,
+  GetDeliveryParams,
+  AgentDefaultParams,
 } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -177,6 +185,15 @@ function buildVerbFlags(verb: VerbName, params: unknown): string[] {
       return buildGetMany(params as GetManyParams);
     case "send-keys":
       return buildSendKeys(params as SendKeysParams);
+    case "force-delivery":
+      return ["force-delivery", "--instance-id", (params as ForceDeliveryParams).instance_id];
+    case "get-force":
+      return ["get-force", "--force-id", (params as GetForceParams).force_id];
+    case "get-delivery": {
+      const p = params as GetDeliveryParams;
+      refuseMalformedUnicode("get-delivery", "delivery_request_id", p.delivery_request_id);
+      return ["get-delivery", "--caller-uuid", p.caller_uuid, "--delivery-request-id", p.delivery_request_id];
+    }
     case "read-pane":
       return buildReadPane(params as ReadPaneParams);
     case "kill":
@@ -274,6 +291,8 @@ function buildSpawn(p: SpawnParams): string[] {
     for (const a of p.ask) f.push("--ask", a);
   }
 
+  f.push(...agentDefaultFlags(p));
+
   // agent_args go after '--' as positional args
   if (p.agent_args && p.agent_args.length > 0) {
     f.push("--", ...p.agent_args);
@@ -355,15 +374,54 @@ function buildGet(p: GetParams): string[] {
 }
 
 function buildSendKeys(p: SendKeysParams): string[] {
+  refuseMalformedUnicode("send-keys", "text", p.text);
+  refuseMalformedUnicode("send-keys", "delivery_request_id", p.delivery_request_id);
   const f: string[] = ["send-keys", "--instance-id", p.instance_id];
   if (p.text !== undefined) f.push("--text", p.text);
   if (p.allow_pending === true) f.push("--allow-pending");
+  // The raw-key fields are forwarded whenever present, false and 0 included,
+  // because a Covered Agent's send refuses their presence; other agents read
+  // the same values as omitted.
   if (p.no_enter === true) f.push("--no-enter");
+  else if (p.no_enter === false) f.push("--no-enter=false");
   if (p.key !== undefined) f.push("--key", p.key);
   if (p.expect_pane_sha256 !== undefined) f.push("--expect-pane-sha256", p.expect_pane_sha256);
-  if (p.n_lines !== undefined && p.n_lines !== 0) f.push("--n-lines", String(p.n_lines));
+  if (p.n_lines !== undefined) f.push("--n-lines", String(p.n_lines));
   if (p.request_token !== undefined) f.push("--request-token", p.request_token);
   if (p.as !== undefined) f.push("--as", p.as);
+  if (p.delivery_request_id !== undefined) f.push("--delivery-request-id", p.delivery_request_id);
+  if (p.send_mode !== undefined) f.push("--send-mode", p.send_mode);
+  if (p.confirmed_delivery !== undefined) f.push(`--confirmed-delivery=${p.confirmed_delivery}`);
+  if (p.caller_uuid !== undefined) f.push("--caller-uuid", p.caller_uuid);
+  if (p.force !== undefined) f.push(`--force=${p.force}`);
+  return f;
+}
+
+/** Refuse lone UTF-16 surrogates before CLI argument encoding replaces them. */
+function refuseMalformedUnicode(verb: "send-keys" | "get-delivery", name: string, value: string | undefined): void {
+  if (value === undefined) return;
+  // Iteration combines valid surrogate pairs into a single code point.
+  for (const char of value) {
+    const point = char.codePointAt(0)!;
+    if (point >= 0xd800 && point <= 0xdfff) {
+      const problem = verb === "get-delivery"
+        ? "delivery_request_id must be nonempty UTF-8; nothing was read"
+        : `${name} must be valid UTF-8; nothing was stored, sent or typed`;
+      throw new ErrInvalidFlags(verb, "ErrInvalidFlags", `${verb}: ${problem}`);
+    }
+  }
+}
+
+/**
+ * agentDefaultFlags returns spawn's, resume's and make-template's busy-send
+ * Agent Default flags for each field present, false and wait_turn included.
+ */
+function agentDefaultFlags(p: AgentDefaultParams): string[] {
+  const f: string[] = [];
+  if (p.send_mode !== undefined) f.push("--send-mode", p.send_mode);
+  if (p.confirmed_delivery !== undefined) f.push(`--confirmed-delivery=${p.confirmed_delivery}`);
+  if (p.confirm_from_transcripts !== undefined)
+    f.push(`--confirm-from-transcripts=${p.confirm_from_transcripts}`);
   return f;
 }
 
@@ -416,7 +474,7 @@ function buildRecordPaneAnswer(p: RecordPaneAnswerParams): string[] {
 }
 
 function buildResume(p: ResumeParams): string[] {
-  return ["resume", "--instance-id", p.instance_id];
+  return ["resume", "--instance-id", p.instance_id, ...agentDefaultFlags(p)];
 }
 
 function buildExpire(p: ExpireParams): string[] {
@@ -433,6 +491,7 @@ function buildMakeTemplate(p: MakeTemplateParams): string[] {
   if (p.relay_mode !== undefined && p.relay_mode !== "")
     f.push("--relay-mode", p.relay_mode);
   if (p.overwrite === true) f.push("--overwrite");
+  f.push(...agentDefaultFlags(p));
 
   // Repeatable --label k=v
   if (p.label) {
@@ -490,5 +549,7 @@ function buildList(p: ListParams): string[] {
 }
 
 function buildPause(p: PauseParams): string[] {
-  return ["pause", "--instance-id", p.instance_id];
+  const f: string[] = ["pause", "--instance-id", p.instance_id];
+  if (p.only_if_waiting === true) f.push("--only-if-waiting");
+  return f;
 }

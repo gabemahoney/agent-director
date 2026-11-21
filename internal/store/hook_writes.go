@@ -33,6 +33,9 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // b.146 problem 3) and advances row_version by one; the ended transition and
 // every transition to a state other than pending set launch_started_at to
 // NULL, and a soft refresh leaves it unchanged (SR-5.2).
+// Applied nonterminal/gated refresh writes also resolve any busy-send
+// candidate for this Launch in their transaction. A read or rejected gate
+// never publishes a candidate.
 //
 // The gate (SR-22.9): every branch's UPDATE carries hookGateSQL in its own
 // WHERE, so it applies only when gate.ParentPID and gate.ParentStart are the
@@ -46,7 +49,11 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // its current turn unless a newer one is current), and so does a held
 // UserPromptSubmit (reportWorkingHeld). Either turn-start write invalidates
 // the pane baseline and any idle_screen candidate/display in its statement,
-// even when state stays working, without advancing permission_epoch.
+// even when state stays working, without advancing permission_epoch. An
+// owned main-agent Claude UserPromptSubmit (gate.ClaudeTurnStart) advances
+// spawns.turn_starts by one in the same statement as its applied or held
+// write (claudeTurnStartSet, claudeHeldTurnSQL); a write that does not apply
+// advances nothing.
 //
 // A late Codex tool hook (b.x72; codexToolTurn): a PreToolUse or PostToolUse
 // whose turn is not the row's current, not-ended turn
@@ -166,7 +173,9 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 		// missing before its agent reported in (SR-22.9's gate admits no
 		// other process), so a row a hook moves to a live state never keeps
 		// its old ended_at. A target other than pending clears the launch
-		// start in the same statement; a pending target (no hook passes one
+		// start in the same statement. Reviving the lifecycle row never clears
+		// its busy-send Launch End or restores that Launch's delivery authority.
+		// A pending target (no hook passes one
 		// today) leaves it (SR-5.2). The state is written with its settle
 		// columns (hookWriteStateSet, b.3ie): decided in this one statement,
 		// never from priorState, which feeds the trail only.
@@ -255,14 +264,16 @@ const idleSet = `idle_since = CURRENT_TIMESTAMP`
 func gatedHookUpdate(instanceID string, gate HookGate, set string, setArgs []any, jsonlPath string, jsonlPresent bool) (string, []any) {
 	recordSet, recordArgs := hookSessionRecordSet(gate, jsonlPath, jsonlPresent)
 	turnSet, turnArgs := codexTurnSet(gate)
+	startSet, startArgs := claudeTurnStartSet(gate)
 	q := `UPDATE spawns
 	         SET ` + set + `,
 	             liveness_unverified_since = NULL, liveness_note = NULL,
-	             ` + recordSet + turnSet + hookPaneStartSet + `,
+	             ` + recordSet + turnSet + startSet + hookPaneStartSet + `,
 	             ` + rowVersionAdvance + `
 	       WHERE instance_id = ? AND ` + hookGateSQL
 	args := append(append([]any{}, setArgs...), recordArgs...)
 	args = append(args, turnArgs...)
+	args = append(args, startArgs...)
 	args = append(args, gate.ParentStart, instanceID)
 	args = append(args, hookGateArgs(gate)...)
 	return q, args
@@ -276,7 +287,9 @@ func gatedHookUpdate(instanceID string, gate HookGate, set string, setArgs []any
 // failure.
 func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string, setArgs []any, priorState, trailNew string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool, errPrefix string) (UpsertOutcome, HookApplied, error) {
 	q, args := gatedHookUpdate(instanceID, gate, set, setArgs, jsonlPath, jsonlPresent)
-	res, err := s.execFamily(instanceID, q, args...)
+	// A gated report from this Launch establishes creation even if the
+	// creator lost its reply or could not publish before this report-in.
+	res, err := s.execBusySendEstablished(instanceID, q, args...)
 	if err != nil {
 		return UpsertError, HookApplied{}, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -326,11 +339,15 @@ func (s *Store) applyWorkingWrite(instanceID string, gate HookGate, set string, 
 	if turnGuarded {
 		q, args = q+` AND `+codexToolTurnCurrentSQL, append(args, gate.CodexTurn, gate.CodexTurn)
 	}
-	moved, err := s.execGuarded(instanceID, q, args, errPrefix)
+	r, err := s.execBusySendEstablished(instanceID, q, args...)
 	if err != nil {
-		return UpsertError, HookApplied{}, err
+		return UpsertError, HookApplied{}, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	if !moved {
+	n, err := r.RowsAffected()
+	if err != nil {
+		return UpsertError, HookApplied{}, fmt.Errorf("%s rows affected: %w", errPrefix, err)
+	}
+	if n == 0 {
 		soft := gate.Cursor != nil
 		if !soft && turnGuarded {
 			if soft, err = s.codexToolTurnLate(instanceID, gate.CodexTurn); err != nil {
@@ -464,9 +481,13 @@ func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggerin
 			return errEndedNotApplied
 		}
 		// One store-clock read, inside the transaction after the write lock and
-		// only once the write applied, shared by the request close's closed_at
-		// and the subagent close's lost_at (SR-3.5).
+		// only once the write applied, shared by the request close's closed_at,
+		// the subagent close's lost_at (SR-3.5) and the busy-send Launch End
+		// the verified agent's own end report establishes (SR-6.2).
 		at := storeNowMillis()
+		if _, err := endBusySendRowLaunch(ctx, conn, s.StoreID(), instanceID, BusySendProcessExited, at); err != nil {
+			return err
+		}
 		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded, at)
 		if err != nil {
 			return fmt.Errorf("close permission requests: %w", err)
@@ -556,11 +577,15 @@ func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, trig
 		{StateCheckPermission, `state = '` + StateCheckPermission + `' AND relay_mode = 'on' AND ` + noRequestHoldsRowSQL},
 	} {
 		q, args := gatedHookUpdate(instanceID, gate, set, stateArgs, jsonlPath, jsonlPresent)
-		moved, err := s.execGuarded(instanceID, q+` AND `+from.cond, args, errPrefix)
+		r, err := s.execBusySendEstablished(instanceID, q+` AND `+from.cond, args...)
 		if err != nil {
-			return UpsertError, HookApplied{}, err
+			return UpsertError, HookApplied{}, fmt.Errorf("%s: %w", errPrefix, err)
 		}
-		if moved {
+		n, err := r.RowsAffected()
+		if err != nil {
+			return UpsertError, HookApplied{}, fmt.Errorf("%s rows affected: %w", errPrefix, err)
+		}
+		if n > 0 {
 			_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
 				"instance_id":           instanceID,
 				"prior_state":           from.state,
@@ -623,7 +648,11 @@ func (s *Store) holdWorkingTransition(instanceID string, gate HookGate, triggeri
 // it, b.146 problem 3), with a main-thread Codex UserPromptSubmit's turn
 // recorded in the same statement (codexHeldTurnSQL; b.x72), so a read never
 // ends the turn before it. That turn write also invalidates the pane baseline
-// and idle_screen candidate/display without changing permission_epoch. The
+// and idle_screen candidate/display without changing permission_epoch. An
+// owned main-agent Claude UserPromptSubmit's write (claudeHeldTurnSQL)
+// advances the Turn Start counter in that same statement, even when
+// idle_since is already NULL, so a turn started under a permission hold is
+// still counted; its state stays check_permission. The
 // no-op ad.spawn.state_transition (prior == new ==
 // the state the gate read saw, soft_refresh false, SR-A-2.2) and
 // UpsertNoChange with an applied result; a missing row or a gate that does
@@ -637,12 +666,15 @@ func (s *Store) reportWorkingHeld(instanceID string, gate HookGate, triggeringEv
 		return UpsertNoChange, notAppliedReason(r), nil
 	}
 	q, args := clearIdleSinceSQL, append([]any{instanceID}, hookGateArgs(gate)...)
-	if gate.CodexTurnStart {
+	switch {
+	case gate.CodexTurnStart:
 		turn := nullableStringArg(gate.CodexTurn)
 		q, args = codexHeldTurnSQL, append([]any{turn, instanceID, turn}, hookGateArgs(gate)...)
+	case gate.ClaudeTurnStart:
+		q, args = claudeHeldTurnSQL, append([]any{gate.SessionID, instanceID, gate.SessionID}, hookGateArgs(gate)...)
 	}
-	if _, err := s.execGuarded(instanceID, q, args, "store: working transition hold idle clear"); err != nil {
-		return UpsertError, HookApplied{}, err
+	if _, err := s.execBusySendEstablished(instanceID, q, args...); err != nil {
+		return UpsertError, HookApplied{}, fmt.Errorf("store: working transition hold idle clear: %w", err)
 	}
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
 		"instance_id":           instanceID,
@@ -790,6 +822,10 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	if n == 0 {
 		_ = tx.Rollback()
 		return s.sessionStartNotApplied(instanceID, gate, errPrefix)
+	}
+	if err := publishBusySendReportedLaunch(context.Background(), tx, instanceID); err != nil {
+		_ = tx.Rollback()
+		return HookApplied{}, false, fmt.Errorf("%s: publish Launch: %w", errPrefix, err)
 	}
 
 	outgoing := gate.Examined.SessionID

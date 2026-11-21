@@ -34,11 +34,13 @@ func (p *paEnv) paGoneLongAgo(t *testing.T, token string) {
 // pane_as and decision the claim (null for unknown), decision_reason
 // pane_outside; a second record is ErrAlreadyDecided. The record is no proof
 // (b.146 step 2c): plain send-keys is then ErrDialogMaybeOpen (the proofs
-// that release it are sendkeys_hold_test.go's).
+// that release it are sendkeys_hold_test.go's). On the rows whose plain
+// send-keys types (paInputAgents): a covered Claude row's admits a Message and
+// is never held; its record-pane-answer is the other tests' here.
 func TestRecordPaneAnswerClaims(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
-	for _, ag := range paAgents {
+	for _, ag := range paInputAgents {
 		for _, tc := range []struct {
 			as       string
 			decision *string
@@ -253,9 +255,10 @@ func TestRecordPaneAnswerClosesAPreV7Request(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
 	e := newKillEnv(t)
+	e.rowAgent = store.AgentCodex // a covered Claude row's plain send-keys admits a Message
 	r := seedRelayRow(t, e, tok)
 	storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, tok, 2*time.Hour)
-	p := &paEnv{killEnv: e, r: r, now: time.Now().UTC().Truncate(time.Millisecond), self: paSender, sks: e.store}
+	p := &paEnv{killEnv: e, r: r, now: time.Now().UTC().Truncate(time.Millisecond), self: paSender, sks: e.store, agent: store.AgentCodex}
 	p.setPane("pane of an old request\n")
 
 	err := p.sendKeys(p.plain("hi"))

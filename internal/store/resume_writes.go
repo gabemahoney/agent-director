@@ -41,6 +41,10 @@ type ResumePrior struct {
 	// and never leaks into the launch the move began.
 	StateEvidence   string
 	ProcessEvidence string
+	// TurnStarts is the earlier Launch's Turn Start counter as the Spawn read
+	// it (Spawn.TurnStarts): the move resets turn_starts to 0 for the Launch it
+	// begins, and a failed resume's restore writes this value back.
+	TurnStarts int64
 }
 
 // moveToPendingEvidence is the move's state record: the resume command's
@@ -76,6 +80,7 @@ var moveToPendingSQL = `UPDATE spawns
         codex_startup             = NULL,
         claude_capacity           = NULL,
         subagent_tracking         = ` + subagentTrackedColumnSQL + `,
+        turn_starts               = 0,
         launch_started_at         = ?,
         launch_token              = ?,
         tmux_socket               = ?,
@@ -92,6 +97,9 @@ var moveToPendingSQL = `UPDATE spawns
 // entries and claimable launches (SR-8.1) in the same transaction, all or
 // nothing. The transaction is begun with BEGIN IMMEDIATE (inImmediateTx,
 // waiting the store's busy timeout for the write lock).
+// It also stages a busy-send candidate Launch in that transaction, retaining
+// the published coverage/conversation until successful creation. See
+// RecordLaunchIdentity and PublishBusySendLaunch for publication.
 //
 // The move is one conditional statement (SR-5.6) that applies only while the
 // row is ended or missing and its row snapshot equals examined, compared on
@@ -112,7 +120,8 @@ var moveToPendingSQL = `UPDATE spawns
 // is not touched. It also sets subagent_tracking, the flag of the launch it
 // begins (SR-9; subagentTrackedColumnSQL, no parameter): from the row's own
 // agent, which the move keeps, 1 for claude and 0 for codex or cursor, over whatever the
-// row held. The statement itself touches no subagent entry; the close below does.
+// row held, and resets turn_starts, the Turn Start counter, to 0 for the
+// Launch it begins. The statement itself touches no subagent entry; the close below does.
 //
 // The close (closeOrphanedRequests, as the ended transition's): every request
 // of the row that still awaits an answer gets closed_at, an undecided one
@@ -150,6 +159,30 @@ var moveToPendingSQL = `UPDATE spawns
 // the row, its requests, its entries and its claimable launches as they were
 // (SR-5.8).
 func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner) (res CondResult, movedVersion int64, err error) {
+	return s.MoveToPendingWithDefaults(instanceID, examined, launchStartedAtMillis, token, socket, parentID, owner, BusySendDefaultsChoice{})
+}
+
+// MoveToPendingWithDefaults is MoveToPending for a resume that overrides
+// Agent Defaults or confirm_from_transcripts: the move stages defaults on its
+// candidate Launch (busy_send_launches.override_*), and only that Launch's
+// publication applies them to the published conversation; a failed, uncertain
+// or replaced candidate leaves the published values as they are (SR-1.4,
+// SR-6.3). An empty choice is MoveToPending exactly.
+func (s *Store) MoveToPendingWithDefaults(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner, defaults BusySendDefaultsChoice) (res CondResult, movedVersion int64, err error) {
+	return s.MoveToPendingWithExit(instanceID, examined, launchStartedAtMillis, token, socket, parentID, owner, defaults, nil)
+}
+
+// MoveToPendingWithExit is MoveToPendingWithDefaults with exit, the positive
+// exit evidence a resume of a covered conversation needs (SR-6.1, SR-6.2;
+// M1's Resume): every owned process of the conversation's Launches judged
+// gone by identity. In the move's own transaction, before the move clears the
+// row's recorded identities, the evidence is validated against the scope read
+// under the write lock (prepareBusySendExit); then the staging records the
+// current Launch's End if it is not yet recorded and applies its Exit
+// (stageBusySendLaunch). An uncovered conversation needs none and ignores it.
+// A covered one with no or stale evidence writes nothing and returns an error
+// holding ErrBusySendExitNotEstablished.
+func (s *Store) MoveToPendingWithExit(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner, defaults BusySendDefaultsChoice, exit *BusySendExitEvidence) (res CondResult, movedVersion int64, err error) {
 	const errPrefix = "store: move to pending"
 	_, evidenceArgs := moveToPendingEvidenceArgs(token)
 	args := append(immediateStateArgs(StatePending), evidenceArgs...)
@@ -167,6 +200,10 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 		closed []closedRequest
 	)
 	err = s.inImmediateTx(instanceID, func(ctx context.Context, conn *sql.Conn) error {
+		scope, err := s.prepareBusySendExitIfFinished(ctx, conn, instanceID, examined, exit)
+		if err != nil {
+			return err
+		}
 		r, err := conn.ExecContext(ctx, moveToPendingSQL, args...)
 		if err != nil {
 			return err
@@ -179,6 +216,9 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 			return errFamilyWriteNotApplied
 		}
 		moved = true
+		if err := s.stageBusySendLaunch(ctx, conn, instanceID, BusySendLaunchResume, defaults, scope, launchStartedAtMillis); err != nil {
+			return err
+		}
 		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded, storeNowMillis())
 		if err != nil {
 			return fmt.Errorf("close permission requests: %w", err)
@@ -228,6 +268,7 @@ var restoreAfterFailedResumeSQL = `UPDATE spawns
         pane_starttime            = ?,
         end_reported_at           = ?,
         subagent_tracking         = ?,
+        turn_starts               = ?,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
   WHERE instance_id = ? AND state = ? AND row_version = ?`
@@ -240,7 +281,8 @@ var restoreAfterFailedResumeSQL = `UPDATE spawns
 // state_changed_ms the statement's clock; b.3ie); writes ended_at, pid, proc_starttime,
 // liveness_unverified_since, liveness_note, end_reported_at and
 // subagent_tracking (1 for prior.SubagentTracking true, else 0; the earlier
-// launch's flag, SR-9) from prior, and
+// launch's flag, SR-9) and turn_starts (the earlier Launch's Turn Start
+// counter) from prior, and
 // launch_token, tmux_socket and the six server and pane identity columns from
 // prior.Identity, each zero value as NULL; writes back prior.ProcessEvidence
 // and prior.StateEvidence, the latter rebound to the restore's raw-state
@@ -268,6 +310,8 @@ var restoreAfterFailedResumeSQL = `UPDATE spawns
 // no pane, and the move cleared it, SR-22.9); CondAbsent when no row
 // has the id. A store failure returns a wrapped error with a zero CondResult,
 // and the row stays as the move left it (SR-5.8).
+// In the same transaction an applied restore marks only its busy-send
+// candidate failed (creation_failed). Published coverage never changed.
 func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, prior ResumePrior) (CondResult, error) {
 	const errPrefix = "store: restore after failed resume"
 	if prior.State != StateEnded && prior.State != StateMissing {
@@ -288,9 +332,10 @@ func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, 
 		positiveIntArg(id.PanePID), nullableStringArg(id.PaneStarttime),
 		positiveInt64Arg(prior.EndReportedAtMillis),
 		boolInt(prior.SubagentTracking),
+		prior.TurnStarts,
 		instanceID, StatePending, movedVersion,
 	)
-	r, err := s.execFamily(instanceID, restoreAfterFailedResumeSQL, args...)
+	r, err := s.execBusySendRestore(instanceID, restoreAfterFailedResumeSQL, args...)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}

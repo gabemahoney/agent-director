@@ -37,6 +37,14 @@ type HookGate struct {
 	CodexTurnStart bool
 	CodexTurnEnd   bool
 	CodexToolTurn  bool
+
+	// ClaudeTurnStart marks an owned main-agent Claude UserPromptSubmit (no
+	// agent_id, a session id from its transcript path): its applied or held
+	// write advances spawns.turn_starts in that same statement (b.7si
+	// t1.7si.nc SR-1.4; claudeTurnStartSet), when the row is a Claude row and
+	// SessionID is its recorded session or it records none. Recorded only,
+	// never a gate: it changes no hook outcome.
+	ClaudeTurnStart bool
 }
 
 // HookApplied says whether a gated hook write applied (SR-22.9; Appendix

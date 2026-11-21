@@ -415,7 +415,6 @@ func TestSendKeysCursorGatewayNotWatched(t *testing.T) {
 			params: func(r killRow) api.SendKeysParams { return api.SendKeysParams{InstanceID: r.ID, Key: "Escape"} }},
 		{name: "character key", agent: cursor,
 			params: func(r killRow) api.SendKeysParams { return api.SendKeysParams{InstanceID: r.ID, Key: "y"} }},
-		{name: "Claude row", agent: "claude", params: plain},
 		{name: "Codex row", agent: "codex", params: plain},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -61,12 +61,59 @@ var ErrSpawnNotInteractive = errors.New("ErrSpawnNotInteractive")
 // resume the row.
 var ErrSubmissionUnconfirmed = errors.New("ErrSubmissionUnconfirmed")
 
+// ErrCantSend is a busy-send refusal (SR-9.4): nothing was stored, sent or
+// typed. Its err_details (CantSendDetails) carry class cant_send, the
+// machine-readable reason, resend_safe and retry_with. Reason
+// agent_not_covered (SR-9.2) answers send-keys naming send_mode,
+// confirmed_delivery, caller_uuid or force, and spawn, reuse, resume or
+// make-template setting an Agent Default or confirm_from_transcripts, when
+// busy send does not cover the Launch the option applies to: send-keys' row's
+// published current Launch (its recorded coverage); a resumed Launch (the
+// conversation's recorded coverage, raised by the agent kind); and a spawn's,
+// reuse's or named-agent template's new Launch (the resolved agent's).
+// resend_safe is true and retry_with new_send (the same call without those
+// options can succeed). It follows malformed-parameter validation and
+// precedes every other cant_send reason.
+var ErrCantSend = errors.New("ErrCantSend")
+
+// ErrSendAcceptedForceFailed means a covered send's Message was accepted or
+// its pair repeated, but its separate force step failed. Its err_details
+// (SendAcceptedForceFailedDetails) carry the accepted Result. Do not send the
+// Message as new. This error says nothing about whether a force was stored;
+// a real force stored before the failure keeps its deadline and recovery.
+var ErrSendAcceptedForceFailed = errors.New("ErrSendAcceptedForceFailed")
+
 // ErrSpawnNotPausable is returned by the pause verb when the target
-// Spawn's state is not pausable (SRD §9). Pausable means `waiting`;
-// `pending` / `working` / `ask_user` / `check_permission` all reject.
-// `ended` / `missing` are not errors — they are no-op success, since
-// the desired post-condition is already true.
+// Spawn's state is not pausable (SRD §9). With only_if_waiting false (the
+// default), pausable means `waiting`; `pending` / `working` / `ask_user` /
+// `check_permission` all reject, and `ended` / `missing` are not errors —
+// they are no-op success, since the desired post-condition is already true.
+// A row whose current Launch is recorded covered is paused keylessly in any
+// live state (SR-6.4), and gets this error, with NotPausableDetails' cause,
+// when its resumable keyless shutdown cannot be established.
+// With only_if_waiting true, the coverage the row's published current Launch
+// recorded decides first, in any state: not_covered returns this error with
+// err_details (NotPausableDetails) cause agent_not_covered (SR-9.2), nothing
+// ended; a Covered Agent not waiting gets cause not_waiting (with
+// observed_state) and one with a turn pending turn_pending, nothing changed
+// (SR-6.5). A pause of a Launch whose pause claim stands gets the claim's
+// answer, nothing signalled: pause_in_progress, pause_uncertain, or the
+// earlier pause's recorded exit_uncertain or failure replayed (Pause has the
+// exceptions).
 var ErrSpawnNotPausable = errors.New("ErrSpawnNotPausable")
+
+// ErrSpawnNotDeletable is agent-director-admin delete's per-id refusal of a
+// row whose published busy-send conversation is covered when positive exit
+// evidence cannot be established for it (SR-6.3; sf-answer-2): an owned
+// process of one of its Launches (the agent, or a hook or delivery job that
+// may still emit) still runs or cannot be checked, or a hand-over is open on a
+// route whose destination cannot be fenced. Nothing changed for that id: no
+// row, custody, Result or Launch was written, and nothing was signalled. Its
+// recovery on a live row is to end the agent (kill, then sweep) and retry the
+// deletion; on a finished row, where kill is a no-op, to retry once its
+// processes have exited (decision 16). An uncovered row is deleted
+// unconditionally, as before.
+var ErrSpawnNotDeletable = errors.New("ErrSpawnNotDeletable")
 
 // ErrPauseTimeout is returned by the pause verb when the target Spawn
 // did not transition to `ended` within `pause.timeout_seconds` after
@@ -93,6 +140,10 @@ var ErrPauseTimeout = errors.New("ErrPauseTimeout")
 // cursor. It is also returned when resume
 // loses a race: the row changed between resume's read and its move to
 // `pending`, and nothing was written.
+// Before those local guards, a covered provider this runtime lacks delegates
+// to a retained covering version. With none, NotResumableDetails carries cause
+// covering_version_unavailable and provider; install a covering version and
+// retry. That refusal changes nothing and launches nothing.
 var ErrSpawnNotResumable = errors.New("ErrSpawnNotResumable")
 
 // ErrNoSessionId is returned by resume when the row's current session_id
@@ -265,8 +316,14 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 //     -, or whose day count is above 106751 (expire), with a description
 //     naming the param and the expected form (b.anw, b.hxn, b.sgw, b.c4n).
 //   - The shared verb layer, for spawn, read-pane, list, decide, send-keys,
-//     get-many and record-pane-answer, so the CLI, MCP, the Go client and the
-//     TypeScript client all return it: runSpawn returns it (wrapped) when an
+//     get-many, record-pane-answer, resume, force-delivery, get-force and
+//     get-delivery, so the CLI, MCP, the Go client and the TypeScript client
+//     all return it: spawn, resume and send-keys for a send_mode other than
+//     wait_turn or steer_turn, and send-keys for a caller_uuid that is not a
+//     hyphenated hexadecimal UUID; force-delivery for an empty instance id;
+//     get-force for a force_id and get-delivery for a caller_uuid that is not
+//     one, or an empty or non-UTF-8 delivery_request_id (SR-1.3);
+//     runSpawn returns it (wrapped) when an
 //     explicit instance id contains an ASCII control character (0x00-0x1f or
 //     0x7f) (SR-9.1); ReadPane for a negative NLines and List for a negative
 //     Limit, before anything is read (b.c4n); decide for a negative
@@ -285,8 +342,9 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 //     older_than with ParseOlderThan, which refuses a negative value first
 //     (the CLI flag-parse and MCP argument sources above).
 //
-// So spawn's, read-pane's, list's, decide's, send-keys' and
-// record-pane-answer's manifest ErrorNames list it; no other callable verb
+// So spawn's, read-pane's, list's, decide's, send-keys', get-many's,
+// record-pane-answer's, resume's, force-delivery's, get-force's and
+// get-delivery's manifest ErrorNames list it; no other callable verb
 // lists it, because the CLI flag-parse and MCP argument emissions are not
 // verb-specific and the expire verb's surfaces never reach Expire's refusal:
 // only a Go caller passing Client.Expire a negative olderThan does. (The

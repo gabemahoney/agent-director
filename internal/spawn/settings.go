@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/installversion"
 	"github.com/gabemahoney/agent-director/internal/layout"
 )
 
@@ -47,6 +47,21 @@ var hookEvents = []hookEventName{
 	hookSessionEnd, hookPermissionRequest, hookSubagentStart, hookSubagentStop,
 }
 
+// hookFileChanged is busy send's owned wake (SR-3.4): registered, with
+// asyncRewake, only for a covered Claude Launch (Resolved.BusySendCovered),
+// beside the eleven state-tracking events, never as a twelfth state report.
+// Claude Code runs it in the background when a path the SessionStart hook
+// returned in watchPaths changes; its exit 2 hands its stderr to the agent as
+// a wake prompt.
+const hookFileChanged hookEventName = "FileChanged"
+
+// hookPostToolBatch is busy send's owned steer (SR-3.4): registered, as a
+// synchronous hook, only for a covered Claude Launch (Resolved.BusySendCovered),
+// beside the owned wake and never as a state report. Claude Code runs it once
+// a batch of tool calls has finished; a parent's stdout may return one Steer
+// Turn prompt as additionalContext.
+const hookPostToolBatch hookEventName = "PostToolBatch"
+
 var matcherFields = map[hookEventName]bool{
 	hookPreToolUse:        true,
 	hookPermissionRequest: true,
@@ -78,7 +93,7 @@ var matcherFields = map[hookEventName]bool{
 const sessionStartHookTimeoutSeconds = 600
 
 // synthesizeSettings builds the inline JSON passed to `claude --settings`.
-// Returns the JSON string and any error from os.Executable / json encoding.
+// Returns the JSON string and any executable-capture or JSON-encoding error.
 //
 // Shape (SRD §6.1; SR-22.9):
 //
@@ -139,6 +154,13 @@ const sessionStartHookTimeoutSeconds = 600
 // form ("command":"<install path> help", through quoteIfWhitespace): it
 // writes nothing, so its parent process does not matter.
 //
+// A covered Claude Launch (r.BusySendCovered; SR-3.4) also gets the owned
+// FileChanged entry, in exec form with "asyncRewake": true and no timeout
+// (hookFileChanged), and the owned PostToolBatch entry, in exec form with no
+// asyncRewake, matcher or timeout (hookPostToolBatch); an uncovered Launch's
+// settings are exactly as before.
+// Other people's hooks and settings are never read, reordered or replaced.
+//
 // `statusLine` and `subagentStatusLine` carry the context-fullness callbacks
 // composeContextStatuslines writes, unless cfg.Defaults.DisableContextFullness
 // is true: then neither key is written and no Claude settings file is read for
@@ -186,6 +208,19 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 			entry["matcher"] = "*"
 		}
 		hooks[string(evt)] = []any{entry}
+	}
+	if r.BusySendCovered {
+		// SR-3.4: the owned wake, in exec form like every agent-director
+		// hook, so its parent is the agent process the gate compares. It
+		// carries no matcher and no timeout of its own.
+		hooks[string(hookFileChanged)] = []any{map[string]any{"hooks": []any{
+			map[string]any{"type": "command", "command": exe, "args": []string{"hook"}, "asyncRewake": true},
+		}}}
+		// The owned steer, synchronous so its stdout reaches the running
+		// turn: exec form, no matcher and no timeout of its own.
+		hooks[string(hookPostToolBatch)] = []any{map[string]any{"hooks": []any{
+			map[string]any{"type": "command", "command": exe, "args": []string{"hook"}},
+		}}}
 	}
 
 	if cfg.Defaults.InjectHelpHook {
@@ -253,47 +288,14 @@ func mergePermissions(p *Permissions, disableAUQ bool) (allow, deny, ask []strin
 	return allow, deny, ask
 }
 
-// executablePath returns the absolute, symlink-resolved path to the
-// currently-running binary. The result is written verbatim into every
-// hook command this spawn-side pipeline produces (SR-1.8, b.ue3).
-//
-// Mechanism (SR-1.8):
-//
-//	os.Executable()  → kernel-reported path (Linux's /proc/self/exe,
-//	                   macOS's _NSGetExecutablePath); already absolute on
-//	                   both supported platforms.
-//	filepath.EvalSymlinks(...) → chases any symlinks in the path so the
-//	                   hook command points at the real on-disk file.
-//
-// Stability assumption (load-bearing per SR-1.8): install.sh writes the
-// AD CLI binary to ~/.config/agent-director/bin/agent-director and re-runs of
-// install.sh overwrite the file at the same absolute path — the
-// directory entry's identity is stable across re-installs even though
-// the file's inode may change.  Hook commands captured into a spawned
-// Claude session therefore continue to invoke the same path after an
-// in-place upgrade.  If install.sh is ever changed to write to a
-// per-version path (e.g. ~/.config/agent-director/bin/agent-director-0.7.0),
-// the spawn-side hook contract breaks and this site plus the
-// architecture doc need synchronized updates.
-//
+// executablePath shares the startup helper's own-image capture rule: a ready
+// immutable directory named for this binary's compiled stamp, or the resolved
+// build path outside a layout. An unsafe in-layout lookup refuses generation;
+// it never falls back to current, the permanent entry or an unresolved path.
+// Each settings block passes this single captured value to all delivery and
+// context hooks. Optional help deliberately keeps the permanent entry.
 // Held as a var so tests can stub it without touching the actual filesystem.
-var executablePath = func() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	abs, err := filepath.Abs(exe)
-	if err != nil {
-		return "", err
-	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		// If the binary is gone between exec and resolve, fall back to
-		// the absolute non-resolved path — better than failing the spawn.
-		return abs, nil
-	}
-	return resolved, nil
-}
+var executablePath = installversion.CaptureExecutable
 
 // helpHookBinPath returns the canonical install-tree path of the
 // agent-director binary used in the inject_help_hook SessionStart

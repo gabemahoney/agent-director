@@ -10,6 +10,18 @@
 // Claude Code 2.1.280's probe logs with fixture ids and no content field.
 // Shapes follow Claude Code's hooks reference, https://code.claude.com/docs/en/hooks
 // (read 2026-09-30; the page has no version stamp, the newest version it cites is v2.1.274).
+// file-changed.json is busy send's owned wake, registered only on a covered
+// Claude Launch (claudeConditional): built from that page's FileChanged shape
+// (read 2026-11-14, newest version cited v2.1.319), not captured.
+// post-tool-batch*.json are busy send's owned steer, also covered-only: their
+// keys are those Research b.87a (Report t1.87a.12, P5; S25's hook logs of
+// cases round2b-p5-fix-fg-steer and -fix-bg-steer, Claude Code 2.1.310)
+// recorded, which kept key names but no values, so every value is synthetic,
+// shaped by that page's PostToolBatch and effort descriptions (read
+// 2026-11-16). As measured, a foreground (-subagent) or background
+// (-background) child's callback differs from the parent's only by agent_id
+// and agent_type: it reports the parent's session_id, transcript and process
+// parent, and carries no background flag.
 //
 // testdata/codex-hook-payloads holds Codex's (SR-14.3): Epic 1's 0.162.1 captures
 // with home paths and every id replaced by a fixture value, the relations kept.
@@ -77,6 +89,10 @@ var payloadFixtures = []struct {
 	{"claude", "pre-tool-use-agent.json", "PreToolUse", "tool_name", "Agent", ""},
 	{"claude", "pre-tool-use-agent-teammate.json", "PreToolUse", "tool_name", "Agent", ""},
 	{"claude", "post-tool-use-agent-completed.json", "PostToolUse", "tool_name", "Agent", ""},
+	{"claude", "file-changed.json", "FileChanged", "event", "change", ""},
+	{"claude", "post-tool-batch.json", "PostToolBatch", "tool_calls", "", ""},
+	{"claude", "post-tool-batch-subagent.json", "PostToolBatch", "tool_calls", "", "a4d8e2c61b9f0357"},
+	{"claude", "post-tool-batch-background.json", "PostToolBatch", "tool_calls", "", "a6c3f9e0d2b71548"},
 	// Codex's, from Epic 1's 0.162.1 captures, scrubbed (codex-hook-payloads/). Every id
 	// is a fixture value with the captures' relations: a subagent's and the /review
 	// thread's hooks carry the main session id and their own rollout; resume carries the
@@ -234,15 +250,35 @@ var codexNotRegistered = map[string]string{
 	"SubagentStop":  "Codex subagents are untracked",
 }
 
+// claudeConditional are the Claude events internal/spawn registers only on
+// some Launches, by the constant that names each: busy send's owned wake and
+// steer, on a covered Claude Launch only (Resolved.BusySendCovered, SR-3.4).
+var claudeConditional = map[string]string{"FileChanged": "hookFileChanged", "PostToolBatch": "hookPostToolBatch"}
+
 // TestPayloadFixtureEventsMatchRegistered: for each agent, every event
-// internal/spawn registers (hookEvents for Claude, codexHookEvents for Codex)
-// has a fixture, and every fixture's event is registered (a Codex event may
-// instead be in codexNotRegistered, which must itself name a fixture event that
-// is not registered); every fixture file is in payloadFixtures.
+// internal/spawn registers (hookEvents and claudeConditional for Claude,
+// codexHookEvents for Codex) has a fixture, and every fixture's event is
+// registered (a Codex event may instead be in codexNotRegistered, which must
+// itself name a fixture event that is not registered); a conditional event is
+// never in hookEvents; every fixture file is in payloadFixtures.
 func TestPayloadFixtureEventsMatchRegistered(t *testing.T) {
 	lists := map[string]map[string]bool{
 		"claude": registeredHookEvents(t, "hookEvents"),
 		"codex":  registeredHookEvents(t, "codexHookEvents"),
+	}
+	consts, _ := spawnHookSource(t)
+	conditional := map[string]bool{}
+	for ev, name := range claudeConditional {
+		if consts[name] != ev {
+			t.Errorf("internal/spawn's %s = %q; want the conditional event %q", name, consts[name], ev)
+		}
+		conditional[ev] = true
+	}
+	if both := intersect(conditional, lists["claude"]); len(both) != 0 {
+		t.Errorf("claude: conditional events in hookEvents: %v", both)
+	}
+	for ev := range conditional {
+		lists["claude"][ev] = true
 	}
 	fixtureEvents := map[string]map[string]bool{"claude": {}, "codex": {}}
 	fixtureFiles, tableFiles := map[string]bool{}, map[string]bool{}
@@ -314,12 +350,31 @@ func intersect(a, b map[string]bool) []string {
 
 // registeredHookEvents reads the unexported event list named list
 // (hookEvents, codexHookEvents) and the string constants it names from
-// internal/spawn's settings.go and codexsettings.go source: spawn exports no
-// list of its own.
+// internal/spawn's source (spawnHookSource): spawn exports no list of its own.
 func registeredHookEvents(t *testing.T, list string) map[string]bool {
 	t.Helper()
-	consts := map[string]string{}
-	var names []string
+	consts, lists := spawnHookSource(t)
+	names := lists[list]
+	if len(names) == 0 {
+		t.Fatalf("%s not found in internal/spawn", list)
+	}
+	events := map[string]bool{}
+	for _, n := range names {
+		v, ok := consts[n]
+		if !ok {
+			t.Fatalf("%s names %s, which is not a string constant in internal/spawn", list, n)
+		}
+		events[v] = true
+	}
+	return events
+}
+
+// spawnHookSource parses internal/spawn's settings.go and codexsettings.go:
+// their string constants by name, and each composite-literal list's
+// identifiers by the list's name.
+func spawnHookSource(t *testing.T) (consts map[string]string, lists map[string][]string) {
+	t.Helper()
+	consts, lists = map[string]string{}, map[string][]string{}
 	for _, file := range []string{"settings.go", "codexsettings.go"} {
 		f, err := parser.ParseFile(token.NewFileSet(), filepath.Join("..", "spawn", file), nil, 0)
 		if err != nil {
@@ -345,11 +400,9 @@ func registeredHookEvents(t *testing.T, list string) map[string]bool {
 							consts[n.Name], _ = strconv.Unquote(v.Value)
 						}
 					case *ast.CompositeLit:
-						if n.Name == list {
-							for _, e := range v.Elts {
-								if id, ok := e.(*ast.Ident); ok {
-									names = append(names, id.Name)
-								}
+						for _, e := range v.Elts {
+							if id, ok := e.(*ast.Ident); ok {
+								lists[n.Name] = append(lists[n.Name], id.Name)
 							}
 						}
 					}
@@ -357,18 +410,7 @@ func registeredHookEvents(t *testing.T, list string) map[string]bool {
 			}
 		}
 	}
-	if len(names) == 0 {
-		t.Fatalf("%s not found in internal/spawn", list)
-	}
-	events := map[string]bool{}
-	for _, n := range names {
-		v, ok := consts[n]
-		if !ok {
-			t.Fatalf("%s names %s, which is not a string constant in internal/spawn", list, n)
-		}
-		events[v] = true
-	}
-	return events
+	return consts, lists
 }
 
 // TestSubagentFixtureShapes: the b.xjn fixtures carry no content field (no

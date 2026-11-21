@@ -1,9 +1,13 @@
 ---
 name: install-agent-director
-description: Install agent-director on a machine that does not have it yet. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with the binary and the off-PATH operator tool agent-director-admin, creates and opens state.db, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact), and, with `--schedule`, sets up recovery (sweep when supported, otherwise find-missing) and separate expire cleanup (cron, else systemd user timers; otherwise it warns that it could not find active --schedule entries for both jobs). Needs Claude Code, Codex or the standalone Cursor agent on the machine. Use this skill when the user says "install agent-director" or "set up agent-director" on a new machine. To upgrade an existing install, use upgrade-agent-director instead.
+description: Install agent-director on a machine that does not have it yet. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with permanent runtime/admin entries and retained versions after exempt store setup, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact), and, with `--schedule`, sets up recovery (sweep when supported, otherwise find-missing) and separate expire cleanup (cron, else systemd user timers; otherwise it warns that it could not find active --schedule entries for both jobs). Needs Claude Code, Codex or the standalone Cursor agent on the machine. Use this skill when the user says "install agent-director" or "set up agent-director" on a new machine. To upgrade an existing install, use upgrade-agent-director instead.
 ---
 
 ## First-time install on a brand-new machine
+
+First perform the [layout check](#before-the-questions-an-existing-install-and-which-agents),
+even when an install appears absent. Partial versioned layouts use file-only
+recovery, not this fresh-install flow.
 
 If this skill isn't yet on the machine (no checked-out repo, no
 cached `install.sh`), choose a release tag once. To find the latest, run this
@@ -31,7 +35,7 @@ skill instead.
 
 Trigger phrases: "install agent-director", "set up agent-director".
 
-An upgrade of an existing install follows the [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md) step by step.
+An upgrade, re-install or partial versioned-layout recovery follows the [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md) step by step.
 
 ## Operator dialog (do BEFORE running install.sh)
 
@@ -42,7 +46,17 @@ then execute. Keep it tight — five questions, then a confirm.
 
 ### Before the questions: an existing install, and which agents
 
-**Whether agent-director is already installed.** It is when an install's
+**Classify layout files first.** Before the installed/new/kept-directory
+choice below, config-based store resolution or any maintenance-window advice,
+run the file-only classifier in the upgrade skill's
+[Choose the upgrade path first](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#choose-the-upgrade-path-first).
+It checks all layout evidence and canonical entry links, dangling forms included,
+without reading a store. If it prints `file-only`, follow that skill's file-only
+procedure and finish there. A missing entry, DB or current selection never makes
+an evidence-bearing root fresh; preserve a `layout_invalid` refusal.
+
+**Only with no layout evidence:** decide whether this is an exempt upgrade
+or a new install. An existing exempt/legacy install is one whose
 binary and that install's store both exist:
 `~/.config/agent-director/bin/agent-director` and its store (`state.db`
 beside `bin/`, or the `[store] db_path` its `config.toml` names), or the old
@@ -125,66 +139,34 @@ who already knows what the script does. Rewrite it.
 
 ### How the install writes the binaries
 
-Every install writes two binaries from the same build, because both
-open the same store:
+The runtime and operator tool must come from the same build, with matching
+version and real commit stamps (exit 3 otherwise). Use `make build` in a git
+checkout or stamped release assets, not plain `go build` with commit `unknown`.
 
-- `agent-director`, at `~/.config/agent-director/bin/agent-director` (and,
-  optionally, on PATH through a symlink; question 2);
-- the operator tool `agent-director-admin`, at
-  `~/.config/agent-director/admin/agent-director-admin` (directory mode 0700,
-  binary 0755). It is **never** put on PATH and never symlinked, under
-  any option. It is for a human's repair actions only; its help opens
-  with the rule that nobody runs it without a human's explicit approval
-  for that run, and agents never run it. **Never run it yourself while
-  installing**: install.sh checks its version stamp on its own. Tell the
-  operator where it is (install.sh prints its path once, at the end).
+A capable exempt install first completes store setup and verification, then
+establishes the [versioned layout](https://github.com/gabemahoney/agent-director/blob/main/docs/architecture.md#on-disk-shape).
+The permanent runtime entry is `~/.config/agent-director/bin/agent-director`;
+the permanent admin entry is
+`~/.config/agent-director/admin/agent-director-admin`, through private `admin/`
+(mode 0700), never on PATH. Installed immutable versions are retained
+indefinitely. The optional PATH link names the permanent runtime entry.
 
-install.sh refuses to install (exit 3) unless both binaries' `version`
-stamps (version and commit) are the same and carry a real commit. A
-plain `go build` stamps commit `unknown`, which cannot show that two
-binaries come from one build, so such a pair is refused even when the
-stamps match; `make build` in a git checkout stamps both with the
-checkout's commit, and release assets are stamped.
+Direct administrator commands require a human's explicit approval for that
+individual run. Do not run one independently during installation; the
+installer's stamp checks and publication calls belong to the authorized install.
 
-The install script first copies both new binaries into sibling temp
-files in their directories (staging), and only once both are staged
-`mv`s each over its canonical path, back to back. A failure while
-staging (a full disk, an unwritable admin directory) replaces neither
-binary, so an install never leaves a new `agent-director` beside an old
-`agent-director-admin`. `mv` within one filesystem is atomic at the
-inode level, so concurrent readers see either the old binary or the
-new — never a half-written file. A running process (say, an in-flight
-Spawn whose hooks reference this binary) holds the old inode, so its
-current exec is unaffected by the swap.
+No layout evidence plus an older candidate without version commands uses the
+legacy install and creates no layout; the next current-release install remains
+exempt. Over layout evidence that candidate is exit 3. Claimed but unusable
+version-command support is exit 3 on either path. See
+[Upgrade policy and flags](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#upgrade).
 
-The previous binaries are *not* retained by default. Pass `--keep-prior`
-on upgrade to have install.sh snapshot both existing binaries before
-either new one is staged, to `~/.config/agent-director/bin/agent-director.prior` and
-`~/.config/agent-director/admin/agent-director-admin.prior`. That gives you a
-binary-only rollback of the matching pair (`mv .prior canonical` for
-each) only when both directory and schema are unchanged. If the schema
-changed, follow "Going back to the previous release" before any binary swap;
-restore the backed-up DB and matched companions with all writers stopped.
-A re-install of
-the same pair (agent-director already
-byte-identical to the one being installed, and agent-director-admin
-byte-identical too or not installed) is not snapshotted, so re-running
-the same install (for example after an exit 5) keeps the `.prior`
-files from the earlier run; the `prior` and `admin prior` lines then
-say `not snapshotted`. Any other install snapshots both, even when
-only one of them changed. On an upgrade from a release before 0.11.0
-there is no agent-director-admin to snapshot: install.sh removes any
-stale admin `.prior`, prints an `admin prior: none` line, and rolling
-back means removing `~/.config/agent-director/admin/agent-director-admin`.
-The upgrade that moves the old directory makes no snapshot at all, with
-or without `--keep-prior`: the new `bin/` and `admin/` hold no earlier
-binary, so `.prior` is not a way back across the move (the way back is
-"Going back to the previous release" below).
-Without `--keep-prior`, reinstall using the prior release's own installer
-and original flags, provided it [supports this host](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#requirements).
-This is a binary-only fallback only when the schema
-and directory are unchanged; otherwise first follow "Going back to the
-previous release". The current installer refuses pre-move binaries with exit 3.
+The regular-file swap and optional `--keep-prior` `.prior` pair below apply
+only to exempt/legacy work before layout establishment. Later publication
+retains versions without new `.prior` copies; use
+[compatible rollback](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#rolling-back-a-versioned-install).
+Going back across an exempt schema conversion instead requires the
+[stopped-writer teardown and restore](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#returning-across-the-exempt-conversion).
 
 ### The five questions
 
@@ -192,10 +174,9 @@ previous release". The current installer refuses pre-move binaries with exit 3.
 
    - *What this is:* agent-director is a Go binary that comes with a
      second one from the same build, the operator tool
-     `agent-director-admin`. The install script copies
-     `agent-director` into `~/.config/agent-director/bin/` (and onto your
-     PATH) and `agent-director-admin` into
-     `~/.config/agent-director/admin/`, never on PATH. We need to know where to
+     `agent-director-admin`. The install script stages both, then establishes their permanent
+     runtime/admin entries (with an optional runtime PATH link); the operator
+     tool is never on PATH. We need to know where to
      copy both *from*; they must come from the same build.
    - *Three options:*
      - **(a) Download a pre-built release from GitHub** *(recommended
@@ -450,9 +431,9 @@ previous release". The current installer refuses pre-move binaries with exit 3.
        works, else installs nothing and says why. With `crontab` working
        but no cron daemon and no systemd, the lines go in anyway (they
        run once a cron daemon starts), with a note on stderr and the
-       warning below. Re-running replaces
-       the entries it added and points them at the current binary, so it
-       never doubles them. It uses the template cadence, replacing any
+       warning below. Re-running installs or repairs missing or changed
+       managed entries without duplicating them; already-correct entries stay
+       unchanged. The flag selects the template cadence, replacing any
        customized cadence in those entries.
      - **(b) No: leave it (no flag).** Existing commands, cadence and
        timer enablement stay unchanged. If it does not recognize a schedule,
@@ -525,7 +506,14 @@ failure mode this section exists to prevent.
 
 ## What this skill does
 
-This skill runs `install.sh` from the same directory. The script:
+This skill runs `install.sh` from the same directory. The detailed store,
+regular-file swap, sentinel, `.prior` and legacy restore steps below apply only
+to the **exempt/legacy path**. Evidence-bearing roots instead follow the
+[upgrade skill's file-only procedure](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#file-only-upgrade):
+no store probes, migration or stop/restart. Later flags and unchanged-reference
+summaries are owned by [install policy](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#install-from-a-release).
+
+The exempt script:
 
 1. **Pre-flights.** First of all, before it reads or writes anything,
    it refuses (exit `2`) a `HOME` that is unset, empty or not an
@@ -731,8 +719,10 @@ This skill runs `install.sh` from the same directory. The script:
       an earlier release"), naming both binaries and their `config_dir`.
       The check runs `version`, which opens no store. The fix is to
       install this release's binaries (`make build` in a checkout, or
-      `--from-release`); an earlier release is installed only with its
-      own `install.sh`, fetched from its tag (that release's install.sh must support this host).
+      `--from-release`). This directory check is distinct from version-command
+      capability: an otherwise supported older candidate may still install
+      without layout evidence, as described above. Never overwrite a versioned
+      layout with an older installer.
 
    **Also in pre-flight: the directory layout, the migration's checks and
    the live-agent check.** Establish the layout and paths first. Before any
@@ -927,6 +917,12 @@ This skill runs `install.sh` from the same directory. The script:
    The store upgrade follows [the six-step flow](#the-six-steps-installsh-performs)
    below. Keep the maintenance boundary through committed verification;
    concurrent hooks cannot cross the native-input cutover.
+
+   After store setup and verification settle, a capable candidate admin
+   establishes or recovers the permanent entries and retained-version layout.
+   An `ErrVersionInstallRefused` here leaves the schema result settled; it is
+   not a failed store open. Keep the original exempt context and follow
+   [publication-failure continuation](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#publication-failure-after-an-exempt-install).
 
 6. **Injects persistent hooks** into `~/.claude/settings.json`
    (unless `--no-hooks` was passed):
@@ -1216,9 +1212,11 @@ This skill runs `install.sh` from the same directory. The script:
 
    Installing through cron removes this install's systemd units, and
    installing through systemd removes this install's cron lines (systemd
-   is used only where cron is not), so a host is never scheduled twice. A re-run re-points the entries at the
-   current binary and template cadence; an upgrade needs
-   nothing, since the binary's path does not change. A successful step
+   is used only where cron is not), so a host is never scheduled twice.
+   With `--schedule`, a re-run installs or repairs missing or changed managed
+   entries using the permanent binary path and template cadence; it leaves
+   already-correct entries unchanged. A later file-only upgrade needs no
+   schedule rewrite. A successful step
    prints its `  schedule: ...` lines on stdout, before the `admin   :`
    line (a systemd install adds a second one about `loginctl
    enable-linger`); a step that only warns prints none, except the line
@@ -1293,9 +1291,9 @@ install.sh exits 0 on success. Its own failures exit 1 to 6:
 |---|---|
 | 1 | The agent-rename migration could not write a file (a full disk, a permission changed since pre-flight, a failed copy), after the new binaries were installed and before the store was opened; see "Before the six steps" in step 5 of "What this skill does". The message starts `the agent-rename migration could not write <file>; stopping before the store is opened`, its `file` and `error` lines name the file and the cause, and there is no `err_name` line. The file is as it was, every copy the install made is kept, and the store is not opened. Fix the cause the `error` line names, then run this release's install.sh again with the same flags, from a shell agent-director did not start: it completes the migration, changes nothing already migrated, then migrates the store. Or take the way back ("Going back to the previous release" below, with the operator's go-ahead). A step that exits 1 for another reason is the last row of this table. |
 | 2 | Pre-flight: `HOME` unset, empty or not an absolute path (checked first, before anything is read or written: run it with `HOME` set to the user's home directory); a bad flag or flag pair; whitespace in the install path; an unsupported OS/CPU; missing required commands for the selected mode (reported together with package hints; see [requirements](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#requirements)); a binary built for another architecture; or no supported agent found (the message names Claude Code, Codex and Cursor, their `[launch]` keys and how to install one). `uninstall.sh` exits 2 for an unset, empty or relative `HOME` too. |
-| 3 | The binaries: one not found or not executable, a `--from-release` that found no release or could not download one, a hash mismatch, a release before 0.11.0, a local binary not built from `HEAD`, two version stamps that differ or carry no commit, or a binary whose `version` result lacks `config_dir` `~/.config/agent-director` or names another directory (a binary from an earlier release: install this release's binaries; an earlier release is installed with its own install.sh, fetched from its tag (that release's install.sh must support this host)). |
+| 3 | The binaries: one not found or not executable, a `--from-release` that found no release or could not download one, a hash mismatch, a release before 0.11.0, a local binary not built from `HEAD`, two version stamps that differ or carry no commit, or a binary whose `version` result lacks `config_dir` `~/.config/agent-director` or names another directory; missing version-command support over layout evidence; or claimed but unusable support on either path. Without evidence, an otherwise supported older candidate lacking the commands installs by the legacy path, with no layout; the next current-release install is exempt again. Never use an older installer over layout evidence. |
 | 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"): the file is not valid JSON, holds more than one JSON document, or is valid JSON of another shape. Or, with hooks on and Claude Code present, a symlinked `settings.json` the merge cannot write through (refused in pre-flight, before anything was installed or changed; see step 6). With Claude Code absent `settings.json` is not touched or checked. |
-| 5 | The config file or a template, the move of the old directory, or the store open and schema migration. The cause line below names which. |
+| 5 | A config/template refusal, exempt directory move/store migration, or version publication refusal/uncertainty. The cause line below distinguishes them; publication does not imply a store-open failure. |
 | 6 | The MCP registration failed (`--register-mcp`): `claude mcp add`, or the `claude mcp remove` before the re-add of a registration that names the old directory's binary, exited non-zero. Every other step is done and kept (binaries, store, hooks, links). stderr shows the command run, its exit status, its stderr and the command to run by hand; the last line says the registration failed. There is no `err_name` line. Fix what the stderr names and run the command by hand; if the name is registered for another command and that registration should go, `claude mcp remove agent-director -s <scope>` first. Do not re-run the install for this. |
 | any other non-zero | A command install.sh does not check failed (for example `mkdir` could not create `~/.config/agent-director`), and the script stopped there with that command's status, usually 1. The command's own error is on stderr above. |
 
@@ -1317,6 +1315,7 @@ no other exit status has a cause line.
 
 | `<Name>` | Cause | Remedy |
 |---|---|---|
+| `ErrVersionInstallRefused` | Version publication refused or has an uncertain outcome, including establishment after settled exempt store work. `details.reason`, publication state/durability and recovered facts are distinct from journal refusal/cutover fields. | Follow [versioned recovery](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#recovering-a-versioned-install). For an exempt attempt, keep its stopped writers, original schema result, flags and recorded parents; use [Publication failure after an exempt install](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#publication-failure-after-an-exempt-install), reclassifying before retry and finishing the original exempt obligations afterwards. Do not diagnose an unconsumed migration or send a file-only retry through store verification. |
 | `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: the gate of the config and template migration in pre-flight (before anything was installed or changed), step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past `[store] busy_timeout_ms`, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
 | `ErrConfigMalformed` | AD's `config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path`, `[store] busy_timeout_ms` and the `[launch]` table (`claude_path`, `codex_path`, `cursor_path`); by its migration checks (the question-tool key set more than once under `[defaults]`, or `defaults` set as a key on a line that names the key's old name, a file it cannot read, or a symlinked config.toml the migration cannot write through); with hooks on, by its checks that the `[defaults]` merge can extend the file and can write through a symlinked config.toml (all before anything was installed or changed); after the move, by the re-read of the moved config.toml's store and timeout keys; at apply time, by the migration refusing a config.toml that changed since pre-flight (nothing more is written; the two ways on are the exit 1 row's); or by agent-director at step 3's probe or step 4's store open. While the move is due, pre-flight reads the old directory's copy and the message names it. | Fix the file the message names, then re-run the install with the same flags. A symlink the hooks merge cannot write through also has a `--no-hooks` way out; a symlink the migration cannot write through does not (the migration runs with `--no-hooks` too): fix the link, or make the rename in the file's source. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 5 and step 6 of "What this skill does", "A refused config file" and "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
 | `ErrTemplateMalformed` | A stored template was refused by install.sh's pre-flight check for the migration of config.toml and the templates (a line before its first table header that the check cannot read, the old name of the arguments key set twice or together with `agent_args`, a file it cannot read, or a symlinked template the migration cannot write through; all before anything was installed or changed), or, at apply time, a template that changed since pre-flight (the same two ways on as the exit 1 row). | Fix the template the message names, then re-run the install with the same flags. See "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
@@ -1328,6 +1327,11 @@ no other exit status has a cause line.
 | `ErrAgentsLive` | Pre-flight (and again at the move's first step), before anything was installed or changed, while the move is due: a row in a live state (`pending`, `waiting`, `working`, `check_permission`, `ask_user`) in the old store, a process running the old binary (a Claude Code session's own `agent-director serve --stdio` counts), live rows that could not be read (the store stayed busy past its timeout, or is unreadable), or a process check that did not run (no `/proc`, no usable `ps` or `lsof`: check by hand). | Stop whatever starts agents, then every agent, every `serve` and every caller (ask the operator; do not end agents yourself), run `find-missing` with the old binary's path the message prints for a row whose agent is already gone, and re-run from a shell agent-director did not start. A re-run reads the rows again. See "Upgrading an install from the old directory" and "`install.sh` refuses with `ErrAgentsLive`" in docs/operator-actions.md. |
 | `ErrMoveFailed` | The move failed before its rename (a full disk is the usual cause; a fifo, socket or device in the old directory; a temp directory inside either AD directory), or the install was interrupted before the rename. The partial new directory was removed and the old directory is untouched. A signal after the rename also exits here, saying the move finished: the old directory is then the kept `~/.agent-director.pre-move-*`, and the new directory holds the complete copy. | Fix the cause the message names (free space on the disk that holds `~/` and on the one that holds the temp directory, move a fifo or socket out of the old directory, set `TMPDIR` outside both AD directories), then re-run with the same flags. A leftover `.move-incomplete` is handled by the re-run. After the move had finished, the re-run just continues from the new directory. See "`install.sh` stops with `ErrMoveFailed`" in docs/operator-actions.md. |
 | any other name | Step 4's store open failed with that agent-director `err_name` (`ErrSchemaMigrationRequired`, say). It is `ErrStoreOpen` when the open's output held no error envelope, or an envelope whose `err_name` is not a plain `Err…` name. | The message advises a re-run: a migration this install authorized was not consumed, and a re-run retries it. If the re-run fails with the same name, it needs a human: show the operator the error above the cause line. |
+
+Publication outcomes follow the versioned-recovery row above, not the
+store-open catch-all. Keep unknown output as uncertainty; never invent rollback
+or durability facts. An exempt attempt retains its original restart/verification
+obligations even when retry classification becomes file-only.
 
 Remedy classes: re-run as is (`ErrVersionUnreadable`; `ErrMoveFailed`
 once its cause is fixed; `ErrAgentsLive` and `ErrJournalMigrationRefused`'s
@@ -1386,13 +1390,15 @@ wrote too, whose hook names the old directory's binary), the binary
 under `~/.config/agent-director/bin/` (the old directory's `bin/` on an
 old-only host), the operator tool
 `~/.config/agent-director/admin/agent-director-admin` with its `admin/`
-directory, and the PATH symlink if one exists. State
+directory, all versioned program/layout evidence and retained versions, and
+the PATH symlink if one exists. Non-purge keeps config, configured `db_path`
+and runtime/user data; it is explicit teardown, not publication rollback. State
 the baseline up front so the questions are only about the
 destructive *additions*.
 
 1. **Also delete `state.db` and templates? (`--purge`)**
 
-   - *What this is:* by default uninstall removes the binary and
+   - *What this is:* by default uninstall removes program/layout resources and
      hooks but leaves `~/.config/agent-director/` itself in place — so
      `state.db` (the SQLite database with every Spawn's id,
      transcript pointer, and history) and any templates you've
@@ -1514,6 +1520,12 @@ destructive *additions*.
 
 ### What uninstall.sh does
 
+- Removes all versioned program/layout evidence, including retained and
+  incomplete versions, history, current, anchor, initialization evidence and
+  persistent install lock; partial/dangling forms included. This is explicit
+  teardown, separate from seamless rollback. Non-purge retains DB/sidecars,
+  transcripts, templates, config and configured `db_path` under the existing
+  semantics. See [Uninstall](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#uninstall).
 - Removes the two help hook entries (only the entries this skill
   added; other user hooks are preserved), keeping no copy of
   `settings.json`. A `settings.json` with none of them to remove (an
@@ -1663,6 +1675,10 @@ destructive *additions*.
 
 ## Schema migration: the six-step sentinel flow
 
+This is the exempt/legacy flow only. With versioned-layout evidence, use
+[file-only installation/recovery](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#file-only-upgrade)
+without a store probe, snapshot, sentinel or schema conversion.
+
 This is the ONE admin-facing place the migration sentinel is
 documented. It appears nowhere in any agent-facing surface (help
 text, MCP tool descriptions, npm README, or the migration error
@@ -1705,6 +1721,9 @@ preexisting sentinel. A sentinel alone cannot authorize this cutover.
   `{from:10,to:11}` after resolving the failure.
 
 ### Which database install.sh checks
+
+This resolution is for the exempt/legacy path. The file-only branch never
+resolves or inspects a configured DB and reports the schema uninspected.
 
 install.sh reads, authorizes and verifies the database agent-director
 itself opens. That is `~/.config/agent-director/state.db` unless `[store]
@@ -2172,6 +2191,13 @@ state.db is refused with `ErrSchemaMigrationRequired`.
 
 ## Upgrade rollback
 
+For a versioned layout, use
+[compatible publication rollback](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#rolling-back-a-versioned-install).
+To go back past the exempt conversion, first use the explicitly authorized
+[non-purge teardown and restore](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#returning-across-the-exempt-conversion).
+The `.prior` advice below applies only to exempt/legacy installs with no layout
+evidence; never hand-replace permanent entries.
+
 Binary-only rollback is supported only when the directory and schema are
 unchanged. If an upgrade migrated the schema, follow
 [Going back to the previous release](#going-back-to-the-previous-release)
@@ -2198,6 +2224,12 @@ binary, subject to the same unchanged-schema condition. Across a directory
 move no `.prior` pair exists; use the complete wayback procedure.
 
 ## ErrSchemaMismatch recovery
+
+The store-opening recipes below are exempt/legacy procedures. A versioned
+install never inspects the store: use
+[file-only recovery](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#recovering-a-versioned-install),
+or the explicitly authorized teardown/restore exception for crossing back over
+the exempt conversion. Never apply the recipes directly over layout evidence.
 
 `ErrSchemaMismatch` can mean a newer store, an invalid store id, or
 an authorized migration refusing incompatible metadata. The actual error
@@ -2297,6 +2329,9 @@ The JSONL transcripts under `~/.claude/projects/` persist
 independently of state.db in every case.
 
 ## Upgrading an install from the old directory
+
+This is an exempt/legacy procedure with no versioned-layout evidence. Apply
+the file classifier above before its store, move or stop instructions.
 
 An earlier release kept its files in `~/.agent-director`. This release keeps
 them in `~/.config/agent-director`, and `install.sh` moves the old directory,

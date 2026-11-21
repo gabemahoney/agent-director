@@ -2,13 +2,15 @@
  * errorMap.ts — catalog-driven static error map for the subprocess Client.
  *
  * Builds a `Map<string, ErrConstructor>` at module load time by iterating
- * `pkg/api/errnames/catalog.json` (61 entries). The map
+ * `pkg/api/errnames/catalog.json` (69 entries). The map
  * keys are the canonical `err_name` strings (e.g. "ErrSpawnNotFound");
  * values are the typed constructors already exported from `src/errors.ts`.
  *
  * Exports `throwFromEnvelope(verb, envelope)` which:
  *   - Looks up `envelope.err_name` in the static map.
  *   - Throws the typed subclass when found (carrying verb + envelope fields).
+ *   - For resume, preserves an unknown recipient name and fields in the base
+ *     AgentDirectorError: a newer retained runtime may serve the call (SR-9.1).
  *   - Throws `ErrUnknownErrorName` when the err_name is not in the map
  *     (SRD SR-4.3). The catalog lists every name the binary of this client's
  *     version emits (b.cm7), so that means a binary of another version,
@@ -140,6 +142,12 @@ export function throwFromEnvelope(verb: string, envelope: unknown): never {
   const Ctor = errorMap.get(errName);
   if (Ctor !== undefined) {
     throw new Ctor(verb, errName, errDescription, errDetails);
+  }
+
+  // Resume may be served by a newer retained runtime. Its named outcome is
+  // authoritative even when this client's catalog predates that error.
+  if (verb === "resume") {
+    throw new errors.AgentDirectorError(verb, errName, errDescription, errDetails);
   }
 
   // Unknown err_name (SRD SR-4.3): a binary of another version emitted a name

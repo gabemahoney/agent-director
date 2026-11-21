@@ -22,6 +22,7 @@
 package envelope_diff
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
@@ -149,6 +150,23 @@ func TestEnvelopeDiff_Success(t *testing.T) {
 				}
 
 				// ── 5. Load ignore selectors ───────────────────────────────
+				if verb.Name == "get-many" {
+					for _, encoded := range [][]byte{cliNorm, clientNorm} {
+						var out struct {
+							Spawns []struct {
+								BusySend string `json:"busy_send"`
+							} `json:"spawns"`
+						}
+						if err := json.Unmarshal(encoded, &out); err != nil {
+							t.Fatal(err)
+						}
+						for _, row := range out.Spawns { // both rows are Claude's, covered as shipped
+							if row.BusySend != "covered" {
+								t.Errorf("get-many busy_send=%q; want covered", row.BusySend)
+							}
+						}
+					}
+				}
 				sels, err := nonDet.Selectors(verb.Name)
 				if err != nil {
 					// nondeterministic.json must cover every callable verb;

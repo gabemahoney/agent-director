@@ -25,13 +25,15 @@ const (
 )
 
 // relaunchEnv is one resume launch under test: a per-test TMUX_TMPDIR (TMUX
-// unset), its socket, a Recorder, the config and the input's row.
+// unset), its socket, a Recorder, the config and the input's row and busy-send
+// coverage ("" = not covered).
 type relaunchEnv struct {
-	t      *testing.T
-	socket string
-	rec    *tmuxfix.Recorder
-	cfg    config.Config
-	row    store.Spawn
+	t        *testing.T
+	socket   string
+	rec      *tmuxfix.Recorder
+	cfg      config.Config
+	row      store.Spawn
+	coverage store.BusySendCoverage
 }
 
 // Verified parser spellings must not override the selected session or print mode.
@@ -334,7 +336,7 @@ func newRelaunchEnv(t *testing.T) *relaunchEnv {
 func (e *relaunchEnv) relaunch(sessionID string) CreateOutcome {
 	e.t.Helper()
 	c, err := ComposeRelaunch(RelaunchInput{Row: e.row, SessionID: sessionID, Socket: e.socket,
-		Token: relaunchToken, StoreID: relaunchStoreID}, e.cfg)
+		Token: relaunchToken, StoreID: relaunchStoreID, BusySendCoverage: e.coverage}, e.cfg)
 	if err != nil {
 		e.t.Fatalf("ComposeRelaunch: %v", err)
 	}

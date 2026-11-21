@@ -68,7 +68,7 @@ func resumeFinishedRow(t *testing.T, s *store.Store, dbPath, id string) {
 	if err != nil {
 		t.Fatalf("GetSpawn: %v", err)
 	}
-	if res, _, err := s.MoveToPending(id, sp.Snapshot, time.Now().UnixMilli(), newToken(), apitest.TestSocket, "", store.LaunchOwner{}); err != nil || res != store.CondApplied {
+	if res, _, err := s.MoveToPendingWithExit(id, sp.Snapshot, time.Now().UnixMilli(), newToken(), apitest.TestSocket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, s, id)); err != nil || res != store.CondApplied {
 		t.Fatalf("MoveToPending = %v, %v; want applied", res, err)
 	}
 	if err := seedAgentState(s, dbPath, id, store.StateWaiting); err != nil {

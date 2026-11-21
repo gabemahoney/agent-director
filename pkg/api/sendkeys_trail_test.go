@@ -49,6 +49,16 @@ func sktRow(spec killRowSpec, setups ...func(*testing.T, *killEnv, *killRow)) sk
 	}
 }
 
+// sktDroid is seed on a pane-only Droid row, whose text call carries its
+// Enter: a Codex row's ordinary paste reports any transport failure as
+// ErrSubmissionUnconfirmed, so the keys failures' outcomes are a Droid row's.
+func sktDroid(seed sktSeed) sktSeed {
+	return func(t *testing.T, e *killEnv) killRow {
+		e.rowAgent = store.AgentDroid
+		return seed(t, e)
+	}
+}
+
 // sktPending seeds a fresh spawn's pending row with shape v.
 func sktPending(v pendingShape) sktSeed {
 	return func(t *testing.T, e *killEnv) killRow { return e.seedPending(t, pendingFresh, v) }
@@ -110,7 +120,10 @@ func sktRebindAfterText(t *testing.T, e *killEnv, r *killRow) {
 
 // TestSendKeysTrailCalledPerReturnPath: every return path of Client.SendKeys
 // writes exactly one ad.send_keys.called, outcome by name, row_state the state read.
-// b.qcf: pending Claude without a turn hook records ErrSubmissionUnconfirmed.
+// The rows are Codex's, whose plain text goes by guarded paste with its Enter
+// send, and Droid's for the keys failures (sktDroid): a covered Claude row's
+// send-keys admits a Message. A pending row's
+// submission, unconfirmed, records ErrSubmissionUnconfirmed.
 func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -162,16 +175,16 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 			outcome: "ErrTmuxUnresponsive", rowState: "waiting"},
 		{name: "tmux unavailable", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailUnavailable, tmux.CallLookup)),
 			outcome: "ErrTmuxNotAvailable", rowState: "waiting"},
-		{name: "text call timed out", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, tmux.CallSendText)),
+		{name: "text call timed out", seed: sktDroid(sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, tmux.CallSendText))),
 			outcome: "ErrTmuxUnresponsive", rowState: "waiting"},
-		{name: "Enter call timed out", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, callEnterKey)),
+		{name: "Enter call timed out", seed: sktDroid(sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, tmux.CallSendEnter))),
 			outcome: "ErrTmuxUnresponsive", rowState: "waiting"},
-		{name: "follow-up ours", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, tmux.CallSendText)),
+		{name: "follow-up ours", seed: sktDroid(sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, tmux.CallSendText))),
 			outcome: "ErrTmuxUnresponsive", rowState: "waiting"},
-		{name: "follow-up gone", seed: sktRow(killRowSpec{}, sktSessionGoesAfterTextFailure),
+		{name: "follow-up gone", seed: sktDroid(sktRow(killRowSpec{}, sktSessionGoesAfterTextFailure)),
 			outcome: "ErrTmuxSendKeys", rowState: "waiting"},
 		{name: "follow-up different server",
-			seed:    sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, tmux.CallSendText), sktRebindAfterText),
+			seed:    sktDroid(sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, tmux.CallSendText), sktRebindAfterText)),
 			outcome: "ErrTmuxNotAvailable", rowState: "waiting"},
 		{name: "unusable name, waiting", seed: func(t *testing.T, e *killEnv) killRow {
 			return e.seedUnusableRow(t, killRowSpec{}, unusableFixture(t, "empty"))
@@ -185,6 +198,7 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex
 			id := "sk-unknown-" + uuid.NewString()[:8]
 			if tc.seed != nil {
 				id = tc.seed(t, e).ID
@@ -245,6 +259,8 @@ func TestKeysVerbsTrailProvenanceDisagree(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/client=%v/%s", verb, client, tc.name), func(t *testing.T) {
 					t.Parallel() // each case checks only its own row's records
 					e := newKillEnv(t)
+					// Busy send covers Claude, whose send-keys and pause type nothing.
+					e.rowAgent = map[string]string{"send-keys": store.AgentDroid, "pause": store.AgentCodex}[verb]
 					r, other := e.seedKeysDisagreeCase(t, tc)
 					mark := trailMark(t)
 					if verb == "pause" {
@@ -298,6 +314,7 @@ func sktFailOpenRuns(t *testing.T, prefix string, working bool) []string {
 	var lines []string
 	for _, tc := range cases {
 		e := newKillEnv(t)
+		e.rowAgent = store.AgentCodex
 		spec := tc.spec
 		if tc.pending {
 			spec = e.pendingSpec(pendingLeftover)

@@ -11,12 +11,16 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/adminapi"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // TestNewOpensStoreWithConfiguredBusyTimeout is the b.c7f regression: under a held
 // write lock a delete gives up at once with 1 ms, and waits for the release with 60000.
+// The deleted row exists and is uncovered, so the delete reaches its write: a
+// missing row is answered from delete's first read, which a write lock never
+// blocks (sf code repair sf2o-1, R2).
 func TestNewOpensStoreWithConfiguredBusyTimeout(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -28,7 +32,7 @@ func TestNewOpensStoreWithConfiguredBusyTimeout(t *testing.T) {
 	}{
 		{"1 ms, store path option", 1, true, 2 * time.Second, "ErrInternal"},
 		{"1 ms, [store] db_path", 1, false, 2 * time.Second, "ErrInternal"},
-		{"60000 ms waits for the release", 60000, true, 300 * time.Millisecond, "ErrSpawnNotFound"},
+		{"60000 ms waits for the release", 60000, true, 300 * time.Millisecond, "ok"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -55,11 +59,15 @@ func TestNewOpensStoreWithConfiguredBusyTimeout(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = c.Close() })
 
+			id, err := apitest.SeedSpawn(dbPath, "", store.StateEnded, dir, "off", "", false, apitest.WithAgent(store.AgentCodex))
+			if err != nil {
+				t.Fatalf("SeedSpawn: %v", err)
+			}
 			release := apitest.HoldWriteLock(t, dbPath, tc.hold)
-			res, err := adminapi.Delete(c, []string{"no-such-row"})
+			res, err := adminapi.Delete(c, []string{id})
 			release()
 
-			if err != nil || res.Results["no-such-row"] != tc.want {
+			if err != nil || res.Results[id] != tc.want {
 				t.Errorf("delete under the held lock = %v, %v; want %s", res.Results, err, tc.want)
 			}
 		})

@@ -142,6 +142,9 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 		} else if n == 0 {
 			return errRelayNotApplied
 		}
+		if err := publishBusySendReportedLaunch(ctx, conn, instanceID); err != nil {
+			return fmt.Errorf("store: relay request publish Launch: %w", err)
+		}
 		insArgs := append([]any{instanceID, req.RequestToken, req.ToolName, req.ToolInput}, processIdentityArgs(req.Hook)...)
 		insArgs = append(insArgs, nullableStringArg(req.ToolUseID), nullableStringArg(req.AgentID), millisArg(req.SettledAt), req.mainTurnEndEligible(agent), instanceID)
 		ins, err := conn.ExecContext(ctx, relayInsertSQL, insArgs...)

@@ -3,43 +3,27 @@
 package inputdelivery
 
 import (
-	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/probe"
-	"github.com/google/uuid"
 )
 
 func codexEvidence(t *testing.T, recordID string) (*nativeSession, *Attempt, string, []byte, []byte) {
 	t.Helper()
 	s, a := evidenceSession(t)
-	s.manifest.Created = time.Now().Add(-time.Minute)
-	a.Identity.Agent, a.Identity.PID = "codex", os.Getpid()
+	path, meta, record := codexRollout(t, s, a, recordID)
+	a.Identity.PID = os.Getpid()
 	start, alive, known := probe.NewProcChecker().StartTime(a.Identity.PID)
 	if !alive || !known || start == "" {
 		t.Fatal("cannot inspect fixture process identity")
 	}
 	a.Identity.Starttime = start
-	a.Identity.CWD = t.TempDir()
-	s.manifest.CWD = a.Identity.CWD
 	a.Phase, a.BytesAttempted = "enter_attempted", len(a.Payload)
-	a.NativeSessionID = uuid.NewString()
-	dir := filepath.Join(t.TempDir(), "sessions")
-	if err := os.Mkdir(dir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "rollout.jsonl")
-	meta := codexMetadataRecord(t, a, s.manifest.Created.Add(time.Second))
-	record, err := json.Marshal(map[string]any{"type": "response_item", "payload": map[string]any{"type": "message", "role": "user", "id": recordID, "content": []map[string]string{{"type": "input_text", "text": a.Payload}}, "internal_chat_message_metadata_passthrough": map[string]any{"content_item_kinds": []string{"user.text"}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s, a, path, meta, append(record, '\n')
+	return s, a, path, meta, record
 }
 
 func TestCodexDescriptorDiscoveryRejectsWrongProcessIdentity(t *testing.T) {
@@ -115,15 +99,6 @@ func TestCodexValidatedRolloutConfirmsAfterProcessExit(t *testing.T) {
 	if proof, err := reopened.Confirm(a); err != nil || proof == nil || proof.RecordID != "late-turn" {
 		t.Fatalf("validated late proof after exit=%+v %v", proof, err)
 	}
-}
-
-func codexMetadataRecord(t *testing.T, a *Attempt, created time.Time) []byte {
-	t.Helper()
-	meta, err := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]any{"id": a.NativeSessionID, "cwd": a.Identity.CWD, "cli_version": "0.159.2", "timestamp": created.Format(time.RFC3339Nano)}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return append(meta, '\n')
 }
 
 func TestCodexConfirmFirstDescriptorRequiresPostSnapshotSession(t *testing.T) {

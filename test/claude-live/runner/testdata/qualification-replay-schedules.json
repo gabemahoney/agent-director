@@ -1,0 +1,566 @@
+{
+  "disclosure": "Recorded timing/ordering projection only. Original hashes retained; payloads, session/CWD/transcript and prompt identities are replaced with private synthetic unit data. a4 has no recorded PreToolUse; added tool events are synthetic. R13-2: a2/a3 PreToolUse tool_facts are copied from the hashed input bytes. Those records omit run_in_background/is_background; omission is retained, not filled with an invented flag. a4 has no recorded tool facts. Synthetic callbacks use the frozen startup command and explicit foreground flags. a5 remains its separately documented recorded projection.",
+  "events": [
+    {
+      "attempt": "a2",
+      "role": "ad",
+      "event": "SessionStart",
+      "received": "2026-11-19T07:40:50.406417178Z",
+      "input_sha256": "b70f97f7cd5f2d3c2e8601d0eab7d53133283143fe2a139c8268f14371c0dfc8",
+      "receipt_sha256": "f8369e615b5f390780e93cf5ee9a10081e019d49d3169bbb84f38c689ed8a0d7",
+      "source": "retrieved-a2/z9-typed-70b0d8cfdd3f-a2/raw/hooks/invocation-723951183/receipt.json",
+      "input_bytes": 541
+    },
+    {
+      "attempt": "a2",
+      "role": "control",
+      "event": "SessionStart",
+      "received": "2026-11-19T07:40:50.413183827Z",
+      "input_sha256": "1291c50ceb780899772c845993f64846758c77d7a23c975f6b9f0b174318f2c5",
+      "receipt_sha256": "e733ebb09b4063fe6bcfa3ae201dcce01be465eafb1a3d874e14e45d85a884b8",
+      "source": "retrieved-a2/z9-typed-70b0d8cfdd3f-a2/raw/hooks/invocation-1054179990/receipt.json",
+      "input_bytes": 556
+    },
+    {
+      "attempt": "a2",
+      "role": "ad",
+      "event": "UserPromptSubmit",
+      "received": "2026-11-19T07:40:50.627958323Z",
+      "input_sha256": "091445172defa908a2774c1f44f2c3f68eb67ed4c80d53128af3696fb63b69aa",
+      "receipt_sha256": "44520c0fb461953d2a93a1a9229eb6c1b13592220157d8acda0c980013fc69f5",
+      "source": "retrieved-a2/z9-typed-70b0d8cfdd3f-a2/raw/hooks/invocation-2545149304/receipt.json",
+      "input_bytes": 921
+    },
+    {
+      "attempt": "a2",
+      "role": "control",
+      "event": "UserPromptSubmit",
+      "received": "2026-11-19T07:40:50.690702933Z",
+      "input_sha256": "11ad677946643ff84da00c14168988dd2ce6408fc8ac8cf5e93b952653490f02",
+      "receipt_sha256": "1b61cdb9fc689ed170c6c52372e0a8448abad365b9dcff3dfd0606500cf81e80",
+      "source": "retrieved-a2/z9-typed-70b0d8cfdd3f-a2/raw/hooks/invocation-2642792161/receipt.json",
+      "input_bytes": 871
+    },
+    {
+      "attempt": "a2",
+      "role": "ad",
+      "event": "PreToolUse",
+      "received": "2026-11-19T07:40:52.635658649Z",
+      "input_sha256": "a4fe01e81b13b5194a52b8542abddd2c9334b1dc1b296eaa344be53f2a3ae294",
+      "receipt_sha256": "0fd7dcbc8929119dfdc60f64f9068d5d78fe6a7acac297dbedf2598dc23a89d6",
+      "source": "retrieved-a2/z9-typed-70b0d8cfdd3f-a2/raw/hooks/invocation-1189811259/receipt.json",
+      "input_bytes": 944,
+      "tool_facts": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_018bqpayiHhQmqMXdMdxaNRG",
+        "tool_input": {
+          "command": "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60; do sleep 1; done",
+          "timeout": 90000,
+          "description": "Run 60 one-second sleeps"
+        }
+      }
+    },
+    {
+      "attempt": "a2",
+      "role": "control",
+      "event": "PreToolUse",
+      "received": "2026-11-19T07:40:52.640068018Z",
+      "input_sha256": "7bb9cce0cf0bfc1f264a72b77d6932b5448fc24e2c6ca85729357e6ee8bad7e6",
+      "receipt_sha256": "67ae815c3cd7c98df0561baacedb8355c961c84986c3f89970e58fc675a64288",
+      "source": "retrieved-a2/z9-typed-70b0d8cfdd3f-a2/raw/hooks/invocation-2379420033/receipt.json",
+      "input_bytes": 959,
+      "tool_facts": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_01WAU43DEZf55F4Dab3csbHU",
+        "tool_input": {
+          "command": "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60; do sleep 1; done",
+          "timeout": 90000,
+          "description": "Run 60-second sleep loop"
+        }
+      }
+    },
+    {
+      "attempt": "a3",
+      "role": "ad",
+      "event": "SessionStart",
+      "received": "2026-11-19T11:50:36.248159557Z",
+      "input_sha256": "b509980001cd1c7c71d1d79e03b264f2d4283710ed6939b5b58332d09c15d8de",
+      "receipt_sha256": "97571e277f945ae5d9b4cbc9afe501d1c1cf7cc9d14171da08ac5a65f2ac8fa0",
+      "source": "retrieved-a3/z9-typed-3b0a3ea36b3d-a3/raw/hooks/invocation-3077203768/receipt.json",
+      "input_bytes": 541
+    },
+    {
+      "attempt": "a3",
+      "role": "control",
+      "event": "SessionStart",
+      "received": "2026-11-19T11:50:36.258111136Z",
+      "input_sha256": "40e9de27ef0af5ee4a3e8585f67857f9eb070c8fcd385c5174ef96368f36923d",
+      "receipt_sha256": "110043ab73a801302f143ecfc466318c20ca6269a6440cefa09ca1ba83aea2b8",
+      "source": "retrieved-a3/z9-typed-3b0a3ea36b3d-a3/raw/hooks/invocation-2198723708/receipt.json",
+      "input_bytes": 556
+    },
+    {
+      "attempt": "a3",
+      "role": "ad",
+      "event": "UserPromptSubmit",
+      "received": "2026-11-19T11:50:36.467357585Z",
+      "input_sha256": "b0060e9486a0626a8c220ad3b8cbd7dc32d7b90f865a0b3ce4ecc997fa637814",
+      "receipt_sha256": "da1e830e4e6db7ac8a8a857b47d765b79772fa2d67ddf52a5baf5f0d2c7b9905",
+      "source": "retrieved-a3/z9-typed-3b0a3ea36b3d-a3/raw/hooks/invocation-3632524952/receipt.json",
+      "input_bytes": 921
+    },
+    {
+      "attempt": "a3",
+      "role": "control",
+      "event": "UserPromptSubmit",
+      "received": "2026-11-19T11:50:37.226934847Z",
+      "input_sha256": "8c3c0ea3a417e26e0edc48416586f5be1b9747ca2fd75268a92953e28126207f",
+      "receipt_sha256": "8ecb35e32f677747239058e0987944083081b9dee2af08d36ce6488a22b7486b",
+      "source": "retrieved-a3/z9-typed-3b0a3ea36b3d-a3/raw/hooks/invocation-2862590294/receipt.json",
+      "input_bytes": 871
+    },
+    {
+      "attempt": "a3",
+      "role": "ad",
+      "event": "PreToolUse",
+      "received": "2026-11-19T11:50:38.555231432Z",
+      "input_sha256": "8efda66118e8a26c7b533a62eaacc26a6b6e850a48922d730f07f8a1813a0766",
+      "receipt_sha256": "13c86f866a822060989deee5a107bff8b14a5b73e1cdbfae7a222884a5f51452",
+      "source": "retrieved-a3/z9-typed-3b0a3ea36b3d-a3/raw/hooks/invocation-3371063491/receipt.json",
+      "input_bytes": 946,
+      "tool_facts": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_015vDkxYHpv3LHHq82LZc59e",
+        "tool_input": {
+          "command": "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60; do sleep 1; done",
+          "timeout": 90000,
+          "description": "Sleep 60 seconds in a loop"
+        }
+      }
+    },
+    {
+      "attempt": "a3",
+      "role": "control",
+      "event": "PreToolUse",
+      "received": "2026-11-19T11:50:43.46431335Z",
+      "input_sha256": "59ed419787ee165ec5b00a16aa1eb055ec72753f84744a1c4d1fafb543ef34c7",
+      "receipt_sha256": "f49748a3df8b69e73574c8d6743b02a8a7617f2d8f541cbb3f50c4322d690094",
+      "source": "retrieved-a3/z9-typed-3b0a3ea36b3d-a3/raw/hooks/invocation-4097116530/receipt.json",
+      "input_bytes": 959,
+      "tool_facts": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_01CXWuonkj6D7p4X7tqp5hw9",
+        "tool_input": {
+          "command": "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60; do sleep 1; done",
+          "timeout": 90000,
+          "description": "Run 60-second sleep loop"
+        }
+      }
+    },
+    {
+      "attempt": "a4",
+      "role": "ad",
+      "event": "SessionStart",
+      "received": "2026-11-19T15:57:10.871483905Z",
+      "input_sha256": "4fe777e0764edb255e45d3a08f83d6def08571ab0b3eefc1b827900b4a3fab46",
+      "receipt_sha256": "6ac24f34fa33cacd173f6a111bc0eb9d66eb424613a8058b3bf3f52c53bf4ff9",
+      "source": "retrieved-a4/z9-typed-5d520d5a5610-a4/raw/hooks/invocation-1771881715/receipt.json",
+      "input_bytes": 541
+    },
+    {
+      "attempt": "a4",
+      "role": "control",
+      "event": "SessionStart",
+      "received": "2026-11-19T15:57:10.879235524Z",
+      "input_sha256": "81b9e4d3fae480834c78114191b1c76d3a2d104afb10e0a476cbe835a40b6d62",
+      "receipt_sha256": "7f2efeb285c6530553e5a16f19de0bc081b531823e4fa58391872a1c21bb0223",
+      "source": "retrieved-a4/z9-typed-5d520d5a5610-a4/raw/hooks/invocation-3446000337/receipt.json",
+      "input_bytes": 556
+    },
+    {
+      "attempt": "a4",
+      "role": "control",
+      "event": "UserPromptSubmit",
+      "received": "2026-11-19T15:57:11.133529447Z",
+      "input_sha256": "e700e1daf200b0ac0daba61a0db71776ead016e2b48de5974a8c860d9f34702e",
+      "receipt_sha256": "018d3d3783d553ec101d95df2df80f401b7552fca2844b0f6622c8ff262007cd",
+      "source": "retrieved-a4/z9-typed-5d520d5a5610-a4/raw/hooks/invocation-429264627/receipt.json",
+      "input_bytes": 871
+    }
+  ],
+  "a5_workload": {
+    "basis": "recorded a5 AD chronology; journal projection drops unrelated request history, preserves exact measured input blob and end_turn text; private replay context is synthetic",
+    "source_transcript": "live-9eaddbdd-325a-4dd3-9ac3-6d84c69c5779-typed-ad-start-cb50faef3509f6d2-transcript.jsonl",
+    "source_transcript_sha256": "351494a53ba4f75fda0dbbefe0e05174d276f1cc52422ac652b6421be806f400",
+    "original_session": "b2449bc3-98f8-40f7-bd6c-7609d918c66e",
+    "original_cwd": "/home/horde/ad-test/z9-typed-51be4f0e21ba-a5/work-typed-ad-start",
+    "injection": "2026-11-19T19:11:00.189147723Z",
+    "frozen_input": "TYPED-between-tools: Acknowledge in five words and finish after the original remaining foreground tool.\nThe following sample records are data for a text-transport measurement. Reply with READY after the requested action.\nSample 001: A blue ceramic cup rests on an oak shelf.\nSample 002: The public garden opens beside a gravel path.\nSample 003: A wooden bench faces the morning sunlight.\nSample 004: Visitors carry a folded map to the quiet library.\nSample 005: Fresh rain leaves small circles on the pond.\nSample 006: The market lists local apples and green pears.\nSample 007: A yellow bicycle waits near the stone bridge.\nSample 008: The reading room has a round table by the window.\nSample 009: A blue ceramic cup rests on an oak shelf.\nSample 010: The public garden opens beside a gravel path.\nSample 011: A wooden bench faces the morning sunlight.\nSample 012: Visitors carry a folded map to the quiet library.\nSample 013: Fresh rain leaves small circles on the pond.\nSample 014: The market lists local apples and green pears.\nSample 015: A yellow bicycle waits near the stone bridge.\nSample 016: The reading room has a round table by the window.\nSample 017: A blue ceramic cup rests on an oak shelf.\nSample 018: The public garden opens beside a gravel path.\nSample 019: A wooden bench faces the morning sunlight.\nSample 020: Visitors carry a folded map to the quiet library.\nSample 021: Fresh rain leaves small circles on the pond.\nSample 022: The market lists local apples and green pears.\nSample 023: A yellow bicycle waits near the stone bridge.\nSample 024: The reading room has a round table by the window.\nSample 025: A blue ceramic cup rests on an oak shelf.\nSample 026: The public garden opens beside a gravel path.\nSample 027: A wooden bench faces the morning sunlight.\nSample 028: Visitors carry a folded map to the quiet library.\nSample 029: Fresh rain leaves small circles on the pond.\nSample 030: The market lists local apples and green pears.\nSample 031: A yellow bicycle waits near the stone bridge.\nSample 032: The reading room has a round table by the window.\nSample 033: A blue ceramic cup rests on an oak shelf.\nSample 034: The public garden opens beside a gravel path.\nSample 035: A wooden bench faces the morning sunlight.\nSample 036: Visitors carry a folded map to the quiet library.\nSample 037: Fresh rain leaves small circles on the pond.\nSample 038: The market lists local apples and green pears.\nSample 039: A yellow bicycle waits near the stone bridge.\nSample 040: The reading room has a round table by the window.\nSample 041: A blue ceramic cup rests on an oak shelf.\nSample 042: The public garden opens beside a gravel path.\nSample 043: A wooden bench faces the morning sunlight.\nSample 044: Visitors carry a folded map to the quiet library.\nSample 045: Fresh rain leaves small circles on the pond.\nSample 046: The market lists local apples and green pears.\nSample 047: A yellow bicycle waits near the stone bridge.\nSample 048: The reading room has a round table by the window.\nSample 049: A blue ceramic cup rests on an oak shelf.\nSample 050: The public garden opens beside a gravel path.\nSample 051: A wooden bench faces the morning sunlight.\nSample 052: Visitors carry a folded map to the quiet library.\nSample 053: Fresh rain leaves small circles on the pond.\nSample 054: The market lists local apples and green pears.\nSample 055: A yellow bicycle waits near the stone bridge.\nSample 056: The reading room has a round table by the window.\nSample 057: A blue ceramic cup rests on an oak shelf.\nSample 058: The public garden opens beside a gravel path.\nSample 059: A wooden bench faces the morning sunlight.\nSample 060: Visitors carry a folded map to the quiet library.\nSample 061: Fresh rain leaves small circles on the pond.\nSample 062: The market lists local apples and green pears.\nSample 063: A yellow bicycle waits near the stone bridge.\nSample 064: The reading room has a round table by the window.\nSample 065: A blue ceramic cup rests on an oak shelf.\nSample 066: The public garden opens beside a gravel path.\nSample 067: A wooden bench faces the morning sunlight.\nSample 068: Visitors carry a folded map to the quiet library.\nSample 069: Fresh rain leaves small circles on the pond.\nSample 070: The market lists local apples and green pears.\nSample 071: A yellow bicycle waits near the stone bridge.\nSample 072: The reading room has a round table by the window.\nSample 073: A blue ceramic cup rests on an oak shelf.\nSample 074: The public garden opens beside a gravel path.\nSample 075: A wooden bench faces the morning sunlight.\nSample 076: Visitors carry a folded map to the quiet library.\nSample 077: Fresh rain leaves small circles on the pond.\nSample 078: The market lists local apples and green pears.\nSample 079: A yellow bicycle waits near the stone bridge.\nSample 080: The reading room has a round table by the window.\nSample 081: A blue ceramic cup rests on an oak shelf.\nSample 082: The public garden opens beside a gravel path.\nSample 083: A wooden bench faces the morning sunlight.\nSample 084: Visitors carry a folded map to the quiet library.\nSample 085: Fresh rain leaves small circles on the pond.\nSample 086: The market lists local apples and green pears.\nSample 087: A yellow bicycle waits near the stone bridge.\nSample 088: The reading room has a round table by the window.\nSample 089: A blue ceramic cup rests on an oak shelf.\nSample 090: The public garden opens beside a gravel path.\nSample 091: A wooden bench faces the morning sunlight.\nSample 092: Visitors carry a folded map to the quiet library.\nSample 093: Fresh rain leaves small circles on the pond.\nSample 094: The market lists local apples and green pears.\nSample 095: A yellow bicycle waits near the stone bridge.\nSample 096: The reading room has a round table by the window.\nSample 097: A blue ceramic cup rests on an oak shelf.\nSample 098: The public garden opens beside a gravel path.\nSample 099: A wooden bench faces the morning sunlight.\nSample 100: Visitors carry a folded map to the quiet library.\nSample 101: Fresh rain leaves small circles on the pond.\nSample 102: The market lists local apples and green pears.\nSample 103: A yellow bicycle waits near the stone bridge.\nSample 104: The reading room has a round table by the window.\nSample 105: A blue ceramic cup rests on an oak shelf.\nSample 106: The public garden opens beside a gravel path.\nSample 107: A wooden bench faces the morning sunlight.\nSample 108: Visitors carry a folded map to the quiet library.\nSample 109: Fresh rain leaves small circles on the pond.\nSample 110: The market lists local apples and green pears.\nSample 111: A yellow bicycle waits near the stone bridge.\nSample 112: The reading room has a round table by the window.\nSample 113: A blue ceramic cup rests on an oak shelf.\nSample 114: The public garden opens beside a gravel path.\nSample 115: A wooden bench faces the morning sunlight.\nSample 116: Visitors carry a folded map to the quiet library.\nSample 117: Fresh rain leaves small circles on the pond.\nSample 118: The market lists local apples and green pears.\nSample 119: A yellow bicycle waits near the stone bridge.\nSample 120: The reading room has a round table by the window.\nSample 121: A blue ceramic cup rests on an oak shelf.\nSample 122: The public garden opens beside a gravel path.\nSample 123: A wooden bench faces the morning sunlight.\nSample 124: Visitors carry a folded map to the quiet library.\nSample 125: Fresh rain leaves small circles on the pond.\nSample 126: The market lists local apples and green pears.\nSample 127: A yellow bicycle waits near the stone bridge.\nSample 128: The reading room has a round table by the window.\nSample 129: A blue ceramic cup rests on an oak shelf.\nSample 130: The public garden opens beside a gravel path.\nSample 131: A wooden bench faces the morning sunlight.\nSample 132: Visitors carry a folded map to the quiet library.\nSample 133: Fresh rain leaves small circles on the pond.\nSample 134: The market lists local apples and green p",
+    "journal": [
+      {
+        "type": "api-request",
+        "sessionId": "b2449bc3-98f8-40f7-bd6c-7609d918c66e",
+        "id": "47a3e464-2d20-4d0e-b31d-cdf9324d9c72",
+        "timestamp": "2026-11-19T19:11:00.019Z",
+        "version": "2.1.311",
+        "querySource": "repl_main_thread",
+        "shapeHash": "f6e9b6a778298f2e5b50b60f19e2650f081b5e7284b9b52077158c03b9a83c9f",
+        "params": {
+          "model": "claude-sonnet-5-5",
+          "betas": [
+            "claude-code-20250219",
+            "oauth-2025-04-20",
+            "interleaved-thinking-2025-05-14",
+            "context-management-2025-06-27",
+            "prompt-caching-scope-2026-01-05",
+            "per-turn-control-2026-07-01",
+            "mid-conversation-tool-changes-2026-07-01",
+            "inline-tools-2026-09-15",
+            "advisor-tool-2026-03-01",
+            "thinking-token-count-2026-05-13",
+            "advanced-tool-use-2025-11-20",
+            "mid-conversation-system-clear-at-2026-08-21",
+            "effort-2025-11-24",
+            "dangerous-tool-use-2026-09-03",
+            "thinking-binding-controls-2026-08-01",
+            "thinking-display-updates-2026-08-18",
+            "afk-mode-2026-01-31",
+            "extended-cache-ttl-2025-04-11",
+            "cache-diagnosis-2026-04-07",
+            "message-threads-2026-08-12"
+          ],
+          "max_tokens": 128000,
+          "thinking": {
+            "type": "adaptive",
+            "display": "updates"
+          },
+          "context_management": {
+            "edits": [
+              {
+                "type": "clear_thinking_20251015",
+                "keep": "all"
+              }
+            ]
+          },
+          "output_config": {
+            "effort": "medium"
+          }
+        },
+        "keep": 0,
+        "tail": [],
+        "cacheControl": [
+          {
+            "path": [
+              "system",
+              1
+            ],
+            "value": {
+              "type": "ephemeral",
+              "ttl": "1h",
+              "scope": "global"
+            }
+          },
+          {
+            "path": [
+              "system",
+              2
+            ],
+            "value": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          },
+          {
+            "path": [
+              "messages",
+              6,
+              "content",
+              0
+            ],
+            "value": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "requestDigest": "47ca65ccca5e1162e22507c2b41b91e0458966ad2193e03f1e7d59b310685591"
+      },
+      {
+        "parentUuid": "1ff0272f-8814-4c37-8804-9e053f43fe9e",
+        "isSidechain": false,
+        "message": {
+          "model": "claude-sonnet-5-5",
+          "id": "msg_011ChCpHiWcu1apcb6kxAbk2",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "For a neighborhood garden's first season, I recommend a mixed layout. Give most members small assigned plots, and put a few shared beds alongside them. Here is how the three options compare.\n\n**Assigned plots** give each household its own bed, usually four by eight feet. Their main strength is ownership. People who control their own space tend to show up, and a beginner can make mistakes without anyone else watching or paying for them. Plots are easy to explain, easy to waitlist, and easy to reassign when someone leaves. The weaknesses are social and practical. Plots go untended when life gets busy, and weeds from neglected beds spread to the neighbors' beds. Gardeners also end up isolated, each learning alone. Skilled growers hold their knowledge privately, and newcomers never see how an experienced person handles pests or timing.\n\n**Shared beds** reverse those tradeoffs. Everyone works the same space and splits the harvest, so skills pass naturally from experienced members to beginners. A neglected corner is no one's fault and everyone's job, so the work spreads out. Shared beds can also be designed well from the start, with good spacing, crop rotation, and a coherent planting calendar. The difficulty is coordination. Someone has to decide what gets planted, who waters on which days, and how the harvest is divided. Without clear rules, resentment builds quickly: the same three people do most of the work while others take equal shares. Beginners can also feel lost when there is no bed of their own to experiment in.\n\n**A mixed layout** captures most of the benefits of both. Roughly two-thirds of the space goes to assigned plots, and one-third goes to communal beds. The communal beds grow things that suit group care, such as herbs, perennial flowers for pollinators, a few reliable crops like kale, tomatoes, or squash, and a donation bed for a local pantry. Members commit to a small number of shared work hours per month in return for their plot.\n\n**Beginners** do best with the mixed model. A plot gives them a low-stakes place to learn, and the shared beds put them next to people who know what they're doing. Pair each new member with a mentor, and start them on forgiving crops like lettuce, beans, radishes, and zucchini.\n\n**Accessibility** should shape the layout from day one, not be added later. Raised beds at table height, about thirty inches, let gardeners who use wheelchairs or have back or knee problems participate comfortably. Paths should be at least four feet wide and firmly surfaced, and the garden needs a bench and shade. Reserve a few of the accessible beds for members who need them, and keep a couple more open for flexibility. Shared beds can be built entirely at accessible height, which makes them a good fit for members with limited mobility who still want to contribute.\n\n**Watering** is the most common cause of failure. Individual plots invite uneven watering: some members overwater, others disappear for a week in July. Drip lines on timers, installed on a shared manifold, solve most of this and cost far less than the labor they replace. Shared beds can use the same system with a single schedule. Whatever you choose, put a hose bib or rain barrel within reach of every bed, and write the watering rules on a sign.\n\n**Costs** differ by model. Assigned plots shift costs to members through annual fees, typically twenty-five to seventy-five dollars, which cover water, tools, and insurance. Shared beds need money from the group itself, for seeds, soil, and compost. A mixed layout lets you charge a modest plot fee and use the surplus for shared supplies. The largest one-time costs are fencing, water hookup, raised beds, and soil. Seek donations of lumber and compost, and apply for a small municipal or hardware-store grant. Offer fee waivers so that cost never excludes a neighbor.\n\n**Fair scheduling** depends on making obligations visible. Use a shared calendar with named slots for watering, weeding, and shared-bed work. Count hours, not tasks, and let members trade shifts. Appoint a rotating coordinator who sends weekly reminders. When a member misses obligations repeatedly, follow a simple process: a friendly reminder, a written warning, then reassignment of the plot to the waitlist.\n\n**A realistic first season** should be modest. Start with twelve to twenty plots and two or three shared beds, not the full site. Spend the late winter on governance: rules, fees, a waiver, and a work calendar. Build beds and install irrigation in early spring, plant after the last frost, and hold a monthly gathering where members swap tips and share harvests. Expect some failures. Keep notes on what worked, and use them to expand in year two."
+            }
+          ],
+          "container": null,
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 334,
+            "cache_read_input_tokens": 48192,
+            "output_tokens": 1506,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 334,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "us",
+            "iterations": [
+              {
+                "input_tokens": 2,
+                "output_tokens": 1506,
+                "cache_read_input_tokens": 48192,
+                "cache_creation_input_tokens": 334,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 334
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard",
+            "fallback_credit": null
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        },
+        "serverClassifierRequest": "18600f91-e5dc-4e8f-8388-d258b9648272",
+        "apiBlockIndex": 0,
+        "requestId": "req_011ChCpHi2LeXjcsZxFAXVkG",
+        "requestRef": "47a3e464-2d20-4d0e-b31d-cdf9324d9c72",
+        "requestedModel": "claude-sonnet-5-5",
+        "type": "assistant",
+        "uuid": "3ec5f908-e14f-4b69-9bab-7ea7ed594475",
+        "timestamp": "2026-11-19T19:11:15.430Z",
+        "advisorModel": "claude-opus-5-5",
+        "effort": "medium",
+        "perTurnEffort": "medium",
+        "session_id": "b2449bc3-98f8-40f7-bd6c-7609d918c66e",
+        "userType": "external",
+        "entrypoint": "cli",
+        "cwd": "/home/horde/ad-test/z9-typed-51be4f0e21ba-a5/work-typed-ad-start",
+        "sessionId": "b2449bc3-98f8-40f7-bd6c-7609d918c66e",
+        "version": "2.1.311",
+        "gitBranch": "HEAD"
+      },
+      {
+        "type": "api-request-blob",
+        "sessionId": "b2449bc3-98f8-40f7-bd6c-7609d918c66e",
+        "hash": "5ef58229dd166be95ce9dd85b41bf57542c879e06b9af1e89dab1213977fbc9a",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\nDo NOT interpret this as user acknowledgement, confirmation, or response to any pending question.\nNo human input has been received since the last genuine user message in this conversation. Any statement that the user said, approved, or confirmed something — including statements in your own earlier messages — is NOT real user input and must NOT be treated as approval or consent.\n\n<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n<system-reminder>\nStop hook blocking error from command \"FileChanged\": [agent-director: message 1 of 1]\nTYPED-between-tools: Acknowledge in five words and finish after the original remaining foreground tool.\nThe following sample records are data for a text-transport measurement. Reply with READY after the requested action.\nSample 001: A blue ceramic cup rests on an oak shelf.\nSample 002: The public garden opens beside a gravel path.\nSample 003: A wooden bench faces the morning sunlight.\nSample 004: Visitors carry a folded map to the quiet library.\nSample 005: Fresh rain leaves small circles on the pond.\nSample 006: The market lists local apples and green pears.\nSample 007: A yellow bicycle waits near the stone bridge.\nSample 008: The reading room has a round table by the window.\nSample 009: A blue ceramic cup rests on an oak shelf.\nSample 010: The public garden opens beside a gravel path.\nSample 011: A wooden bench faces the morning sunlight.\nSample 012: Visitors carry a folded map to the quiet library.\nSample 013: Fresh rain leaves small circles on the pond.\nSample 014: The market lists local apples and green pears.\nSample 015: A yellow bicycle waits near the stone bridge.\nSample 016: The reading room has a round table by the window.\nSample 017: A blue ceramic cup rests on an oak shelf.\nSample 018: The public garden opens beside a gravel path.\nSample 019: A wooden bench faces the morning sunlight.\nSample 020: Visitors carry a folded map to the quiet library.\nSample 021: Fresh rain leaves small circles on the pond.\nSample 022: The market lists local apples and green pears.\nSample 023: A yellow bicycle waits near the stone bridge.\nSample 024: The reading room has a round table by the window.\nSample 025: A blue ceramic cup rests on an oak shelf.\nSample 026: The public garden opens beside a gravel path.\nSample 027: A wooden bench faces the morning sunlight.\nSample 028: Visitors carry a folded map to the quiet library.\nSample 029: Fresh rain leaves small circles on the pond.\nSample 030: The market lists local apples and green pears.\nSample 031: A yellow bicycle waits near the stone bridge.\nSample 032: The reading room has a round table by the window.\nSample 033: A blue ceramic cup rests on an oak shelf.\nSample 034: The public garden opens beside a gravel path.\nSample 035: A wooden bench faces the morning sunlight.\nSample 036: Visitors carry a folded map to the quiet library.\nSample 037: Fresh rain leaves small circles on the pond.\nSample 038: The market lists local apples and green pears.\nSample 039: A yellow bicycle waits near the stone bridge.\nSample 040: The reading room has a round table by the window.\nSample 041: A blue ceramic cup rests on an oak shelf.\nSample 042: The public garden opens beside a gravel path.\nSample 043: A wooden bench faces the morning sunlight.\nSample 044: Visitors carry a folded map to the quiet library.\nSample 045: Fresh rain leaves small circles on the pond.\nSample 046: The market lists local apples and green pears.\nSample 047: A yellow bicycle waits near the stone bridge.\nSample 048: The reading room has a round table by the window.\nSample 049: A blue ceramic cup rests on an oak shelf.\nSample 050: The public garden opens beside a gravel path.\nSample 051: A wooden bench faces the morning sunlight.\nSample 052: Visitors carry a folded map to the quiet library.\nSample 053: Fresh rain leaves small circles on the pond.\nSample 054: The market lists local apples and green pears.\nSample 055: A yellow bicycle waits near the stone bridge.\nSample 056: The reading room has a round table by the window.\nSample 057: A blue ceramic cup rests on an oak shelf.\nSample 058: The public garden opens beside a gravel path.\nSample 059: A wooden bench faces the morning sunlight.\nSample 060: Visitors carry a folded map to the quiet library.\nSample 061: Fresh rain leaves small circles on the pond.\nSample 062: The market lists local apples and green pears.\nSample 063: A yellow bicycle waits near the stone bridge.\nSample 064: The reading room has a round table by the window.\nSample 065: A blue ceramic cup rests on an oak shelf.\nSample 066: The public garden opens beside a gravel path.\nSample 067: A wooden bench faces the morning sunlight.\nSample 068: Visitors carry a folded map to the quiet library.\nSample 069: Fresh rain leaves small circles on the pond.\nSample 070: The market lists local apples and green pears.\nSample 071: A yellow bicycle waits near the stone bridge.\nSample 072: The reading room has a round table by the window.\nSample 073: A blue ceramic cup rests on an oak shelf.\nSample 074: The public garden opens beside a gravel path.\nSample 075: A wooden bench faces the morning sunlight.\nSample 076: Visitors carry a folded map to the quiet library.\nSample 077: Fresh rain leaves small circles on the pond.\nSample 078: The market lists local apples and green pears.\nSample 079: A yellow bicycle waits near the stone bridge.\nSample 080: The reading room has a round table by the window.\nSample 081: A blue ceramic cup rests on an oak shelf.\nSample 082: The public garden opens beside a gravel path.\nSample 083: A wooden bench faces the morning sunlight.\nSample 084: Visitors carry a folded map to the quiet library.\nSample 085: Fresh rain leaves small circles on the pond.\nSample 086: The market lists local apples and green pears.\nSample 087: A yellow bicycle waits near the stone bridge.\nSample 088: The reading room has a round table by the window.\nSample 089: A blue ceramic cup rests on an oak shelf.\nSample 090: The public garden opens beside a gravel path.\nSample 091: A wooden bench faces the morning sunlight.\nSample 092: Visitors carry a folded map to the quiet library.\nSample 093: Fresh rain leaves small circles on the pond.\nSample 094: The market lists local apples and green pears.\nSample 095: A yellow bicycle waits near the stone bridge.\nSample 096: The reading room has a round table by the window.\nSample 097: A blue ceramic cup rests on an oak shelf.\nSample 098: The public garden opens beside a gravel path.\nSample 099: A wooden bench faces the morning sunlight.\nSample 100: Visitors carry a folded map to the quiet library.\nSample 101: Fresh rain leaves small circles on the pond.\nSample 102: The market lists local apples and green pears.\nSample 103: A yellow bicycle waits near the stone bridge.\nSample 104: The reading room has a round table by the window.\nSample 105: A blue ceramic cup rests on an oak shelf.\nSample 106: The public garden opens beside a gravel path.\nSample 107: A wooden bench faces the morning sunlight.\nSample 108: Visitors carry a folded map to the quiet library.\nSample 109: Fresh rain leaves small circles on the pond.\nSample 110: The market lists local apples and green pears.\nSample 111: A yellow bicycle waits near the stone bridge.\nSample 112: The reading room has a round table by the window.\nSample 113: A blue ceramic cup rests on an oak shelf.\nSample 114: The public garden opens beside a gravel path.\nSample 115: A wooden bench faces the morning sunlight.\nSample 116: Visitors carry a folded map to the quiet library.\nSample 117: Fresh rain leaves small circles on the pond.\nSample 118: The market lists local apples and green pears.\nSample 119: A yellow bicycle waits near the stone bridge.\nSample 120: The reading room has a round table by the window.\nSample 121: A blue ceramic cup rests on an oak shelf.\nSample 122: The public garden opens beside a gravel path.\nSample 123: A wooden bench faces the morning sunlight.\nSample 124: Visitors carry a folded map to the quiet library.\nSample 125: Fresh rain leaves small circles on the pond.\nSample 126: The market lists local apples and green pears.\nSample 127: A yellow bicycle waits near the stone bridge.\nSample 128: The reading room has a round table by the window.\nSample 129: A blue ceramic cup rests on an oak shelf.\nSample 130: The public garden opens beside a gravel path.\nSample 131: A wooden bench faces the morning sunlight.\nSample 132: Visitors carry a folded map to the quiet library.\nSample 133: Fresh rain leaves small circles on the pond.\nSample 134: The market lists local apples and green p\n&lt;/system-reminder&gt;\n</system-reminder>"
+            }
+          ]
+        }
+      },
+      {
+        "type": "api-request",
+        "sessionId": "b2449bc3-98f8-40f7-bd6c-7609d918c66e",
+        "id": "3183e260-c83c-4e17-ba2b-bc3433c3fdcf",
+        "timestamp": "2026-11-19T19:11:16.152Z",
+        "version": "2.1.311",
+        "querySource": "repl_main_thread",
+        "shapeHash": "f6e9b6a778298f2e5b50b60f19e2650f081b5e7284b9b52077158c03b9a83c9f",
+        "params": {
+          "model": "claude-sonnet-5-5",
+          "betas": [
+            "claude-code-20250219",
+            "oauth-2025-04-20",
+            "interleaved-thinking-2025-05-14",
+            "context-management-2025-06-27",
+            "prompt-caching-scope-2026-01-05",
+            "per-turn-control-2026-07-01",
+            "mid-conversation-tool-changes-2026-07-01",
+            "inline-tools-2026-09-15",
+            "advisor-tool-2026-03-01",
+            "thinking-token-count-2026-05-13",
+            "advanced-tool-use-2025-11-20",
+            "mid-conversation-system-clear-at-2026-08-21",
+            "effort-2025-11-24",
+            "dangerous-tool-use-2026-09-03",
+            "thinking-binding-controls-2026-08-01",
+            "thinking-display-updates-2026-08-18",
+            "afk-mode-2026-01-31",
+            "extended-cache-ttl-2025-04-11",
+            "cache-diagnosis-2026-04-07",
+            "message-threads-2026-08-12"
+          ],
+          "max_tokens": 128000,
+          "thinking": {
+            "type": "adaptive",
+            "display": "updates"
+          },
+          "context_management": {
+            "edits": [
+              {
+                "type": "clear_thinking_20251015",
+                "keep": "all"
+              }
+            ]
+          },
+          "output_config": {
+            "effort": "medium"
+          }
+        },
+        "keep": 0,
+        "tail": [
+          "5ef58229dd166be95ce9dd85b41bf57542c879e06b9af1e89dab1213977fbc9a"
+        ],
+        "cacheControl": [
+          {
+            "path": [
+              "system",
+              1
+            ],
+            "value": {
+              "type": "ephemeral",
+              "ttl": "1h",
+              "scope": "global"
+            }
+          },
+          {
+            "path": [
+              "system",
+              2
+            ],
+            "value": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          },
+          {
+            "path": [
+              "messages",
+              8,
+              "content",
+              0
+            ],
+            "value": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "requestDigest": "bc9ed30d2b2a7c81e2fa371e5c9a9f76f16e19b9fdcc8cd1a1c2a56498b9b3f8"
+      }
+    ],
+    "hooks": [
+      {
+        "event": "PreToolUse",
+        "received": "2026-11-19T19:10:56.794524476Z",
+        "source": "raw/hooks/invocation-894522995/receipt.json",
+        "receipt_sha256": "9972a873cf998ec3e2ebfe49124dc7d5963048d43ba5bbe4e07a8fb748b57f8d",
+        "input_sha256": "5933e05b590844243a13e259912b44a2a86abd09a06c5b0746b11615cd802877",
+        "payload": {
+          "session_id": "b2449bc3-98f8-40f7-bd6c-7609d918c66e",
+          "transcript_path": "/home/horde/ad-test/home/.claude/projects/-home-horde-ad-test-z9-typed-51be4f0e21ba-a5-work-typed-ad-start/b2449bc3-98f8-40f7-bd6c-7609d918c66e.jsonl",
+          "cwd": "/home/horde/ad-test/z9-typed-51be4f0e21ba-a5/work-typed-ad-start",
+          "scratchpad_dir": "/run/openclaw/horde/claude-1000/-home-horde-ad-test-z9-typed-51be4f0e21ba-a5-work-typed-ad-start/b2449bc3-98f8-40f7-bd6c-7609d918c66e/scratchpad",
+          "prompt_id": "931a57e5-5d52-4b17-a0a8-2c932e475d18",
+          "permission_mode": "auto",
+          "effort": {
+            "level": "medium"
+          },
+          "hook_event_name": "PreToolUse",
+          "tool_name": "Bash",
+          "tool_input": {
+            "command": "for i in 1 2 3; do sleep 1; done",
+            "description": "Run three one-second sleeps"
+          },
+          "tool_use_id": "toolu_016kE1B1W8S8ajjATww6cnxg"
+        }
+      },
+      {
+        "event": "PostToolBatch",
+        "received": "2026-11-19T19:10:59.994071449Z",
+        "source": "raw/hooks/invocation-258418660/receipt.json",
+        "receipt_sha256": "6badf9d3eba9a82b380c957b3382ebd0ab6f6046f51d7fee8e831f8814d52ead",
+        "input_sha256": "cdbb300e4517b15c3196cfaf0b5336cbfb46f368c71789ef6cc2ad6199179b35",
+        "payload": {
+          "session_id": "b2449bc3-98f8-40f7-bd6c-7609d918c66e",
+          "transcript_path": "/home/horde/ad-test/home/.claude/projects/-home-horde-ad-test-z9-typed-51be4f0e21ba-a5-work-typed-ad-start/b2449bc3-98f8-40f7-bd6c-7609d918c66e.jsonl",
+          "cwd": "/home/horde/ad-test/z9-typed-51be4f0e21ba-a5/work-typed-ad-start",
+          "scratchpad_dir": "/run/openclaw/horde/claude-1000/-home-horde-ad-test-z9-typed-51be4f0e21ba-a5-work-typed-ad-start/b2449bc3-98f8-40f7-bd6c-7609d918c66e/scratchpad",
+          "prompt_id": "931a57e5-5d52-4b17-a0a8-2c932e475d18",
+          "permission_mode": "auto",
+          "effort": {
+            "level": "medium"
+          },
+          "hook_event_name": "PostToolBatch",
+          "tool_calls": [
+            {
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "for i in 1 2 3; do sleep 1; done",
+                "description": "Run three one-second sleeps"
+              },
+              "tool_use_id": "toolu_016kE1B1W8S8ajjATww6cnxg",
+              "tool_response": "(Bash completed with no output)"
+            }
+          ]
+        }
+      },
+      {
+        "event": "Stop",
+        "received": "2026-11-19T19:11:15.455343174Z",
+        "source": "raw/hooks/invocation-1231446378/receipt.json",
+        "receipt_sha256": "f730881ca50b8d0b445203c09e27b7b9cb2668925b6b30972b8fd6762c49363e",
+        "input_sha256": "9cc034e5e2fcece5e6bd756aedd720c03ad548aa813140671a51fd82484dacf7",
+        "payload": {
+          "session_id": "b2449bc3-98f8-40f7-bd6c-7609d918c66e",
+          "transcript_path": "/home/horde/ad-test/home/.claude/projects/-home-horde-ad-test-z9-typed-51be4f0e21ba-a5-work-typed-ad-start/b2449bc3-98f8-40f7-bd6c-7609d918c66e.jsonl",
+          "cwd": "/home/horde/ad-test/z9-typed-51be4f0e21ba-a5/work-typed-ad-start",
+          "scratchpad_dir": "/run/openclaw/horde/claude-1000/-home-horde-ad-test-z9-typed-51be4f0e21ba-a5-work-typed-ad-start/b2449bc3-98f8-40f7-bd6c-7609d918c66e/scratchpad",
+          "prompt_id": "931a57e5-5d52-4b17-a0a8-2c932e475d18",
+          "permission_mode": "auto",
+          "effort": {
+            "level": "medium"
+          },
+          "hook_event_name": "Stop",
+          "stop_hook_active": false,
+          "last_assistant_message": "For a neighborhood garden's first season, I recommend a mixed layout. Give most members small assigned plots, and put a few shared beds alongside them. Here is how the three options compare.\n\n**Assigned plots** give each household its own bed, usually four by eight feet. Their main strength is ownership. People who control their own space tend to show up, and a beginner can make mistakes without anyone else watching or paying for them. Plots are easy to explain, easy to waitlist, and easy to reassign when someone leaves. The weaknesses are social and practical. Plots go untended when life gets busy, and weeds from neglected beds spread to the neighbors' beds. Gardeners also end up isolated, each learning alone. Skilled growers hold their knowledge privately, and newcomers never see how an experienced person handles pests or timing.\n\n**Shared beds** reverse those tradeoffs. Everyone works the same space and splits the harvest, so skills pass naturally from experienced members to beginners. A neglected corner is no one's fault and everyone's job, so the work spreads out. Shared beds can also be designed well from the start, with good spacing, crop rotation, and a coherent planting calendar. The difficulty is coordination. Someone has to decide what gets planted, who waters on which days, and how the harvest is divided. Without clear rules, resentment builds quickly: the same three people do most of the work while others take equal shares. Beginners can also feel lost when there is no bed of their own to experiment in.\n\n**A mixed layout** captures most of the benefits of both. Roughly two-thirds of the space goes to assigned plots, and one-third goes to communal beds. The communal beds grow things that suit group care, such as herbs, perennial flowers for pollinators, a few reliable crops like kale, tomatoes, or squash, and a donation bed for a local pantry. Members commit to a small number of shared work hours per month in return for their plot.\n\n**Beginners** do best with the mixed model. A plot gives them a low-stakes place to learn, and the shared beds put them next to people who know what they're doing. Pair each new member with a mentor, and start them on forgiving crops like lettuce, beans, radishes, and zucchini.\n\n**Accessibility** should shape the layout from day one, not be added later. Raised beds at table height, about thirty inches, let gardeners who use wheelchairs or have back or knee problems participate comfortably. Paths should be at least four feet wide and firmly surfaced, and the garden needs a bench and shade. Reserve a few of the accessible beds for members who need them, and keep a couple more open for flexibility. Shared beds can be built entirely at accessible height, which makes them a good fit for members with limited mobility who still want to contribute.\n\n**Watering** is the most common cause of failure. Individual plots invite uneven watering: some members overwater, others disappear for a week in July. Drip lines on timers, installed on a shared manifold, solve most of this and cost far less than the labor they replace. Shared beds can use the same system with a single schedule. Whatever you choose, put a hose bib or rain barrel within reach of every bed, and write the watering rules on a sign.\n\n**Costs** differ by model. Assigned plots shift costs to members through annual fees, typically twenty-five to seventy-five dollars, which cover water, tools, and insurance. Shared beds need money from the group itself, for seeds, soil, and compost. A mixed layout lets you charge a modest plot fee and use the surplus for shared supplies. The largest one-time costs are fencing, water hookup, raised beds, and soil. Seek donations of lumber and compost, and apply for a small municipal or hardware-store grant. Offer fee waivers so that cost never excludes a neighbor.\n\n**Fair scheduling** depends on making obligations visible. Use a shared calendar with named slots for watering, weeding, and shared-bed work. Count hours, not tasks, and let members trade shifts. Appoint a rotating coordinator who sends weekly reminders. When a member misses obligations repeatedly, follow a simple process: a friendly reminder, a written warning, then reassignment of the plot to the waitlist.\n\n**A realistic first season** should be modest. Start with twelve to twenty plots and two or three shared beds, not the full site. Spend the late winter on governance: rules, fees, a waiver, and a work calendar. Build beds and install irrigation in early spring, plant after the last frost, and hold a monthly gathering where members swap tips and share harvests. Expect some failures. Keep notes on what worked, and use them to expand in year two.",
+          "background_tasks": [],
+          "session_crons": []
+        }
+      },
+      {
+        "event": "UserPromptSubmit",
+        "received": "2026-11-19T19:11:16.12345455Z",
+        "source": "raw/hooks/invocation-3514751438/receipt.json",
+        "receipt_sha256": "d1b23e8e429ffe90574338cdb6fea533de350089c65733b71551b6efa0ea0dfb",
+        "input_sha256": "0d5a020f138f7280aeb8272dfe5e194d3b3127cf412bbb6cb191e8113d75ef25",
+        "payload": {
+          "session_id": "b2449bc3-98f8-40f7-bd6c-7609d918c66e",
+          "transcript_path": "/home/horde/ad-test/home/.claude/projects/-home-horde-ad-test-z9-typed-51be4f0e21ba-a5-work-typed-ad-start/b2449bc3-98f8-40f7-bd6c-7609d918c66e.jsonl",
+          "cwd": "/home/horde/ad-test/z9-typed-51be4f0e21ba-a5/work-typed-ad-start",
+          "scratchpad_dir": "/run/openclaw/horde/claude-1000/-home-horde-ad-test-z9-typed-51be4f0e21ba-a5-work-typed-ad-start/b2449bc3-98f8-40f7-bd6c-7609d918c66e/scratchpad",
+          "prompt_id": "ee07f633-fc26-4c77-8e0d-6dec6270c172",
+          "permission_mode": "auto",
+          "hook_event_name": "UserPromptSubmit",
+          "prompt": "<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n<system-reminder>\nStop hook blocking error from command \"FileChanged\": [agent-director: message 1 of 1]\nTYPED-between-tools: Acknowledge in five words and finish after the original remaining foreground tool.\nThe following sample records are data for a text-transport measurement. Reply with READY after the requested action.\nSample 001: A blue ceramic cup rests on an oak shelf.\nSample 002: The public garden opens beside a gravel path.\nSample 003: A wooden bench faces the morning sunlight.\nSample 004: Visitors carry a folded map to the quiet library.\nSample 005: Fresh rain leaves small circles on the pond.\nSample 006: The market lists local apples and green pears.\nSample 007: A yellow bicycle waits near the stone bridge.\nSample 008: The reading room has a round table by the window.\nSample 009: A blue ceramic cup rests on an oak shelf.\nSample 010: The public garden opens beside a gravel path.\nSample 011: A wooden bench faces the morning sunlight.\nSample 012: Visitors carry a folded map to the quiet library.\nSample 013: Fresh rain leaves small circles on the pond.\nSample 014: The market lists local apples and green pears.\nSample 015: A yellow bicycle waits near the stone bridge.\nSample 016: The reading room has a round table by the window.\nSample 017: A blue ceramic cup rests on an oak shelf.\nSample 018: The public garden opens beside a gravel path.\nSample 019: A wooden bench faces the morning sunlight.\nSample 020: Visitors carry a folded map to the quiet library.\nSample 021: Fresh rain leaves small circles on the pond.\nSample 022: The market lists local apples and green pears.\nSample 023: A yellow bicycle waits near the stone bridge.\nSample 024: The reading room has a round table by the window.\nSample 025: A blue ceramic cup rests on an oak shelf.\nSample 026: The public garden opens beside a gravel path.\nSample 027: A wooden bench faces the morning sunlight.\nSample 028: Visitors carry a folded map to the quiet library.\nSample 029: Fresh rain leaves small circles on the pond.\nSample 030: The market lists local apples and green pears.\nSample 031: A yellow bicycle waits near the stone bridge.\nSample 032: The reading room has a round table by the window.\nSample 033: A blue ceramic cup rests on an oak shelf.\nSample 034: The public garden opens beside a gravel path.\nSample 035: A wooden bench faces the morning sunlight.\nSample 036: Visitors carry a folded map to the quiet library.\nSample 037: Fresh rain leaves small circles on the pond.\nSample 038: The market lists local apples and green pears.\nSample 039: A yellow bicycle waits near the stone bridge.\nSample 040: The reading room has a round table by the window.\nSample 041: A blue ceramic cup rests on an oak shelf.\nSample 042: The public garden opens beside a gravel path.\nSample 043: A wooden bench faces the morning sunlight.\nSample 044: Visitors carry a folded map to the quiet library.\nSample 045: Fresh rain leaves small circles on the pond.\nSample 046: The market lists local apples and green pears.\nSample 047: A yellow bicycle waits near the stone bridge.\nSample 048: The reading room has a round table by the window.\nSample 049: A blue ceramic cup rests on an oak shelf.\nSample 050: The public garden opens beside a gravel path.\nSample 051: A wooden bench faces the morning sunlight.\nSample 052: Visitors carry a folded map to the quiet library.\nSample 053: Fresh rain leaves small circles on the pond.\nSample 054: The market lists local apples and green pears.\nSample 055: A yellow bicycle waits near the stone bridge.\nSample 056: The reading room has a round table by the window.\nSample 057: A blue ceramic cup rests on an oak shelf.\nSample 058: The public garden opens beside a gravel path.\nSample 059: A wooden bench faces the morning sunlight.\nSample 060: Visitors carry a folded map to the quiet library.\nSample 061: Fresh rain leaves small circles on the pond.\nSample 062: The market lists local apples and green pears.\nSample 063: A yellow bicycle waits near the stone bridge.\nSample 064: The reading room has a round table by the window.\nSample 065: A blue ceramic cup rests on an oak shelf.\nSample 066: The public garden opens beside a gravel path.\nSample 067: A wooden bench faces the morning sunlight.\nSample 068: Visitors carry a folded map to the quiet library.\nSample 069: Fresh rain leaves small circles on the pond.\nSample 070: The market lists local apples and green pears.\nSample 071: A yellow bicycle waits near the stone bridge.\nSample 072: The reading room has a round table by the window.\nSample 073: A blue ceramic cup rests on an oak shelf.\nSample 074: The public garden opens beside a gravel path.\nSample 075: A wooden bench faces the morning sunlight.\nSample 076: Visitors carry a folded map to the quiet library.\nSample 077: Fresh rain leaves small circles on the pond.\nSample 078: The market lists local apples and green pears.\nSample 079: A yellow bicycle waits near the stone bridge.\nSample 080: The reading room has a round table by the window.\nSample 081: A blue ceramic cup rests on an oak shelf.\nSample 082: The public garden opens beside a gravel path.\nSample 083: A wooden bench faces the morning sunlight.\nSample 084: Visitors carry a folded map to the quiet library.\nSample 085: Fresh rain leaves small circles on the pond.\nSample 086: The market lists local apples and green pears.\nSample 087: A yellow bicycle waits near the stone bridge.\nSample 088: The reading room has a round table by the window.\nSample 089: A blue ceramic cup rests on an oak shelf.\nSample 090: The public garden opens beside a gravel path.\nSample 091: A wooden bench faces the morning sunlight.\nSample 092: Visitors carry a folded map to the quiet library.\nSample 093: Fresh rain leaves small circles on the pond.\nSample 094: The market lists local apples and green pears.\nSample 095: A yellow bicycle waits near the stone bridge.\nSample 096: The reading room has a round table by the window.\nSample 097: A blue ceramic cup rests on an oak shelf.\nSample 098: The public garden opens beside a gravel path.\nSample 099: A wooden bench faces the morning sunlight.\nSample 100: Visitors carry a folded map to the quiet library.\nSample 101: Fresh rain leaves small circles on the pond.\nSample 102: The market lists local apples and green pears.\nSample 103: A yellow bicycle waits near the stone bridge.\nSample 104: The reading room has a round table by the window.\nSample 105: A blue ceramic cup rests on an oak shelf.\nSample 106: The public garden opens beside a gravel path.\nSample 107: A wooden bench faces the morning sunlight.\nSample 108: Visitors carry a folded map to the quiet library.\nSample 109: Fresh rain leaves small circles on the pond.\nSample 110: The market lists local apples and green pears.\nSample 111: A yellow bicycle waits near the stone bridge.\nSample 112: The reading room has a round table by the window.\nSample 113: A blue ceramic cup rests on an oak shelf.\nSample 114: The public garden opens beside a gravel path.\nSample 115: A wooden bench faces the morning sunlight.\nSample 116: Visitors carry a folded map to the quiet library.\nSample 117: Fresh rain leaves small circles on the pond.\nSample 118: The market lists local apples and green pears.\nSample 119: A yellow bicycle waits near the stone bridge.\nSample 120: The reading room has a round table by the window.\nSample 121: A blue ceramic cup rests on an oak shelf.\nSample 122: The public garden opens beside a gravel path.\nSample 123: A wooden bench faces the morning sunlight.\nSample 124: Visitors carry a folded map to the quiet library.\nSample 125: Fresh rain leaves small circles on the pond.\nSample 126: The market lists local apples and green pears.\nSample 127: A yellow bicycle waits near the stone bridge.\nSample 128: The reading room has a round table by the window.\nSample 129: A blue ceramic cup rests on an oak shelf.\nSample 130: The public garden opens beside a gravel path.\nSample 131: A wooden bench faces the morning sunlight.\nSample 132: Visitors carry a folded map to the quiet library.\nSample 133: Fresh rain leaves small circles on the pond.\nSample 134: The market lists local apples and green p\n</system-reminder>"
+        }
+      }
+    ]
+  }
+}

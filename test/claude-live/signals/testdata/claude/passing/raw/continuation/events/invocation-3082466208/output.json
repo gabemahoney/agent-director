@@ -1,0 +1,1 @@
+{"decision":"block","reason":"Continue this bounded Stop probe once. Run exactly one foreground Bash call with this program:\n```bash\nfor i in 1 2 3 4 5 6 7 8 9 10 11 12; do sleep 1; done\n```\nDo not background it. Then reply exactly CONTINUATION-DONE and finish."}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -159,13 +160,13 @@ func TestFindMissingChangedBetweenReadAndWrite(t *testing.T) {
 			}
 		}},
 		{"reuse", false, func(t *testing.T, s *store.Store, dbPath string, reseed rowSeed) {
-			if err := s.DeleteSpawn("r"); err != nil {
+			if err := storefix.DeleteWithExit(t, s, "r"); err != nil {
 				t.Fatalf("DeleteSpawn: %v", err)
 			}
 			reseed(t, dbPath, false, "sess-reuse")
 		}},
 		{"delete", false, func(t *testing.T, s *store.Store, _ string, _ rowSeed) {
-			if err := s.DeleteSpawn("r"); err != nil {
+			if err := storefix.DeleteWithExit(t, s, "r"); err != nil {
 				t.Fatalf("DeleteSpawn: %v", err)
 			}
 		}},

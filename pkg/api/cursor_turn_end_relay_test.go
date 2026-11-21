@@ -43,7 +43,7 @@ func TestCursorTurnEndRelayInput(t *testing.T) {
 		{name: "Cursor/retired-A-live-B/after-confirm-by", env: cursorEnv, proven: true,
 			sibling: true, expired: true, want: api.ErrRelayFallenBack},
 	}
-	for _, ag := range paAgents {
+	for _, ag := range paInputAgents {
 		cases = append(cases, relayCase{name: ag.name + "/turn-end-hook-may-answer", env: ag.env,
 			proven: true, want: api.ErrSendKeysWhileRelayed})
 	}

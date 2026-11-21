@@ -89,7 +89,7 @@ func TestV13MigrationStartupPreservation(t *testing.T) {
 			if !reflect.DeepEqual(priorRequests, readQuotedRows(t, path, "permission_requests", "pre", "request_id", requestCols)) {
 				t.Fatal("migration changed existing request data")
 			}
-			after := dbDump(t, path)
+			after := dumpBeforeV21(t, path)
 			for _, table := range []string{"session_history", "store_meta", "cursor_runtimes", "subagents", "subagent_launches"} {
 				if !reflect.DeepEqual(before["rows "+table], after["rows "+table]) {
 					t.Errorf("migration changed %s", table)

@@ -54,6 +54,15 @@ type PermissionRequestInfo struct {
 // cross-reference against the schema doc without translation.
 type SpawnRow struct {
 	StateDetail
+	// BusySend is the published current Launch's recorded coverage, retained
+	// during pending resume/reuse until successful creation publishes its candidate.
+	BusySend BusySendCoverage `json:"busy_send,omitempty"`
+	// AgentDefaults, Delivery and DeliveryCapabilities are a covered row's
+	// published Agent Defaults, inbox facts and offered limits (SR-5.6), read
+	// with the published conversation; omitted for an uncovered row.
+	AgentDefaults        *AgentDefaults        `json:"agent_defaults,omitempty"`
+	Delivery             *DeliveryFacts        `json:"delivery,omitempty"`
+	DeliveryCapabilities *DeliveryCapabilities `json:"delivery_capabilities,omitempty"`
 	// IntegrationMode identifies the fixed pane-only capability contract;
 	// omitted for agents with native integration.
 	IntegrationMode string `json:"integration_mode,omitempty"`
@@ -443,7 +452,8 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		s = concrete.WithRecoveryTickSource("ad_recovery")
 	}
 	if _, checked := s.(*activeReadStore); !checked {
-		refresh := activeRefresh(s, settle, false)
+		delivery := store.NewBusySendDeliveries()
+		refresh := activeRefresh(s, settle, false, delivery)
 		rows, err := refresh([]string{instanceID}, nil)
 		if err != nil {
 			return emptySpawnRow(), err
@@ -451,7 +461,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		if len(rows) != 1 {
 			return emptySpawnRow(), fmt.Errorf("%w: %s", store.ErrSpawnNotFound, instanceID)
 		}
-		run := checkActiveRows(context.Background(), s, v, settle, rows, refresh, true)
+		run := checkActiveRows(context.Background(), s, v, settle, rows, refresh, true, delivery)
 		out, err := getSettled(run, run.view, settle, instanceID)
 		finishErr := run.finish()
 		if err != nil {
@@ -467,6 +477,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		return emptySpawnRow(), err
 	}
 	out := SpawnRow{
+		BusySend:                row.BusySend,
 		Context:                 contextOf(row.ContextEvidence()),
 		InstanceID:              row.InstanceID,
 		ParentID:                row.ParentID,
@@ -496,6 +507,14 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		PriorSessions:           []PriorSession{},
 	}
 	out.ProcessLiveness, out.Confirmations = mainFields(s, row, settle)
+	observation, err := busySendObservationOf(s, row)
+	if err != nil {
+		return emptySpawnRow(), err
+	}
+	if observation != nil {
+		out.AgentDefaults, out.Delivery = agentDefaultsOf(observation.Defaults), busySendDeliveryOf(observation)
+		out.DeliveryCapabilities = deliveryCapabilitiesOf(observation)
+	}
 
 	// b.v2c AC6/AC8: surface the visible history (the current life's archived
 	// sessions minus the entry for the row's current session id) and derive

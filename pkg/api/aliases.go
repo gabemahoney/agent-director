@@ -21,6 +21,15 @@ import (
 // can write api.Spawn rather than store.Spawn.
 type Spawn = store.Spawn
 
+// BusySendCoverage is the published current Launch's persisted coverage,
+// exposed by Get and each GetMany row.
+type BusySendCoverage = store.BusySendCoverage
+
+const (
+	BusySendNotCovered = store.BusySendNotCovered
+	BusySendCovered    = store.BusySendCovered
+)
+
 // PermissionRow is re-exported from internal/store for the same reason.
 // It appears in the GetStore and DecideStore interface method signatures.
 type PermissionRow = store.PermissionRow

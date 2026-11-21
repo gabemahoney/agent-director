@@ -48,7 +48,8 @@ type ReuseRow struct {
 // state_changed_ms (the restore writes those as an immediate write of the
 // prior state, b.3ie), and the report-only display and pane observation columns
 // (that write starts a new permission epoch, which no earlier observation
-// belongs to), each with its stored value and SQLite
+// belongs to), and the busy-send coverage columns busy_send and
+// busy_conversation_id, which no restore writes yet, each with its stored value and SQLite
 // storage class, NULL distinct from an empty value. Its fields are unexported:
 // only ReadForReuse fills it, and only RestoreAfterFailedReuse reads it. The
 // zero RawLife was not produced by ReadForReuse, and the restore refuses it.
@@ -92,6 +93,7 @@ type RawLife struct {
 	processEvidence         rawValue
 	stateEvidence           rawValue
 	permissionEpoch         rawValue
+	turnStarts              rawValue
 }
 
 // rawValue is one column's value exactly as stored: class is the column's
@@ -169,6 +171,7 @@ var rawLifeColumns = []rawLifeColumn{
 	{"process_evidence", func(l *RawLife) *rawValue { return &l.processEvidence }},
 	{"state_evidence", func(l *RawLife) *rawValue { return &l.stateEvidence }},
 	{"permission_epoch", func(l *RawLife) *rawValue { return &l.permissionEpoch }},
+	{"turn_starts", func(l *RawLife) *rawValue { return &l.turnStarts }},
 }
 
 // rawLifeSelect is the column fragment that reads rawLifeColumns, each as
@@ -297,6 +300,7 @@ var resetForReuseSQL = `UPDATE spawns
         agent                     = ?,
         end_reported_at           = NULL,
         subagent_tracking         = ` + subagentTrackedParamSQL + `,
+        turn_starts               = 0,
         idle_screen_timeout_seconds = ?,
         life_number               = life_number + CASE WHEN ` + reuseAgentTextSQL + ` = ? THEN 0 ELSE 1 END,
         ` + rowVersionAdvance + `
@@ -314,6 +318,15 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 // reads the row and never fails because another process committed after its
 // read began; under contention it waits up to the store's busy timeout. No
 // other store transaction's locking changes.
+// The transaction also stages a fresh busy-send candidate conversation and
+// Launch. The published binding, coverage and provider stay intact until
+// successful creation publishes the candidate (RecordLaunchIdentity or
+// PublishBusySendLaunch), even on a same-agent reuse that keeps life_number.
+// A covered published conversation needs fresh.BusySendExit, validated
+// before the reset clears the examined identities and applied with the
+// staging (stageBusySendLaunch); without valid evidence nothing is written
+// and the error holds ErrBusySendExitNotEstablished. The publication then
+// retires the old conversation's never-emitted custody (SR-6.3).
 //
 // Inside it, it reads the row's session id, transcript path and life_number
 // (never labels, agent_args or extra_env, so a malformed row can be reset).
@@ -348,7 +361,8 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 //     codex or cursor (checked before anything is written: ErrRowAgentInvalid) and
 //     end_reported_at NULL; subagent_tracking from fresh.Agent, the flag of
 //     the launch it begins (SR-9; subagentTrackedParamSQL): 1 for claude, 0
-//     for codex or cursor, over whatever the row held; the timeout override
+//     for codex or cursor, over whatever the row held; turn_starts, the Turn
+//     Start counter, 0 for the Launch it begins; the timeout override
 //     fresh.IdleScreenTimeoutSeconds (0 as NULL, so an omitted override
 //     clears the old one); row_version advanced by one, and
 //     life_number advanced by one only if the exact stored agent differs
@@ -442,6 +456,12 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 		return CondChanged, "", 0, nil
 	}
 
+	// The exit gate comes before the reset clears the examined Launch's
+	// recorded identities (prepareBusySendExit).
+	exit, err := prepareBusySendExit(ctx, conn, s.StoreID(), instanceID, fresh.BusySendExit)
+	if err != nil {
+		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
 	q := connQuerier{ctx: ctx, conn: conn}
 	if sessionID != "" {
 		if err := upsertSessionHistoryEntry(q, instanceID, sessionID, jsonlPath, life); err != nil {
@@ -477,6 +497,9 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 	}
 	if n != 1 {
 		return 0, "", 0, fmt.Errorf("%s: reset changed %d rows, want 1", errPrefix, n)
+	}
+	if err := s.stageBusySendLaunch(ctx, conn, instanceID, BusySendLaunchReuse, fresh.BusySendDefaults, exit, fresh.LaunchStartedAtMillis); err != nil {
+		return 0, "", 0, fmt.Errorf("%s: stage busy-send Launch: %w", errPrefix, err)
 	}
 
 	if _, err := q.Exec(resetForReuseDeleteRequestsSQL, instanceID); err != nil {
@@ -564,8 +587,9 @@ var restoredStateEvidence, _ = restoredStateEvidenceSet("", "")
 // last_seen_at, liveness_unverified_since, liveness_note, cwd,
 // tmux_session_name, agent_args, relay_mode, labels, extra_env,
 // launch_token, tmux_socket, the six server and pane identity columns, the
-// three launch-owner columns, agent, end_reported_at, subagent_tracking and
-// the timeout override, and the old life's process record), so the row
+// three launch-owner columns, agent, end_reported_at, subagent_tracking,
+// the timeout override and the Turn Start counter, and the old life's process
+// record), so the row
 // returns to its pre-reuse life and
 // that life's history is visible again (SR-5.9). ended_at is prior's as stored, or failedAt in the store's
 // CURRENT_TIMESTAMP layout when it was NULL. parent_id is prior's only while a
@@ -591,6 +615,8 @@ var restoredStateEvidence, _ = restoredStateEvidenceSet("", "")
 // no pane, and the reset cleared it, SR-22.9); CondAbsent when no row has the
 // id. A store failure returns a wrapped error with a zero CondResult, and the
 // row stays as the reset left it (SR-5.8).
+// The same applied transaction marks its busy-send candidate failed and
+// abandons its candidate conversation; published coverage/binding stayed put.
 func (s *Store) RestoreAfterFailedReuse(instanceID string, resetVersion int64, prior RawLife, failedAt time.Time) (CondResult, error) {
 	const errPrefix = "store: restore after failed reuse"
 	if prior.state.class == "" {
@@ -613,11 +639,15 @@ func (s *Store) RestoreAfterFailedReuse(instanceID string, resetVersion int64, p
 	_, evidenceArgs := restoredStateEvidenceSet(prior.priorStateRecord(), prior.state.v.(string))
 	args = append(args, evidenceArgs...)
 	args = append(args, instanceID, StatePending, resetVersion)
-	applied, err := s.execGuarded(instanceID, restoreAfterFailedReuseSQL, args, errPrefix)
+	r, err := s.execBusySendRestore(instanceID, restoreAfterFailedReuseSQL, args...)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	if applied {
+	n, err := r.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("%s rows affected: %w", errPrefix, err)
+	}
+	if n > 0 {
 		return CondApplied, nil
 	}
 	return s.condNotApplied(instanceID, errPrefix)

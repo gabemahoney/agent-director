@@ -5,6 +5,8 @@ package realtmux_test
 // followed literally on real tmux. A wrapper around tmux breaks one keys
 // call; the agent's pane runs cat -, so its capture shows what the agent was
 // given: the line typed (the tty's echo), then cat's copy once submitted.
+// The rows are agents busy send doesn't cover (send-keys a pane-only Droid's,
+// pause a Codex's): a covered Claude row types nothing for either verb.
 // E15 (b.ob8) follows docs/usage.md's attach command block.
 
 import (
@@ -95,12 +97,12 @@ func advPaneOpen(t *testing.T, f *killFix, tmuxCommand string, afterEnter ...con
 	return c
 }
 
-// advPaneCatRow seeds a waiting row whose agent pane runs cat - and opens the
-// production client on a wrapper whose arm breaks one keys call.
-func advPaneCatRow(t *testing.T, afterEnter ...context.CancelFunc) (*killFix, killRow, *api.Client, func(call, how string)) {
+// advPaneCatRow seeds a waiting row of agent whose agent pane runs cat - and
+// opens the production client on a wrapper whose arm breaks one keys call.
+func advPaneCatRow(t *testing.T, agent string, afterEnter ...context.CancelFunc) (*killFix, killRow, *api.Client, func(call, how string)) {
 	t.Helper()
 	f := newKillFix(t)
-	r := f.liveRow(t, killRowSpec{Command: []string{"cat", "-"}})
+	r := f.liveRow(t, killRowSpec{Command: []string{"cat", "-"}, Opts: []apitest.SpawnOption{apitest.WithAgent(agent)}})
 	wrapper, arm := advPaneWrapper(t)
 	return f, r, advPaneOpen(t, f, wrapper, afterEnter...), arm
 }
@@ -184,14 +186,13 @@ func TestAdviceFollow_E3_SendKeysEnterFailedEmptyTextSubmitsRealTmux(t *testing.
 // new marker, checks the refusal's advice and follows it (follow); cat's
 // pane must then show the marker submitted once, typed and copied
 // ("<text>\n<text>"). An Enter-only send on an empty line makes cat copy an
-// empty line, which the capture's trailing-newline trim does not show;
-// Claude Code submits nothing on an Enter in an empty input, so the agent
-// gets the text once either way.
+// empty line, which the capture's trailing-newline trim does not show, so
+// the agent gets the text once either way.
 func advPaneFollowRealTmux(t *testing.T, cases []advPaneKeysCase, follow func(t *testing.T, c *api.Client, id, text string)) {
 	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f, r, c, arm := advPaneCatRow(t)
+			f, r, c, arm := advPaneCatRow(t, "droid")
 			text := paneMarker(t)
 			arm(tc.call, tc.how)
 
@@ -221,7 +222,7 @@ func TestAdviceFollow_E5_PauseKeysFailedRetryLaterRealTmux(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			f, r, c, arm := advPaneCatRow(t, cancel)
+			f, r, c, arm := advPaneCatRow(t, "codex", cancel)
 			arm(tc.call, tc.how)
 			// cat never ends the row: cancel after successful Enter, at the wait.
 			pause := func() error { _, err := c.Pause(ctx, api.PauseParams{InstanceID: r.InstanceID}); return err }

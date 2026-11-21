@@ -175,7 +175,7 @@ func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (
 // the same statement (terminalProcessEvidenceSet; markEndedArgs).
 var markEndedEvidence, markEndedEvidenceArgs = currentStateEvidenceSet(StateEnded, EvidenceProcess)
 
-var markEndedIfSameLifeSQL = `UPDATE spawns
+var markEndedSetSQL = `UPDATE spawns
     SET ` + immediateStateSet + `,
         ` + markEndedEvidence + `,
         ` + terminalProcessEvidenceSet + `,
@@ -184,7 +184,9 @@ var markEndedIfSameLifeSQL = `UPDATE spawns
         liveness_unverified_since = NULL,
         liveness_note             = NULL,
         ` + launchStartClear + `,
-        ` + rowVersionAdvance + `
+        ` + rowVersionAdvance
+
+var markEndedIfSameLifeSQL = markEndedSetSQL + `
   WHERE instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL + `
     AND agent = '` + AgentCodex + `' AND typeof(end_reported_at) = 'integer' AND end_reported_at > 0`
 
@@ -308,7 +310,7 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 		}
 	}()
 
-	prior, res, closed, err := terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason, recorded)
+	prior, res, closed, err := terminalMarkOnConn(ctx, conn, s.StoreID(), errPrefix, stmt, args, instanceID, reason, recorded)
 	if err != nil || res != CondApplied {
 		return "", res, err
 	}
@@ -356,7 +358,7 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	}
 	err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
 		var err error
-		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason, recordDest)
+		prior, res, closed, err = terminalMarkOnConn(ctx, conn, s.StoreID(), errPrefix, stmt, args, instanceID, reason, recordDest)
 		if err == nil && res == CondApplied {
 			exits, err = takeDisplayExits(ctx, conn, instanceID)
 			if err != nil {
@@ -379,12 +381,14 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	return prior, res, nil
 }
 
-// terminalMarkOnConn shares the guarded terminal update and atomic request /
+// terminalMarkOnConn shares the guarded terminal update, the busy-send Launch
+// End it establishes (endBusySendOnTerminalMark, including a covered Launch's
+// logical missing mark without proven exit) and atomic request /
 // subagent closure. The caller owns the transaction and emits only after commit.
 // A non-nil recorded receives, once the update applied, whether it stored a
 // process record: the statement's own terminalProcessEvidenceSet decides
 // that, so it is read back under the same write lock.
-func terminalMarkOnConn(ctx context.Context, conn *sql.Conn, errPrefix, stmt string, args []any, instanceID, reason string, recorded *bool) (string, CondResult, []closedRequest, error) {
+func terminalMarkOnConn(ctx context.Context, conn *sql.Conn, storeID, errPrefix, stmt string, args []any, instanceID, reason string, recorded *bool) (string, CondResult, []closedRequest, error) {
 	var prior string
 	err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&prior)
 	switch {
@@ -413,6 +417,9 @@ func terminalMarkOnConn(ctx context.Context, conn *sql.Conn, errPrefix, stmt str
 		}
 	}
 
+	if err := endBusySendOnTerminalMark(ctx, conn, storeID, instanceID); err != nil {
+		return "", 0, nil, fmt.Errorf("%s: %w", errPrefix, err)
+	}
 	at := storeNowMillis()
 	closed, err := closeOrphanedRequests(ctx, conn, instanceID, reason, at)
 	if err != nil {
@@ -618,16 +625,22 @@ var adoptIdentityIfSameLifeSQL = `UPDATE spawns
 //
 // Only find-missing calls it (SR-3.6; LFR H2); kill, send-keys and pause use
 // AdoptIdentityIfUnchanged.
+// The applied transaction also resolves any busy-send candidate for the
+// adopted Launch's token, keeping the single version advance below.
 func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot, id LaunchIdentity) (res CondResult, now RowSnapshot, err error) {
 	const errPrefix = "store: adopt identity if same life"
 	args := append(adoptIdentityArgs(id), instanceID)
 	args = append(args, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
-	applied, err := s.execGuarded(instanceID, adoptIdentityIfSameLifeSQL, args, errPrefix)
+	r, err := s.execBusySendEstablished(instanceID, adoptIdentityIfSameLifeSQL, args...)
 	if err != nil {
-		return 0, RowSnapshot{}, err
+		return 0, RowSnapshot{}, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	if applied {
+	n, err := r.RowsAffected()
+	if err != nil {
+		return 0, RowSnapshot{}, fmt.Errorf("%s rows affected: %w", errPrefix, err)
+	}
+	if n > 0 {
 		now = examined
 		now.RowVersion++
 		return CondApplied, now, nil

@@ -8,6 +8,8 @@ import { test, expect } from "bun:test";
 import * as ad from "../src/index.js";
 import type { VersionResult, SpawnParams, MakeTemplateParams, StatusResult, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
 import type { SweepParams, SweepResult, SweepCheck, FindMissingParams, FindMissingResult, DialogMaybeOpenDetails, ProvenGoneHow, IdleScreenAvailability } from "../src/index.js";
+import type { SendKeysResult, ResumeParams, PauseParams, GetForceResult, GetDeliveryResult, ForceResult, ForceOutcome, ForceReason, DeliveryResult, CantSendDetails, SendAcceptedForceFailedDetails } from "../src/index.js";
+import type { AgentDefaults, DeliveryFacts, DeliveryCapabilities, DeliveryModeLimits, ForceCapability, ForceStateCapability, ConfirmFromTranscriptsCapability } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
 
@@ -159,6 +161,76 @@ function _assertDisplayTypes(status: StatusResult, get: GetResult, row: ListRow)
 }
 void _assertDisplayTypes;
 
+// Typecheck (SR-1.3, SR-1.4, SR-4.1, SR-5.4, SR-9.4): busy send's options are optional on the methods that
+// take them, Send Mode is closed, a lookup's payload may be null and CantSendDetails requires its four fields.
+function _assertBusySendTypes(client: ad.Client, force: GetForceResult, delivery: GetDeliveryResult): void {
+  const sent: Promise<SendKeysResult> = client.sendKeys({ instance_id: "i", send_mode: "wait_turn", confirmed_delivery: false, caller_uuid: "u", force: false });
+  const launches: [SpawnParams, ResumeParams, MakeTemplateParams] = [{ cwd: "/ws", confirm_from_transcripts: false },
+    { instance_id: "i", send_mode: "steer_turn" }, { name: "t", confirmed_delivery: true }];
+  const pause: PauseParams = { instance_id: "i", only_if_waiting: true };
+  // @ts-expect-error — send_mode is wait_turn or steer_turn
+  const badMode: SpawnParams = { cwd: "/ws", send_mode: "now" };
+  // @ts-expect-error — get-force's payload is null unless found
+  const forced: ForceResult = force.force_result;
+  // @ts-expect-error — get-delivery's payload is null unless found
+  const result: DeliveryResult = delivery.result;
+  // @ts-expect-error — resend_safe and retry_with are required
+  const details: CantSendDetails = { class: "cant_send", reason: "agent_not_covered" };
+  void [sent, launches, pause, badMode, forced, result, details];
+}
+void _assertBusySendTypes;
+
+// Typecheck (SR-4.1, SR-4.3; MI decision 10): a forced send's result carries its force_result, every
+// force_result its carried_results, and a read's outcome may be running, with reason "".
+function _assertForceTypes(sent: SendKeysResult, force: ForceResult): void {
+  const attached: ForceResult | undefined = sent.force_result;
+  const carried: DeliveryResult[] = force.carried_results;
+  const running: ForceOutcome = "running";
+  const unset: ForceReason = "";
+  // @ts-expect-error — an outcome is one of the five
+  const badOutcome: ForceOutcome = "admitted";
+  // @ts-expect-error — carried_results is required
+  const noResults: ForceResult = { force_id: "f", outcome: "refused", reason: "not_issued", started_at: "t", ended_at: null, carried_pairs: [] };
+  void [attached, carried, running, unset, badOutcome, noResults];
+}
+void _assertForceTypes;
+
+// Typecheck (SR-1.3, SR-5.1, SR-5.6): a send names its Message ID; an uncovered send's result stays {}, a
+// covered one's is the Result with a string request_id; the covered-only read blocks are optional, and their
+// types are exported from the package root.
+function _assertCoveredSendTypes(client: ad.Client, sent: SendKeysResult, got: GetResult, status: StatusResult, row: ListRow): void {
+  const confirmed: Promise<SendKeysResult> = client.sendKeys({ instance_id: "i", text: "t", confirmed_delivery: true, caller_uuid: "u", delivery_request_id: "r" });
+  const uncovered: SendKeysResult = {};
+  const requestID: string | undefined = sent.request_id;
+  const outcome: DeliveryResult["outcome"] = "partial_input_unconfirmed";
+  const caps: DeliveryCapabilities | undefined = got.delivery_capabilities;
+  const covered: [DeliveryModeLimits | undefined, AgentDefaults | undefined, DeliveryFacts | undefined, AgentDefaults | undefined] = [caps?.modes[0],
+    got.agent_defaults, status.delivery, row.agent_defaults];
+  // @ts-expect-error — request_id is a string Message ID, never a number
+  const numericID: SendKeysResult = { request_id: 1 };
+  // @ts-expect-error — list rows carry no delivery block
+  const listDelivery = row.delivery;
+  void [confirmed, uncovered, requestID, outcome, covered, numericID, listDelivery];
+}
+void _assertCoveredSendTypes;
+
+// Typecheck (SR-4.4, SR-4.5; E5 Main Agent decision 4): delivery_capabilities' force is null unless published,
+// a state row's outcome is one a force call returns, and the Confirm From Transcripts capability is closed.
+function _assertForceCapabilityTypes(caps: DeliveryCapabilities): void {
+  const force: ForceCapability | null = caps.force;
+  const states: ForceStateCapability[] | undefined = force?.states;
+  const confirm: ConfirmFromTranscriptsCapability[] = [caps.confirm_from_transcripts_capability, "can_confirm", "not_needed", "cannot_confirm"];
+  const reason: string = caps.confirm_from_transcripts_reason;
+  // @ts-expect-error — force is null, never omitted, when unpublished
+  const omitted: ForceCapability = caps.force;
+  // @ts-expect-error — a state row never reads running
+  const running: ForceStateCapability = { state: "idle", outcome: "running", reason: "" };
+  // @ts-expect-error — the capability is one of the three codes
+  const badConfirm: ConfirmFromTranscriptsCapability = "transcript_match";
+  void [force, states, confirm, reason, omitted, running, badConfirm];
+}
+void _assertForceCapabilityTypes;
+
 // Both names remain source-compatible and share the exact check records.
 function _assertSweepAliases(client: ad.Client, result: SweepResult): void {
  const oldParams: FindMissingParams = { timeout_ms: 1 };
@@ -174,3 +246,14 @@ function _assertSweepAliases(client: ad.Client, result: SweepResult): void {
  void missing;
 }
 void _assertSweepAliases;
+
+// PM2(b), t3.xis.ec.9e.du: the root-exported details require the full Result.
+function _assertAcceptedForceFailedDetails(details: SendAcceptedForceFailedDetails): void {
+  const result: DeliveryResult = details.result;
+  // @ts-expect-error — accepted Result is required, never optional
+  const missing: SendAcceptedForceFailedDetails = {};
+  // @ts-expect-error — a partial Result cannot preserve acceptance
+  const partial: SendAcceptedForceFailedDetails = { result: { class: "held" } };
+  void [result, missing, partial];
+}
+void _assertAcceptedForceFailedDetails;

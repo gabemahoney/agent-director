@@ -10,25 +10,22 @@ import (
 )
 
 // b.zia: a requested journal backup must never disappear without notice on
-// a non-crossing install. Reuse the move fixture without changing its setup.
+// a non-crossing exempt install. Later file-only warnings are covered by
+// TestStagedLaterInstallNeverTouchesStore.
 func TestUnusedJournalFlags(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping installer regression in short mode")
 	}
-	for _, name := range []string{"fresh", "maintenance", "roots-complete", "backup", "legacy-root", "empty-backup"} {
+	for _, name := range []string{"fresh", "no-flags", "maintenance", "roots-complete", "backup", "legacy-root", "empty-backup"} {
 		t.Run(name, func(t *testing.T) {
 			h := newMoveHome(t)
 			store := "there was no store before this install"
 			if name != "fresh" {
-				initial := h.Install()
-				moveWant{}.Check(t, h, initial)
-				if strings.Contains(initial.Stderr, "journal flags were not used") {
-					t.Fatal("install without journal flags warned about unused flags")
-				}
+				h.BuildLegacyCurrent()
 				version := h.migStoreVersion(filepath.Join(h.New, "state.db"))
 				v, err := strconv.Atoi(version)
 				if err != nil || v < 16 {
-					t.Fatalf("fresh install's schema = %q, want v16 or later", version)
+					t.Fatalf("legacy install's schema = %q, want v16 or later", version)
 				}
 				store = "state.db was at v" + version + " before this install"
 			}
@@ -42,6 +39,10 @@ func TestUnusedJournalFlags(t *testing.T) {
 				"empty-backup":   {"--journal-backup", ""},
 			}[name]
 			res := h.Install(flags...)
+			if name == "no-flags" {
+				moveWant{NoStderr: []string{"journal flags were not used"}}.Check(t, h, res)
+				return
+			}
 			warning := fmt.Sprintf("install.sh: warning: %s; journal flags were not used and no journal backup was made.", store)
 			moveWant{Stderr: []string{warning}}.Check(t, h, res)
 			if !strings.HasSuffix(res.Stderr, warning+"\n") {

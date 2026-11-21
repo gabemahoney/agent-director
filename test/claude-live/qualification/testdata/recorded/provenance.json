@@ -1,0 +1,66 @@
+{
+  "purpose": "Historical narrow judgment fixtures only; not current-candidate qualification",
+  "clips": [
+    {
+      "file": "force-idle.json",
+      "adaptation": "Selected public Result, bound force and prompt only. UUIDs and instance consistently scrubbed. No timestamp or outcome changed.",
+      "inputs": [
+        {
+          "path": "/home/horde/projects/agent-director-project/.scratch/b.kii/e5/ac7-live/raw/21-idleA-force.stdout",
+          "sha256": "3f45629e409c16d702f66f37a7fb6bf51b38b8fbde6069cdf4a13edbf545b57d"
+        },
+        {
+          "path": "/home/horde/projects/agent-director-project/.scratch/b.kii/e5/ac7-live/raw/23-db.json",
+          "sha256": "482725bcef4c96a232a5dec6650459e9e7dae95818575a5f7d6e993537d06fb2"
+        },
+        {
+          "path": "/home/horde/projects/agent-director-project/.scratch/b.kii/e5/ac7-live/raw/02-version.stdout",
+          "sha256": "458831e71fa3928c2009676bd09572e9d8cde2a7e50d9655b967570c5c958479"
+        }
+      ],
+      "output_sha256": "13d97e8c6054d86c43942175028606bf32eaccbb89b8e3a5665509c01ec3d7fd"
+    },
+    {
+      "file": "idle-input.json",
+      "adaptation": "Single unchanged controlled-message blob and original request ID/time projected to keep=0 checkpoint with only that blob. All unrelated messages/context removed. UUIDs scrubbed. Narrow framing proof, not original complete-request selection or revised wake-order proof.",
+      "inputs": [
+        {
+          "path": "/home/horde/projects/agent-director-project/.scratch/b.kii/e4/live/raw/transcript-A.jsonl",
+          "sha256": "d3f4f00fda295e8b4093495f528432f276de1a94287f7697e294d86551d284df"
+        },
+        {
+          "path": "/home/horde/projects/agent-director-project/.scratch/b.kii/e4/live/raw/02-version.stdout",
+          "sha256": "dbfa9e7298ca5fc5ba4e6ee44e432f858cb9d7d072b98642c0beec1de3f9c3eb"
+        }
+      ],
+      "output_sha256": "725d6b3b4726dc230407c36a01912e646d0511a39bbbec81f9d6360b38250c17"
+    },
+    {
+      "file": "pause-resume.json",
+      "adaptation": "Selected owned lifecycle identity columns/public results; UUIDs and instance consistently scrubbed; times preserved.",
+      "inputs": [
+        {
+          "path": "/home/horde/projects/agent-director-project/.scratch/b.kii/e6/live/raw/30-c2-pre-db.json",
+          "sha256": "95503192500d0d9874dc5c9ea4ca44dde4747b042af8d37b6ff59112dc2aeb75"
+        },
+        {
+          "path": "/home/horde/projects/agent-director-project/.scratch/b.kii/e6/live/raw/51-c2-resumed-db.json",
+          "sha256": "cb7f8c24bd82dd6b75da31e31bb796f5552e6d67522260020aad64a409a678c9"
+        },
+        {
+          "path": "/home/horde/projects/agent-director-project/.scratch/b.kii/e6/live/raw/31-c2-pause-waiting.stdout",
+          "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+        },
+        {
+          "path": "/home/horde/projects/agent-director-project/.scratch/b.kii/e6/live/raw/50-resume.stdout",
+          "sha256": "97e43aa4f2daa81f0cceec5a08bbf7de48018dce3abf1236122f01076e8e6f97"
+        },
+        {
+          "path": "/home/horde/projects/agent-director-project/.scratch/b.kii/e6/live/raw/02-version.stdout",
+          "sha256": "fa3336e52f53b98aaea1b9ab8f717d5d36bf2150882b6fab9ab753205f322a9b"
+        }
+      ],
+      "output_sha256": "5b74598ebc1db47dc23841856acf924e604e6202ee494596b2991bd0ac992781"
+    }
+  ]
+}

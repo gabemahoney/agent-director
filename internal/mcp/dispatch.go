@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/gabemahoney/agent-director/internal/oldnames"
 	api "github.com/gabemahoney/agent-director/pkg/api"
@@ -49,6 +52,9 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 	v, inManifest := manifest.Lookup(verbName)
 	if inManifest && ExposedVerb(verbName) {
 		if err := checkParamNames(v, args); err != nil {
+			return nil, err
+		}
+		if err := refuseNullBusySendOptions(v, args); err != nil {
 			return nil, err
 		}
 	}
@@ -93,6 +99,9 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			TmuxSessionName          *string           `json:"tmux_session_name"`
 			ReuseFinished            bool              `json:"reuse_finished"`
 			IdleScreenTimeoutSeconds int               `json:"idle_screen_timeout_seconds"`
+			SendMode                 *string           `json:"send_mode"`
+			ConfirmedDelivery        *bool             `json:"confirmed_delivery"`
+			ConfirmFromTranscripts   *bool             `json:"confirm_from_transcripts"`
 		}
 		if err := decodeParams(v, args, &raw); err != nil {
 			return nil, err
@@ -114,6 +123,10 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			ReuseFinished:       raw.ReuseFinished,
 
 			IdleScreenTimeoutSeconds: raw.IdleScreenTimeoutSeconds,
+
+			SendMode:               raw.SendMode,
+			ConfirmedDelivery:      raw.ConfirmedDelivery,
+			ConfirmFromTranscripts: raw.ConfirmFromTranscripts,
 		}
 		if raw.TmuxSessionName != nil {
 			p.TmuxSessionName = *raw.TmuxSessionName
@@ -169,7 +182,54 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
 		}
+		// A raw-key parameter present even at its zero value, or null,
+		// counts as supplied, which a Covered Agent's send refuses; so does
+		// a present delivery_request_id, empty or null. encoding/json has
+		// replaced invalid UTF-8 and unpaired surrogate escapes with U+FFFD,
+		// so the raw values say which strings a Covered Agent's send must
+		// refuse instead of storing the replacement (MalformedUTF8).
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal(args, &keys); err != nil {
+			return nil, paramDecodeError(v, err)
+		}
+		for _, name := range []string{"no_enter", "key", "expect_pane_sha256", "n_lines", "request_token", "as"} {
+			if _, present := keys[name]; present {
+				p.RawKeysSupplied = append(p.RawKeysSupplied, name)
+			}
+		}
+		_, p.DeliveryRequestIDSupplied = keys["delivery_request_id"]
+		for _, name := range []string{"text", "delivery_request_id"} {
+			if raw, present := keys[name]; present && !jsonStringValid(raw) {
+				p.MalformedUTF8 = append(p.MalformedUTF8, name)
+			}
+		}
 		return d.client.SendKeysContext(ctx, p)
+
+	case "force-delivery":
+		var p api.ForceDeliveryParams
+		if err := decodeParams(v, args, &p); err != nil {
+			return nil, err
+		}
+		return d.client.ForceDelivery(p)
+
+	case "get-force":
+		var p api.GetForceParams
+		if err := decodeParams(v, args, &p); err != nil {
+			return nil, err
+		}
+		return d.client.GetForce(p)
+
+	case "get-delivery":
+		var p api.GetDeliveryParams
+		if err := decodeParams(v, args, &p); err != nil {
+			return nil, err
+		}
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal(args, &keys); err != nil {
+			return nil, paramDecodeError(v, err)
+		}
+		p.MalformedUTF8 = !jsonStringValid(keys["delivery_request_id"])
+		return d.client.GetDelivery(p)
 
 	case "read-pane":
 		var p api.ReadPaneParams
@@ -234,6 +294,10 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			Deny      []string          `json:"deny"`
 			Ask       []string          `json:"ask"`
 			Overwrite bool              `json:"overwrite"`
+
+			SendMode               *string `json:"send_mode"`
+			ConfirmedDelivery      *bool   `json:"confirmed_delivery"`
+			ConfirmFromTranscripts *bool   `json:"confirm_from_transcripts"`
 		}
 		if err := decodeParams(v, args, &raw); err != nil {
 			return nil, err
@@ -251,6 +315,10 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			ExtraEnv:            raw.ExtraEnv,
 			AgentDirectorLabels: labels,
 			Overwrite:           raw.Overwrite,
+
+			SendMode:               raw.SendMode,
+			ConfirmedDelivery:      raw.ConfirmedDelivery,
+			ConfirmFromTranscripts: raw.ConfirmFromTranscripts,
 		}
 		if len(raw.Allow) > 0 || len(raw.Deny) > 0 || len(raw.Ask) > 0 {
 			p.Permissions = &api.MakeTemplatePermissions{
@@ -324,10 +392,33 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 // (internal/oldnames) is named with its new name in the refusal. Arguments
 // that are not a JSON object are refused with ErrInvalidFlags too
 // (paramDecodeError, b.ewa).
+// Duplicate parameter names are refused before typed decoding: a raw map
+// keeps only the last value, while decoding into typed fields can retain an
+// earlier string across null or merge objects, bypassing raw-string checks.
 func checkParamNames(v manifest.VerbDef, args json.RawMessage) error {
 	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(args, &keys); err != nil {
 		return paramDecodeError(v, err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(args))
+	if _, err := decoder.Token(); err != nil { // opening object, or null
+		return paramDecodeError(v, err)
+	}
+	seen := make(map[string]bool, len(keys))
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return paramDecodeError(v, err)
+		}
+		name := token.(string) // Unmarshal above established a valid object.
+		if seen[name] {
+			return fmt.Errorf("%w: %s: duplicate parameter %q", api.ErrInvalidFlags, v.Name, name)
+		}
+		seen[name] = true
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return paramDecodeError(v, err)
+		}
 	}
 	valid := make([]string, 0, len(v.Params))
 	known := make(map[string]bool, len(v.Params))
@@ -363,6 +454,98 @@ func checkParamNames(v manifest.VerbDef, args json.RawMessage) error {
 		api.ErrInvalidFlags, v.Name, noun, strings.Join(unknown, ", "), list)
 }
 
+// busySendOptionParams are the busy-send settings whose null must not read as
+// omitted: an explicit null would otherwise decode as absent (or, for
+// only_if_waiting, as today's pause), silently dropping a setting the caller
+// named (SR-8.1). Only an optional param of these names is such a setting: a
+// required one (get-delivery's caller_uuid) is a lookup key, whose null
+// decodes as empty and is refused by the verb's own check, asking for a valid
+// value. Each setting maps to what its refusal adds: omitting a send or
+// launch setting leaves it unset, but omitting only_if_waiting is today's
+// pause, and no error description advises running pause, so its refusal says
+// only that nothing was ended.
+var busySendOptionParams = map[string]string{
+	"send_mode": omitToUnset, "confirmed_delivery": omitToUnset, "caller_uuid": omitToUnset, "force": omitToUnset,
+	"confirm_from_transcripts": omitToUnset, "only_if_waiting": "nothing was ended",
+}
+
+// omitToUnset is the null refusal's advice for a setting omission leaves unset.
+const omitToUnset = "omit it to leave it unset"
+
+// refuseNullBusySendOptions refuses an optional busy-send setting of v given
+// as JSON null with api.ErrInvalidFlags, naming the param and its expected
+// type and adding busySendOptionParams' text, before anything is decoded or
+// run. checkParamNames has already refused arguments that are not a JSON
+// object.
+func refuseNullBusySendOptions(v manifest.VerbDef, args json.RawMessage) error {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(args, &keys); err != nil {
+		return paramDecodeError(v, err)
+	}
+	for _, p := range v.Params {
+		added, setting := busySendOptionParams[p.Name]
+		if p.Required || !setting {
+			continue
+		}
+		if raw, ok := keys[p.Name]; ok && strings.TrimSpace(string(raw)) == "null" {
+			return fmt.Errorf("%w: %s: parameter %q must be %s, not null; %s",
+				api.ErrInvalidFlags, v.Name, p.Name, expectedValue(p.Type), added)
+		}
+	}
+	return nil
+}
+
+// jsonStringValid reports whether raw, a JSON value, decodes to exactly the
+// string it spells: it is not a string (decodeParams judges its type), or it
+// holds only valid UTF-8 and only paired UTF-16 surrogate escapes, which are
+// what encoding/json would otherwise replace with U+FFFD. A literal U+FFFD, or
+// its � escape, is valid.
+func jsonStringValid(raw json.RawMessage) bool {
+	if len(raw) == 0 || raw[0] != '"' {
+		return true
+	}
+	if !utf8.Valid(raw) {
+		return false
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '\\' {
+			continue
+		}
+		i++ // the escaped character
+		if i >= len(raw) || raw[i] != 'u' {
+			continue
+		}
+		r, ok := jsonHex4(raw, i+1)
+		if !ok {
+			return false
+		}
+		i += 4 // the escape's last hex digit
+		if !utf16.IsSurrogate(r) {
+			continue
+		}
+		if r >= 0xDC00 { // a low surrogate with no high one before it
+			return false
+		}
+		if i+2 >= len(raw) || raw[i+1] != '\\' || raw[i+2] != 'u' {
+			return false
+		}
+		if lo, ok := jsonHex4(raw, i+3); !ok || lo < 0xDC00 || lo > 0xDFFF {
+			return false
+		}
+		i += 6 // the low surrogate escape's last hex digit
+	}
+	return true
+}
+
+// jsonHex4 reads the four hexadecimal digits of a \u escape at raw[at:].
+func jsonHex4(raw []byte, at int) (rune, bool) {
+	if at+4 > len(raw) {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(string(raw[at:at+4]), 16, 32)
+	return rune(v), err == nil
+}
+
 // decodeParams decodes args into into, verb v's typed params struct, whose
 // json tags are v's manifest param names. A decode failure is refused per
 // paramDecodeError.
@@ -370,7 +553,43 @@ func decodeParams(v manifest.VerbDef, args json.RawMessage, into any) error {
 	if err := json.Unmarshal(args, into); err != nil {
 		return paramDecodeError(v, err)
 	}
+	// These free-text identities and values can reach durable storage or its
+	// lookups. Refuse JSON replacement before calling the verb, including array
+	// entries and extra_env's keys. text/delivery_request_id instead use their
+	// verb's malformed-input path to retain the shared API error and ordering.
+	// UUIDs, hashes and enums already reject every U+FFFD-rewritten value.
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(args, &keys); err != nil {
+		return paramDecodeError(v, err)
+	}
+	for _, name := range []string{"instance_id", "instance_ids", "parent", "request_token", "reason", "label", "cwd", "tmux_session_name", "extra_env", "agent_args", "allow", "deny", "ask", "template", "name", "key"} {
+		if !jsonStringsValid(keys[name]) {
+			return fmt.Errorf("%w: %s: %s must be valid UTF-8; nothing was read or written", api.ErrInvalidFlags, v.Name, name)
+		}
+	}
 	return nil
+}
+
+// jsonStringsValid applies jsonStringValid to every string token in an
+// already syntax-checked JSON value, including object keys and array entries.
+func jsonStringsValid(raw json.RawMessage) bool {
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '"' {
+			continue
+		}
+		start := i
+		for i++; i < len(raw); i++ {
+			if raw[i] == '\\' {
+				i++
+			} else if raw[i] == '"' {
+				break
+			}
+		}
+		if i >= len(raw) || !jsonStringValid(raw[start:i+1]) {
+			return false
+		}
+	}
+	return true
 }
 
 // paramDecodeError classifies a failure to decode verb v's arguments

@@ -34,7 +34,7 @@ func (p *paEnv) fallBackLong(t *testing.T) {
 
 func TestLongFallenBackRequestKeepsCommandGuards(t *testing.T) {
 	t.Parallel()
-	for _, agent := range paAgents {
+	for _, agent := range paInputAgents { // a covered Claude row takes no keys
 		t.Run(agent.name, func(t *testing.T) {
 			p := agent.env(t)
 			p.fallBackLong(t)
@@ -62,7 +62,7 @@ func TestLongFallenBackRequestKeepsCommandGuards(t *testing.T) {
 
 func TestLongFallenBackPaneAnswerKeepsDialogHold(t *testing.T) {
 	t.Parallel()
-	for _, agent := range paAgents {
+	for _, agent := range paInputAgents { // a covered Claude row takes no keys
 		t.Run(agent.name, func(t *testing.T) {
 			p := agent.env(t)
 			p.fallBackLong(t)

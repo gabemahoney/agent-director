@@ -1,0 +1,89 @@
+{
+  "provider": "Claude Code 2.1.311",
+  "before": {
+    "spawns": [
+      {
+        "instance_id": "historical-e6-parent",
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "launch_token": "813ec4ef34f21142",
+        "state": "waiting"
+      }
+    ],
+    "launches": [
+      {
+        "instance_id": "historical-e6-parent",
+        "launch_token": "8bdd0e37facf5886",
+        "launch_id": "00000000-0000-4000-8000-000000000002",
+        "phase": "superseded",
+        "provider": "claude",
+        "recorded_at_ms": 1794882666700,
+        "ended_at_ms": 1794882690352,
+        "end_cause": "process_exited"
+      },
+      {
+        "instance_id": "historical-e6-parent",
+        "launch_token": "813ec4ef34f21142",
+        "launch_id": "00000000-0000-4000-8000-000000000003",
+        "phase": "current",
+        "provider": "claude",
+        "recorded_at_ms": 1794882875501,
+        "ended_at_ms": null,
+        "end_cause": null
+      }
+    ]
+  },
+  "after": {
+    "spawns": [
+      {
+        "instance_id": "historical-e6-parent",
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "launch_token": "2da41a5566e73c1f",
+        "state": "waiting"
+      }
+    ],
+    "launches": [
+      {
+        "instance_id": "historical-e6-parent",
+        "launch_token": "8bdd0e37facf5886",
+        "launch_id": "00000000-0000-4000-8000-000000000002",
+        "phase": "superseded",
+        "provider": "claude",
+        "recorded_at_ms": 1794882666700,
+        "ended_at_ms": 1794882690352,
+        "end_cause": "process_exited"
+      },
+      {
+        "instance_id": "historical-e6-parent",
+        "launch_token": "813ec4ef34f21142",
+        "launch_id": "00000000-0000-4000-8000-000000000003",
+        "phase": "superseded",
+        "provider": "claude",
+        "recorded_at_ms": 1794882875501,
+        "ended_at_ms": 1794882949942,
+        "end_cause": "process_exited"
+      },
+      {
+        "instance_id": "historical-e6-parent",
+        "launch_token": "2da41a5566e73c1f",
+        "launch_id": "00000000-0000-4000-8000-000000000004",
+        "phase": "current",
+        "provider": "claude",
+        "recorded_at_ms": 1794882971324,
+        "ended_at_ms": null,
+        "end_cause": null
+      }
+    ]
+  },
+  "pause": {},
+  "resume": {
+    "instance_id": "historical-e6-parent",
+    "pre_trust": "ok"
+  },
+  "candidate": {
+    "version": "0.19.0-rc.kii.e6",
+    "commit": "0161791a",
+    "config_dir": "~/.config/agent-director"
+  },
+  "run": "e6-live-20261117",
+  "scope": "ordinary pause/resume only; no Esc or interrupted-client claim"
+}

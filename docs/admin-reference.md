@@ -8,12 +8,68 @@ install.sh installs agent-director-admin at `~/.config/agent-director/admin/agen
 
 ## Global flags
 
-For kill-finished and delete, use agent-director's store, home and tmux overrides. migrate-journal uses the configured store unless --store-path overrides it. snapshot-store requires an explicit --store-path and loads no config. Each global flag goes before or after the verb, as --flag value or --flag=value.
+For kill-finished and delete, use agent-director's store, home and tmux overrides. migrate-journal uses the configured store unless --store-path overrides it. snapshot-store requires an explicit --store-path and loads no config. Version installation commands accept only --home. Each global flag goes before or after the verb, as --flag value or --flag=value.
 
 - `--store-path <path>`: Use <path> instead of the configured store ([store] db_path in ~/.config/agent-director/config.toml, by default ~/.config/agent-director/state.db). Required for snapshot-store, which reads the existing source without opening it through SQLite. With migrate-journal --check-only, enables the read-only holder inventory after argument checks; without it that mode checks arguments only.
 - `--home <dir>`: Use <dir> as HOME for this run, so the config, the store and every other ~/ path resolve under it.
 - `--tmux-command <path>`: Run <path> as tmux instead of the tmux on PATH.
 - `--create-if-missing <true|false>`: For kill-finished and delete: false refuses a missing store (ErrStoreOpen); true or omitted creates its parent directories, file and schema. migrate-journal and snapshot-store require an existing source and never create it.
+
+## version-facts
+
+`agent-director-admin [--home <dir>] version-facts`
+
+Report this binary's compiled version, commit, covered agents and permanent core identity. No config, store, lock or filesystem changes. An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1.
+
+### Flags
+
+_None._
+
+### Output
+
+{format_version, version, commit, covered_agents, core_version, core_declarations_sha256}.
+
+## publish-version
+
+`agent-director-admin [--home <dir>] publish-version --binary <path>`
+
+Stage the runtime with this administrator, validate both binaries' compiled facts, and durably publish their immutable version. Establish or recover permanent entries under one administrator lock. No store access. A held lock refuses immediately; rerun an I/O failure to complete forward recovery. Failures print ErrVersionInstallRefused on stderr and exit 1, with details.reason (lock_busy, core_mismatch, coverage_regression, version_conflict, layout_invalid or io_failure), retryable, publication_state (not_published, published or unknown), durable and known version facts. A visible selection is never undone as cleanup.
+
+### Flags
+
+- `--binary <path>`: Candidate runtime executable from the same build. Required.
+
+### Output
+
+{version_id, version, published_version, publication_state, durable, reused, recovered_version, initialization_complete}. Recovery may have published an earlier intent even when the requested target is refused.
+
+## rollback-version
+
+`agent-director-admin [--home <dir>] rollback-version --version <stamp>`
+
+Publish a retained compatible version under the administrator lock. Its covered set must include every previously published provider. Changes no database or retained resources; preserves acceptance history and records the rollback in publication history. Uses publish-version's result and ErrVersionInstallRefused envelope, including forward recovery and uncertain durability.
+
+### Flags
+
+- `--version <stamp>`: Exact retained version stamp. Required.
+
+### Output
+
+The same publication result as publish-version; reused is true.
+
+## list-versions
+
+`agent-director-admin [--home <dir>] list-versions`
+
+Validate and list ready retained versions without a lock or store access. Observe current separately; it may change during this read. Installation failures use publish-version's ErrVersionInstallRefused envelope.
+
+### Flags
+
+_None._
+
+### Output
+
+{versions, published_version}: each version's record, version_id, immutable directory and runtime_executable; published_version is null when current is absent.
 
 ## snapshot-store
 
@@ -66,7 +122,7 @@ End a finished row's (ended or missing) own old session, after a human has looke
 
 `agent-director-admin delete --instance-id <id> [--instance-id <id>...]`
 
-Remove rows by id, bypassing every guard: the human's repair tool for a row nothing else removes, such as a row whose recorded tmux session name cannot be used, which resume and reuse refuse and expire keeps. It also removes each row's permission requests, session history and subagent records and clears it as the parent of any other row. It touches no tmux session and no transcript: on a live row the agent keeps running, untracked. Never remove a row after a kill that did not succeed. Each id is processed on its own; a failure on one never aborts the batch. Run it as the agents' user and in their tmux environment. An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1.
+Remove rows by id, bypassing every guard: the human's repair tool for a row nothing else removes, such as a row whose recorded tmux session name cannot be used, which resume and reuse refuse and expire keeps. It also removes each row's permission requests, session history and subagent records and clears it as the parent of any other row. It touches no tmux session and no transcript: on a live row the agent keeps running, untracked. A row whose busy-send delivery is covered is removed only once every process its launches own (the agent and any hook or delivery job of agent-director's) is checked gone, without tmux; its held messages then end not_started (record_deleted). Otherwise that id is refused with ErrSpawnNotDeletable and nothing changes: end the agent with kill, then sweep, and run delete again, or, on a finished row, run delete again once its processes have exited. Never remove a row after a kill that did not succeed. Each id is processed on its own; a failure on one never aborts the batch. Run it as the agents' user and in their tmux environment. An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1.
 
 ### Flags
 
@@ -74,7 +130,7 @@ Remove rows by id, bypassing every guard: the human's repair tool for a row noth
 
 ### Output
 
-{"results": {...}}, mapping each requested id to "ok" when the row was removed, "ErrSpawnNotFound" when no row has the id, or "ErrInternal" on any other store failure.
+{"results": {...}}, mapping each requested id to "ok" when the row was removed, "ErrSpawnNotFound" when no row has the id, "ErrSpawnNotDeletable" when a covered row's owned processes are not all checked gone (kill, then sweep, then retry; on a finished row, retry once they have exited), or "ErrInternal" on any other store failure.
 
 ## help
 

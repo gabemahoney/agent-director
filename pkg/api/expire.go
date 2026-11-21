@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -14,10 +15,16 @@ import (
 )
 
 // ExpireStore is the narrow store surface Expire needs (SRD Appendix F.4):
-// the candidate read, the per-row conditional delete and this store's id,
-// which every label the lookup accepts ends with (SR-3.4; WD 2026-09-29
-// STORE). *store.Store satisfies it.
+// the busy-send retention writer, the candidate read, the per-row conditional
+// delete and this store's id, which every label the lookup accepts ends with
+// (SR-3.4; WD 2026-09-29 STORE). *store.Store satisfies it.
 type ExpireStore interface {
+	// ExpireBusySendRetention expires the busy-send Messages whose Result
+	// became Final before cutoff and the forces that ended before it,
+	// recording expiredAt, and keeps their pairs and every non-content fact
+	// (SR-5.5, SR-4.1). It stops at its first failure, which fails the verb;
+	// batches committed before it stay expired.
+	ExpireBusySendRetention(cutoff, expiredAt time.Time) error
 	// ListExpireCandidates reads every finished row (ended or missing) whose
 	// ended_at is set and older than cutoff, with its recorded session name,
 	// SessionStart identity, launch identity and row snapshot, without
@@ -83,8 +90,9 @@ type ExpireResult struct {
 	KeptIDs []string `json:"kept_ids"`
 }
 
-// ExpireLogger is the narrow log surface Expire writes the candidate read's
-// failure and per-row store errors to. *log.Logger satisfies it.
+// ExpireLogger is the narrow log surface Expire writes the retention pass's
+// failure, the candidate read's failure and per-row store errors to.
+// *log.Logger satisfies it.
 type ExpireLogger interface {
 	Printf(format string, v ...any)
 }
@@ -138,6 +146,12 @@ const (
 	// keptStoreError: the lookup was Gone but the conditional delete failed
 	// in the store; the error was logged and the run continued.
 	keptStoreError = "store_error"
+	// keptHeldMessages: the lookup was Gone but the row's busy-send
+	// conversation still holds Messages (Held, or in a hand-over), rechecked
+	// in the conditional delete's own transaction (SR-5.5): the row and its
+	// custody stay, however old, until a resume delivers or a deletion retires
+	// them.
+	keptHeldMessages = "held_messages"
 )
 
 // unusableKeptReason is the one mapping from the unusable-name guard's kind
@@ -159,7 +173,9 @@ func unusableKeptReason(kind tmux.UnusableKind) string {
 // farFutureCutoff is the cutoff of an explicit zero olderThan window, the
 // only window at or below zero Expire runs with (retentionWindow never gives
 // one, and Expire refuses a negative olderThan): later than any ended_at the
-// store writes, so every finished row with an ended_at is selected (SR-12.1).
+// store writes, so every finished row with an ended_at is selected (SR-12.1),
+// and every Final busy-send Result and ended force the retention pass may
+// expire (SR-5.5).
 var farFutureCutoff = time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC)
 
 // expireRow is the outcome of judging one selected row, and the facts its
@@ -209,13 +225,28 @@ func (r expireRow) verdict() string {
 // negative olderThan are refused with ErrInvalidFlags before any read, tmux
 // call or log line (b.f4v), as ParseOlderThan refuses a negative older_than
 // on the CLI and MCP. Only an explicit zero olderThan selects every finished
-// row with an ended_at. These two refusals and the one candidate read
+// row with an ended_at. After these checks Expire reads one run time from
+// now, for the cutoff and as the retention pass's expiry time.
+//
+// Retention (SR-5.5, SR-4.1; Epic t1.xis.52 decision 3): before it selects
+// any row, Expire runs the busy-send retention pass
+// (ExpireStore.ExpireBusySendRetention) with the same cutoff, an explicit zero
+// olderThan included, so it runs even when no finished row is selected. It
+// expires the Messages whose Result became Final before the cutoff and the
+// forces that ended before it, keeping their pairs, and takes no option,
+// result field or trail record.
+//
+// These two refusals, the retention pass and the one candidate read
 // (ExpireStore.ListExpireCandidates) are Expire's only failures, and
 // (c *Client).Expire adds one, ErrClientClosed on a closed Client, before it
-// calls Expire. The read's error is logged on lg and returned, with no tmux
-// call. Every failure returns an empty ExpireResult (counts 0, IDs and
-// KeptIDs non-nil and empty), as a run that selected no row does (b.hbt).
-// Expire reads time only through now, never time.Now.
+// calls Expire. A retention failure is logged on lg and returned as a new
+// error holding only its text, so no caller can match a named error such as
+// ErrStoreBusy in it; batches it committed first stay expired, and a rerun is
+// safe. Either store failure comes before any row is selected, deleted or
+// looked up in tmux. The candidate read's error is logged on lg and returned,
+// with no tmux call. Every failure returns an empty ExpireResult (counts 0,
+// IDs and KeptIDs non-nil and empty), as a run that selected no row does
+// (b.hbt). Expire reads time only through now, never time.Now.
 //
 // Each selected row is judged in instance-id order, so the per-socket stop
 // and the budget's cut-off fall on the same rows on every run (SR-12.2):
@@ -262,9 +293,9 @@ func (r expireRow) verdict() string {
 // rows tmux_skipped, and a non-positive one makes no tmux call. s, t, pc and
 // now must not be nil; a nil lg writes no log line.
 func Expire(s ExpireStore, t ExpireTmux, pc ProcChecker, retentionDays int, olderThan *time.Duration, sweepBudget time.Duration, now func() time.Time, lg ExpireLogger) (ExpireResult, error) {
-	// Every failure (a refusal or the candidate read's) returns an empty result
-	// whose lists are non-nil, as ExpireResult documents, so it encodes `[]`
-	// like a run that selected no row.
+	// Every failure (a refusal, the retention pass's or the candidate read's)
+	// returns an empty result whose lists are non-nil, as ExpireResult
+	// documents, so it encodes `[]` like a run that selected no row.
 	failed := ExpireResult{IDs: []string{}, KeptIDs: []string{}}
 	window, err := retentionWindow(retentionDays)
 	if err != nil {
@@ -277,9 +308,19 @@ func Expire(s ExpireStore, t ExpireTmux, pc ProcChecker, retentionDays int, olde
 		}
 		window = *olderThan
 	}
+	runAt := now()
 	cutoff := farFutureCutoff
 	if window > 0 {
-		cutoff = now().Add(-window)
+		cutoff = runAt.Add(-window)
+	}
+
+	if err := s.ExpireBusySendRetention(cutoff, runAt); err != nil {
+		if lg != nil {
+			lg.Printf("expire: ExpireBusySendRetention: %v", err)
+		}
+		// %v, never %w: expire names no error (manifest ErrorNames), so a
+		// store sentinel such as ErrStoreBusy must not reach errnames.Classify.
+		return failed, fmt.Errorf("expire: retention pass: %v", err)
 	}
 
 	candidates, err := s.ListExpireCandidates(cutoff)
@@ -425,11 +466,13 @@ func expireKeptReason(res tmux.Result) string {
 // deleteRow is a Gone row's conditional delete (SR-12.3, SR-5.8), guarded on
 // the snapshot the candidate read returned: applied marks the row deleted;
 // changed keeps it changed_since_examined; absent leaves it in neither list;
-// a store error is logged on lg with the instance id and the error only, and
-// keeps it store_error.
+// held busy-send custody keeps it held_messages; a store error is logged on
+// lg with the instance id and the error only, and keeps it store_error.
 func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 	res, err := r.s.DeleteFinishedIfSameLife(cand.InstanceID, cand.Snapshot)
 	switch {
+	case errors.Is(err, store.ErrBusySendCustodyHeld):
+		row.reason = keptHeldMessages
 	case err != nil:
 		if r.lg != nil {
 			r.lg.Printf("expire: DeleteFinishedIfSameLife(%s): %v (continuing)", cand.InstanceID, err)
@@ -478,6 +521,20 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 // configuration) caps all its calls; rows not reached are kept. expire never
 // kills a session, never touches JSONL transcripts, and tmux problems never
 // fail the run.
+//
+// Before it selects any row, expire ends busy-send retention with the same
+// cutoff, even when it selects no row: a Message whose Result became Final
+// before the cutoff loses its text and Result, and a force that ended before
+// it is expired. Their pairs are kept, so a Lookup or get-force of one then
+// answers retention_expired and a repeat of its pair is refused, never
+// accepted again. A Message not yet Final, or still Held, claimed or in a
+// prompt not yet issued, and a running or pending force, are kept. A store
+// failure in this pass, or in the read of the finished rows, fails the run
+// before any row is deleted or tmux is read, with an empty result and an
+// unnamed error, the CLI's, MCP's and TypeScript client's generic internal
+// error; records the pass expired before the failure stay expired, and
+// running expire again is safe. A row's own delete failure only keeps that row
+// (store_error).
 //
 // Finished rows are removed by an operator-scheduled expire at the default
 // retention, run as the same user and in the same tmux environment as the

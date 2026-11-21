@@ -69,15 +69,16 @@ A fresh launch using the arguments supported by
 [Ordinary text submission](caller-contract.md#ordinary-text-submission), with
 exactly Codex 0.159.2 or Claude Code 2.1.280, receives these additions.
 Resumed conversations, unsupported versions and other agent arguments do not.
-Native confirmed delivery requires Linux; literal input remains available
-without that capability.
+For agents busy send does not cover, native confirmed delivery requires Linux;
+literal input remains available without that capability. Covered Claude sends
+use [busy send](caller-contract.md#covered-sends), regardless of these launch
+additions, Claude's version, config directory or keybindings.
 
 - **Claude Code:** a generated `--session-id`,
   `--debug-file <evidence-dir>/claude-debug.log` and `-d hooks`.
   The launch receives agent-director's `HOME` and the selected
-  [`CLAUDE_CONFIG_DIR`](multi-account.md). A relative config directory or
-  an existing or unreadable `keybindings.json` disables native confirmed
-  delivery, but these additions still apply.
+  [`CLAUDE_CONFIG_DIR`](multi-account.md). These additions also apply with a
+  relative config directory or an existing or unreadable `keybindings.json`.
 - **Codex:** `-c log_dir="<evidence-dir>"`, `RUST_LOG=off,codex_tui=info`,
   the complete built-in Codex 0.159.2 keymap through `-c tui.keymap=…`, and
   `-c tui.vim_mode_default=false`. These override user, project and cloud

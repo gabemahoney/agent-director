@@ -18,6 +18,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -186,7 +187,6 @@ func TestSpawnReuseLookupOutcomes(t *testing.T) {
 		{name: "leftover, agent process running", agent: agentAlive, seed: rulHolder(holderOld), want: conflict, desc: rulLeftover},
 		{name: "gone, agent process running: the rule with no session", agent: agentAlive, want: conflict, desc: rulOwnOld(true)},
 		{name: "gone, agent process dead: launches", agent: agentGone},
-		{name: "gone, agent process unreadable: launches", agent: agentUnreadable},
 		{name: "another store's label, row's token, recorded name, new name requested", agent: agentGone,
 			requested: rulNewName, seed: func(t *testing.T, e *killEnv, r *reuseRow, _ string) tmuxfix.SeedSession {
 				return e.seedHolder(t, r.killRow, holderOtherStoreOwn)
@@ -256,7 +256,7 @@ func TestSpawnReuseLookupLeftoverLostRace(t *testing.T) {
 		removed bool
 	}{
 		{name: "row changed", compete: func(e *killEnv, id string) error { return e.st.SetParentID(id, "") }},
-		{name: "row removed", compete: func(e *killEnv, id string) error { return e.st.DeleteSpawn(id) }, removed: true},
+		{name: "row removed", compete: func(e *killEnv, id string) error { return storefix.DeleteWithExit(t, e.st, id) }, removed: true},
 	} {
 		for _, row := range []struct {
 			name string

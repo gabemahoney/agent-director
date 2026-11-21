@@ -53,8 +53,10 @@ func paramRequiredArgs(t *testing.T, e *mcpEnv, v manifest.VerbDef) map[string]a
 			args[p.Name] = []string{paramRow}
 		case "instance_id":
 			args[p.Name] = paramRow
-		case "request_token":
+		case "request_token", "force_id", "caller_uuid":
 			args[p.Name] = paramToken
+		case "delivery_request_id":
+			args[p.Name] = "mcp-param-request"
 		case "decision":
 			args[p.Name] = "allow"
 		case "as":

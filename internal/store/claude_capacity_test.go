@@ -102,12 +102,12 @@ func TestClaudeCapacityPersistsAndInvalidatesAcrossLaunches(t *testing.T) {
 					t.Fatal(err)
 				}
 				if name == "resume" {
-					if r, _, err := s.MoveToPending(id, sp.Snapshot, time.Now().UnixMilli(), "b2b2b2b2b2b2b2b2", sp.Identity.Socket, "", LaunchOwner{}); err != nil || r != CondApplied {
+					if r, _, err := s.MoveToPendingWithExit(id, sp.Snapshot, time.Now().UnixMilli(), "b2b2b2b2b2b2b2b2", sp.Identity.Socket, "", LaunchOwner{}, BusySendDefaultsChoice{}, busyExitIfAny(t, s, id)); err != nil || r != CondApplied {
 						t.Fatalf("resume: %v %v", r, err)
 					}
 				} else {
 					fresh := Spawn{Agent: AgentClaude, CWD: t.TempDir(), RelayMode: "off", StartedAt: time.Now(), LaunchStartedAtMillis: time.Now().UnixMilli(), Identity: LaunchIdentity{Token: "b2b2b2b2b2b2b2b2"}}
-					if r, _, _, err := s.ResetForReuse(id, sp.Snapshot, sp.Agent, fresh); err != nil || r != CondApplied {
+					if r, _, _, err := s.ResetForReuse(id, sp.Snapshot, sp.Agent, busyWithExit(t, s, id, fresh)); err != nil || r != CondApplied {
 						t.Fatalf("reuse: %v %v", r, err)
 					}
 				}

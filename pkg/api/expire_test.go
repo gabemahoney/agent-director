@@ -9,6 +9,7 @@ package api_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,6 +26,37 @@ import (
 
 // expireRetention is config's default expire retention window.
 var expireRetention = time.Duration(config.Default().Defaults.ExpireRetentionDays) * 24 * time.Hour
+
+// TestExpireBusySendRetentionFailure pins the one fatal API boundary; real
+// store faults and partial-progress behavior belong to the store tests.
+func TestExpireBusySendRetentionFailure(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
+	e := newKillEnv(t)
+	r := e.seedFinished(t, 48*time.Hour, agentGone)
+	before := e.columns(t, r.ID)
+	w := e.expireStore()
+	cause := fmt.Errorf("retention write: %w", store.ErrStoreBusy)
+	w.failRetention(cause)
+	mark := trailMark(t)
+	res, lg, err := e.expireWith(w, olderThan(0))
+	assertOneName(t, err, "ErrInternal")
+	if errors.Unwrap(err) != nil || errors.Is(err, cause) || errors.Is(err, store.ErrStoreBusy) {
+		t.Errorf("retention error exposed its cause: %v", err)
+	}
+	if err.Error() != "expire: retention pass: "+cause.Error() {
+		t.Errorf("error = %q; want the original diagnostic text", err)
+	}
+	if !slices.Equal(lg.lines, []string{"expire: ExpireBusySendRetention: " + cause.Error()}) {
+		t.Errorf("log = %q; want one retention failure", lg.lines)
+	}
+	assertExpireJSON(t, res, `{"count":0,"ids":[],"kept":0,"kept_ids":[]}`)
+	if !slices.Equal(w.calls, []string{"retention"}) || len(e.pc.StartTimeCalls()) != 0 || e.pc.EnvReads() != 0 {
+		t.Errorf("calls = %v, process calls %v; want one retention attempt and no later work", w.calls, e.pc.StartTimeCalls())
+	}
+	e.assertLookupsOn(t)
+	e.assertRowUnchanged(t, r.ID, before)
+	assertNoTrailSince(t, mark, r.ID)
+}
 
 // seedUnselectable seeds a live row and a finished row with a NULL ended_at,
 // both with dead agents and no session; expire must never select either.

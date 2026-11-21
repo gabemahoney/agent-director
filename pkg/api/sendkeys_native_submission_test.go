@@ -16,7 +16,8 @@ import (
 
 func TestSendKeysChunkDrainExactSubmission(t *testing.T) {
 	t.Parallel()
-	for _, agent := range []string{"codex", "claude"} {
+	// Codex's native launch: busy send covers Claude, whose send-keys never reaches native input.
+	for _, agent := range []string{"codex"} {
 		t.Run(agent, func(t *testing.T) {
 			e := newNativeSubmissionEnv(t)
 			spec := codexSpec(store.StatePending, agentAlive, false)

@@ -26,6 +26,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -91,18 +92,22 @@ func newParentProc(parents ...hookParent) *fakeParentProc {
 }
 
 // hookConfig returns a HandleConfig with env for a hook whose parent is p, on a
-// virtual clock starting now with the default pending grace. Callers may override Cfg/Clock.
+// virtual clock starting now with the default pending grace, and busy send's
+// Claude launch seams wired as cmd/agent-director wires them. Callers may
+// override Cfg/Clock.
 func hookConfig(env func(string) string, p hookParent) hook.HandleConfig {
 	now := time.Now()
 	clock := &advancingClock{now: &now}
 	return hook.HandleConfig{
-		Agent:        p.Agent,
-		Env:          env,
-		ParentPID:    func() int { return p.PID },
-		ParentProc:   newParentProc(p),
-		Clock:        clock,
-		Now:          clock.Now,
-		PendingGrace: config.Tmux{}.EffectivePendingGrace(),
+		Agent:               p.Agent,
+		Env:                 env,
+		ParentPID:           func() int { return p.PID },
+		ParentProc:          newParentProc(p),
+		Clock:               clock,
+		Now:                 clock.Now,
+		PendingGrace:        config.Tmux{}.EffectivePendingGrace(),
+		PrepareBusySendWake: spawn.PrepareBusySendWake,
+		ClaudeStartupPrompt: spawn.HasClaudeStartupPrompt,
 	}
 }
 

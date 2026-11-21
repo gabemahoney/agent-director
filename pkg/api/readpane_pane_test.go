@@ -43,6 +43,7 @@ func runPaneCases(t *testing.T, verbs []paneVerb, cases []paneCase, after func(*
 			t.Run(v.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
 				e := newKillEnv(t)
+				e.rowAgent = v.agent
 				r := e.seedRow(t, tc.spec)
 				want := tc.setup(t, e, v, &r)
 				run := v.check(t, e, r, want)
@@ -223,6 +224,7 @@ func TestPaneVerbsNeighbours(t *testing.T) {
 			t.Run(v.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
 				e := newKillEnv(t)
+				e.rowAgent = v.agent
 				x := e.seedRow(t, killRowSpec{ID: tc.xID, NoSession: true,
 					Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(tc.xName)}})
 				y := e.seedRow(t, killRowSpec{ID: tc.yID, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(tc.yName)}})
@@ -246,6 +248,7 @@ func TestPaneVerbsStoredNames(t *testing.T) {
 			t.Run(v.name+"/"+n.Raw, func(t *testing.T) {
 				t.Parallel()
 				e := newKillEnv(t)
+				e.rowAgent = v.agent
 				r := e.seedRow(t, killRowSpec{Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(n.Raw)}})
 				if r.Session.Name != n.Stored {
 					t.Fatalf("seeded session name %q; want the stored form %q", r.Session.Name, n.Stored)
@@ -264,6 +267,7 @@ func TestPaneVerbsRecordedSocket(t *testing.T) {
 	for _, v := range paneVerbs() {
 		t.Run(v.name, func(t *testing.T) {
 			e := newKillEnv(t)
+			e.rowAgent = v.agent
 			r := e.seedRow(t, killRowSpec{})
 			elsewhere := filepath.Join(t.TempDir(), "elsewhere") // no commas: TMUX's socket field ends at one
 			t.Setenv("TMUX", elsewhere+",4242,0")
@@ -392,6 +396,9 @@ func TestPaneVerbsUnusableName(t *testing.T) {
 		t.Run(tc.verb+"/"+tc.state+"/"+tc.fixture, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
+			if tc.verb == "send-keys" {
+				e.rowAgent = store.AgentCodex // busy send covers Claude, whose send never reaches the name check
+			}
 			f := unusableFixture(t, tc.fixture)
 			spec := killRowSpec{State: tc.state, RelayOn: tc.relay}
 			if tc.state == store.StatePending {
@@ -435,6 +442,7 @@ func TestPaneVerbsUnknownIDAndClosedClient(t *testing.T) {
 		t.Run(v.name+"/unknown id", func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
+			e.rowAgent = v.agent
 			e.seedUnusableRow(t, killRowSpec{}, unusableFixture(t, "pre-b.gqe default name"))
 			_, err := v.run(t, e, killRow{ID: "absent-" + uuid.NewString()[:8]})
 			assertOneName(t, err, "ErrSpawnNotFound")

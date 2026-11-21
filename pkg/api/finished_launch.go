@@ -84,6 +84,22 @@ var reuseLaunchVerb = finishedLaunchVerb{
 // ReleaseLaunchOwner for the release to happen.
 type launchOwnerReleaser = spawn.LaunchOwnerReleaser
 
+// busySendLaunchWriter is the permanent core's creation-outcome writer.
+// Labelled creation publishes inside the identity write; the successful
+// lost-reply path needs explicit publication. Test/wrapper stores that stage
+// candidates must forward these methods as well as RecordLaunchIdentity.
+type busySendLaunchWriter interface {
+	PublishBusySendLaunch(instanceID string, version int64, token string) (CondResult, error)
+	MarkBusySendLaunchUncertain(instanceID, token string) error
+}
+
+var _ busySendLaunchWriter = (*store.Store)(nil)
+
+func busySendWriter(s any) busySendLaunchWriter {
+	w, _ := s.(busySendLaunchWriter)
+	return w
+}
+
 // Compile-time assertion that *store.Store provides the optional release, so
 // the production wiring ends every launch's hold.
 var _ launchOwnerReleaser = (*store.Store)(nil)
@@ -131,6 +147,7 @@ type finishedLaunch struct {
 	lg              *log.Logger
 	who             caller
 	identity        spawn.IdentityWriter
+	busySend        busySendLaunchWriter
 	release         launchOwnerReleaser
 	restoreWrite    func() (CondResult, error)
 	row             Spawn
@@ -144,9 +161,13 @@ type finishedLaunch struct {
 // description builders:
 //
 //   - a labelled session: the identity write (spawn.RecordLaunchIdentity, when
-//     l.identity is set) with l.version and req's token, whose failure only
-//     logs; success;
-//   - a lost reply: success with no identity;
+//     l.identity is set) with l.version and req's token, publishing atomically
+//     when applied; otherwise try explicit publication by token. Success even
+//     if identity/publication cannot be recorded; write errors only log;
+//   - a lost reply: no identity write; try explicit publication when available.
+//     Success for every agent regardless of publication's result or coverage;
+//     publication failure/non-application retains uncertainty without restoration
+//     or retrying creation, and write errors only log;
 //   - a timeout, or a non-zero-exit unparseable reply: ErrTmuxUnresponsive
 //     with the launch-timeout description and the verb's TimeoutConsequence,
 //     the row staying pending;
@@ -158,24 +179,47 @@ type finishedLaunch struct {
 //     labelled (after its kill by id, or saying it may still run) and for any
 //     other launch failure.
 //
-// A launch that ends with no identity write applied and no restore applied
+// Timeouts, labelled creation without an applied identity write and lost-reply
+// publication failures/non-applications attempt guarded candidate uncertainty
+// recording; recording errors only log. A launch that ends with no identity
+// write applied and no restore applied
 // (a lost reply, a timeout, an identity write that did not apply or failed,
 // or a restore that did not apply) ends its hold on the row with a release
 // (releaseOwner, b.kdf), which retries a failure a bounded number of times
 // and then only logs.
 //
-// Every error matches exactly one catalogued sentinel (SR-1.5).
+// The create/restore error mappings match exactly one catalogued sentinel
+// (SR-1.5). Post-create publication errors do not change caller success.
 func (l finishedLaunch) outcome(out spawn.CreateOutcome, req spawn.CreateRequest) error {
 	switch out.Kind {
 	case spawn.CreateLabelled:
 		if l.identity == nil || !spawn.RecordLaunchIdentity(l.identity, l.pc, l.lg, req.InstanceID, l.version, req.Token, out.Reply) {
+			// The successful labelled create is independent of the identity
+			// guard: another write may have advanced only the row version.
+			// Resolve that success by token without replacing newer identity.
+			if l.busySend != nil {
+				if _, err := l.busySend.PublishBusySendLaunch(req.InstanceID, l.version, req.Token); err != nil {
+					l.lg.Printf("WARN: %s: publishing created Launch for instance %s failed: %v", l.v.Verb, req.InstanceID, err)
+				}
+			}
+			l.markUncertain(req.Token)
 			l.releaseOwner(req.Token)
 		}
 		return nil
 	case spawn.CreateLostReply:
+		if l.busySend != nil {
+			res, err := l.busySend.PublishBusySendLaunch(req.InstanceID, l.version, req.Token)
+			if err != nil || res != CondApplied {
+				l.markUncertain(req.Token)
+				if err != nil {
+					l.lg.Printf("WARN: %s: publishing created Launch for instance %s failed: %v", l.v.Verb, req.InstanceID, err)
+				}
+			}
+		}
 		l.releaseOwner(req.Token)
 		return nil
 	case spawn.CreateUnresponsive:
+		l.markUncertain(req.Token)
 		l.releaseOwner(req.Token)
 		return spawn.LaunchTimeoutError(out.Cause, l.v.Verb, req.InstanceID, l.v.TimeoutConsequence)
 	case spawn.CreateDuplicate:
@@ -193,6 +237,14 @@ func (l finishedLaunch) outcome(out spawn.CreateOutcome, req spawn.CreateRequest
 		return spawn.CreateFailedError(out.Cause, req.Name, restored.Sentence)
 	})
 	return err
+}
+
+func (l finishedLaunch) markUncertain(token string) {
+	if l.busySend != nil {
+		if err := l.busySend.MarkBusySendLaunchUncertain(l.row.InstanceID, token); err != nil {
+			l.lg.Printf("WARN: %s: recording uncertain creation for instance %s failed: %v", l.v.Verb, l.row.InstanceID, err)
+		}
+	}
 }
 
 // The restore's row sentences (SR-1.4, SR-8.5, SR-10.4): every launch error
@@ -270,6 +322,7 @@ func (l finishedLaunch) restore(token string, launchErr func(restored restoreRes
 		l.lg.Printf("WARN: %s: restoring instance %s to its prior state after a failed launch failed: %v", l.v.Verb, id, rerr)
 	}
 	if rerr != nil || res != CondApplied {
+		l.markUncertain(token)
 		l.releaseOwner(token)
 	}
 	restored := restoreResultOf(res, rerr, l.row.State, l.v)

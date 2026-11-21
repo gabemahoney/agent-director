@@ -89,7 +89,11 @@ var errEmptyPath = errors.New("empty database path")
 // inputCutover step of migrationSteps produces as INPUT_CUTOVER_VERSION: its
 // pre-flight decides from them, before the binary swap, whether an upgrade
 // crosses the native-input cutover. A Go test fails when either differs.
-const schemaVersion = 20
+//
+// Version 21 holds the busy-send permanent core (busy_send_schema.go), which
+// every later version reads and writes without converting the database
+// (SR-7.2).
+const schemaVersion = 21
 
 // agentRenameHopVersion is the user_version the agent-rename hop (v8 to v9,
 // migrateV8toV9, b.ssz) produces. install.sh holds the same number as
@@ -319,6 +323,13 @@ func openDBWithInputWindow(resolved string, busyTimeoutMs int, window *inputMigr
 	if err := inputAuthority(context.Background(), db, storeID); err != nil {
 		_ = db.Close()
 		return nil, withInputMigrationCause(CauseNativeInputStateInconsistent, fmt.Errorf("%w: native input authority is not committed", ErrSchemaMismatch))
+	}
+
+	// Recognize the busy-send permanent core (SR-7.2). The check only reads:
+	// an unrecognized core refuses the open, and no open converts one.
+	if err := recognizeBusySendCore(context.Background(), db, storeID); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 
 	absolutePath, err := filepath.Abs(resolved)

@@ -18,10 +18,14 @@ import (
 
 // Each verb's usage line, as help prints it.
 var usageLines = map[string]string{
-	"kill-finished": "agent-director-admin kill-finished --instance-id <id>",
-	"delete":        "agent-director-admin delete --instance-id <id> [--instance-id <id>...]",
-	"help":          "agent-director-admin help",
-	"version":       "agent-director-admin version",
+	"kill-finished":    "agent-director-admin kill-finished --instance-id <id>",
+	"delete":           "agent-director-admin delete --instance-id <id> [--instance-id <id>...]",
+	"help":             "agent-director-admin help",
+	"version":          "agent-director-admin version",
+	"version-facts":    "agent-director-admin [--home <dir>] version-facts",
+	"publish-version":  "agent-director-admin [--home <dir>] publish-version --binary <path>",
+	"rollback-version": "agent-director-admin [--home <dir>] rollback-version --version <stamp>",
+	"list-versions":    "agent-director-admin [--home <dir>] list-versions",
 }
 
 // poisonedHome returns a HOME whose ~/.config/agent-director holds a malformed
@@ -82,7 +86,7 @@ var (
 // of that verb only and the pointer to the global flags, opening no store and
 // loading no config. "{home}" in args is the run's HOME.
 func TestHelpOpensWithApprovalStatement(t *testing.T) {
-	all := []string{"kill-finished", "delete", "help", "version"}
+	all := []string{"kill-finished", "delete", "help", "version", "version-facts", "publish-version", "rollback-version", "list-versions"}
 	cases := []struct {
 		args  []string
 		verbs []string // the verbs whose usage the help shows
@@ -102,6 +106,14 @@ func TestHelpOpensWithApprovalStatement(t *testing.T) {
 		{[]string{"version", "-h"}, []string{"version"}},
 		{[]string{"--version", "--help"}, []string{"version"}},
 		{[]string{"-v", "-h"}, []string{"version"}},
+	}
+	for _, verb := range []string{"version-facts", "publish-version", "rollback-version", "list-versions"} {
+		for _, help := range []string{"-h", "--help"} {
+			cases = append(cases, struct {
+				args  []string
+				verbs []string
+			}{[]string{"--home={home}", verb, help}, []string{verb}})
+		}
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(append([]string{"agent-director-admin"}, tc.args...), " "), func(t *testing.T) {

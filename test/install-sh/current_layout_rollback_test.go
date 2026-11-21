@@ -51,12 +51,21 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	}
 	_, got, found := strings.Cut(string(b), "## Going back to the previous release\n")
 	got, _, complete := strings.Cut(got, "\nEOF\n")
-	if !found || !complete || got+"\n" != section {
-		t.Fatalf("%s: complete recovery text differs from linked operator advice", expectedPath)
+	// The copied historical testplan pins the restore recipe. The new
+	// versioned-layout preamble has its own literal teardown follow below.
+	const restoreStart = "For an upgrade within the current `~/.config/agent-director` layout,"
+	_, legacyCopy, legacyFound := strings.Cut(got, restoreStart)
+	legacyDoc := opsDocSection(t, "Restore the previous release")
+	_, legacyBody, _ := strings.Cut(legacyDoc.text, "\n")
+	if !found || !complete || !legacyFound || strings.TrimSpace(restoreStart+legacyCopy) != strings.TrimSpace(legacyBody) {
+		t.Fatalf("%s: complete legacy restore recipe differs from linked operator advice", expectedPath)
 	}
+	section = legacyDoc.text
+	teardown := opsDocSection(t, "Returning across the exempt conversion")
+	teardown.Pin("Obtain explicit operator authorization. Stop all writers", "Run it without `--purge` and without `--mcp-also`", "It must print `exempt`")
 	advice := strings.Join(strings.Fields(strings.Split(section, "\n1.")[0]), " ")
 	for _, phrase := range []string{
-		"including schema v9→v10 through v19→v20, the old-layout steps below do not apply",
+		"including schema v9→v10 through v20→v21, the old-layout steps below do not apply",
 		"stop all writers and keep a copy of the actual store (`[store] db_path` when set), its existing `-wal`/`-shm`, and all legacy input evidence",
 		"Keep provider logs/transcripts outside those roots too",
 		"maintain the same exclusion, preserve the post-upgrade evidence",
@@ -74,6 +83,7 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 		"Never replay an attempt merely because the restored copy lacks its proof",
 		"The journal cutover creates a separate stopped-writer backup before schema changes; other installer steps do not supply this complete recovery set",
 		"A copy made after migration cannot replace the pre-upgrade set",
+		"Schema v21's busy-send core has no supported reverse recipe",
 		"Schema v20 display evidence has no supported reverse recipe",
 		"Schema v19 confirmation evidence has no supported reverse recipe",
 		"Schema v18 Cursor input and proof evidence has no supported reverse recipe",
@@ -81,7 +91,7 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 		"Schema v16 has no in-place downgrade or replayable file-journal export",
 		"A binary swap or version reset cannot undo these changes",
 		"Schema v15, v14 and v13 are also restore-only",
-		"The v12→v11 family-history recipe applies only to genuine family-only v12 stores; it cannot operate on v13–v20",
+		"The v12→v11 family-history recipe applies only to genuine family-only v12 stores; it cannot operate on v13–v21",
 		"Without that set, or while an uncertain attempt remains unreconciled, stop and obtain human help",
 	} {
 		if !strings.Contains(advice, phrase) {
@@ -95,10 +105,10 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, phrase := range []string{
-		"**Current recovery policy.** Schemas v20, v19, v18, v17 and v16 are restore-only.",
+		"**Current recovery policy.** Schemas v21, v20, v19, v18, v17 and v16 are restore-only.",
 		"The v20 display columns and v19 evidence columns have no reverse recipe: restore the stopped-writer pre-upgrade set, losing all later writes, and never drop the columns or reset the version.",
-		"This illustrates the historical pattern, not a recipe for v9 through v20. Never merely reset the version pragma.",
-		"recipe below is only for genuine family-only v12, never v13–v20 or a hand-reset store.",
+		"This illustrates the historical pattern, not a recipe for v9 through v21. Never merely reset the version pragma.",
+		"recipe below is only for genuine family-only v12, never v13–v21 or a hand-reset store.",
 	} {
 		if !strings.Contains(strings.Join(strings.Fields(string(migration)), " "), phrase) {
 			t.Fatalf("migration recovery advice changed; recheck the literal follow: missing %q", phrase)
@@ -212,6 +222,16 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			rollbackRestoreStore(t, h, inspection, postUpgradeEvidence)
 			if got := h.Sqlite(inspection, "SELECT instance_id,cwd FROM spawns ORDER BY instance_id; SELECT count(*) FROM input_attempts; SELECT count(*) FROM input_launches;"); got != "after|/after\nbefore|/after\n0\n0\n" {
 				t.Fatalf("preserved evidence must retain later writes and establish no input to reconcile before older runtime use: %q", got)
+			}
+			// DR3: only after retaining the complete later evidence and
+			// confirming the previous installer supports this host, follow
+			// the authorized non-purge teardown before restoring any DB.
+			kept := stagedSnapshot(t, h, moveNewRel+"/config.toml")
+			currentStore := rollbackStoreCopy(t, db)
+			stagedDocTeardown(t, h, teardown, "<layout-tag>")
+			kept.Unchanged(t, h)
+			if !reflect.DeepEqual(rollbackStoreCopy(t, db), currentStore) {
+				t.Fatal("non-purge teardown changed current runtime evidence")
 			}
 			rollbackRestoreStore(t, h, db, postUpgradeCopy)
 			if got := h.Run(previous.Main, "list"); got.Code == 0 || !strings.Contains(got.Stderr, "ErrSchemaMismatch") {

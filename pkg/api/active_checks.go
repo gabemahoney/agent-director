@@ -124,6 +124,10 @@ type activeReadStore struct {
 	fallbackBusy  bool
 	fallbackTried map[int64]bool
 	withHistory   bool
+	// delivery is the covered rows' delivery facts the row reads took in
+	// their own read transaction (activeRefresh), which the projection shows
+	// with the row read with them (busySendObservationOf).
+	delivery *store.BusySendDeliveries
 }
 
 // fieldAttempt is one main-field attempt that did not durably confirm its
@@ -373,15 +377,17 @@ func liveIdentity(row Spawn) LiveSpawnIdentity {
 // checkActiveRows runs each adapter once for the selected IDs. Reads select
 // first, and never reapply their filters or fill a vacated limit slot. The
 // refresh callback is a stored projection only, never another check pass.
+// delivery is the collection rows' read and refresh fill (activeRefresh), or
+// nil.
 func checkActiveRows(ctx context.Context, source any, view RelayView, settle store.SettleRead, rows []Spawn,
-	refresh func([]string, []store.CursorMissingProof) ([]Spawn, error), includeHistory bool) *activeReadStore {
+	refresh func([]string, []store.CursorMissingProof) ([]Spawn, error), includeHistory bool, delivery *store.BusySendDeliveries) *activeReadStore {
 	tickSource := "ad_recovery"
 	if view.active != nil && view.active.tickSource != "" {
 		tickSource = view.active.tickSource
 	}
 	r := &activeReadStore{source: source, view: view, settle: settle, refresh: refresh, ctx: ctx, emit: recoveryTickTrail(recoveryTrail(ctx), tickSource), withHistory: includeHistory,
 		byID: map[string]*activeCheckedRow{}, fallbackTried: map[int64]bool{},
-		missing: emptySweepResult()}
+		missing: emptySweepResult(), delivery: delivery}
 	for _, row := range rows {
 		checked := &activeCheckedRow{row: row, display: row.CommittedDisplay(), displayEvidence: row.DisplayEvidence}
 		for _, adapter := range []string{"liveness", "cursor_gateway", "codex_turn", "transcript", "permission_read", "permission_repair", "display", "permission_fallback", "native_proof"} {
@@ -1162,7 +1168,9 @@ func (r *activeReadStore) ObserveIdleScreen(row Spawn, _ store.PaneSample, _ tim
 }
 
 // activeRefresh never selects membership: IDs were fixed by the caller.
-func activeRefresh(source any, settle store.SettleRead, partial bool) func([]string, []store.CursorMissingProof) ([]Spawn, error) {
+// delivery, when set, receives the covered rows' delivery facts from each
+// row read's own read transaction (store.BusySendDeliveries).
+func activeRefresh(source any, settle store.SettleRead, partial bool, delivery *store.BusySendDeliveries) func([]string, []store.CursorMissingProof) ([]Spawn, error) {
 	return func(ids []string, proofs []store.CursorMissingProof) ([]Spawn, error) {
 		s := source
 		if projected, ok := source.(interface {
@@ -1172,13 +1180,18 @@ func activeRefresh(source any, settle store.SettleRead, partial bool) func([]str
 		}
 		if partial {
 			if reader, ok := s.(interface {
+				RecoveryRowsWithDelivery([]string, store.SettleRead, *store.BusySendDeliveries) ([]Spawn, error)
+			}); ok && delivery != nil {
+				return reader.RecoveryRowsWithDelivery(ids, settle, delivery)
+			}
+			if reader, ok := s.(interface {
 				RecoveryRows([]string, store.SettleRead) ([]Spawn, error)
 			}); ok {
 				return reader.RecoveryRows(ids, settle)
 			}
 		}
 		if reader, ok := s.(ListStore); ok {
-			return reader.ListSpawns(ListFilters{IDs: ids, Settle: settle})
+			return reader.ListSpawns(ListFilters{IDs: ids, Settle: settle, Delivery: delivery})
 		}
 		out := []Spawn{}
 		for _, id := range ids {

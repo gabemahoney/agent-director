@@ -106,7 +106,8 @@ func moveWantMigrated(t *testing.T, wantNew, gotNew moveTree) {
 // moveCheckMoved fails the case unless the home tree is what a move leaves, by
 // SR-14.3's rule: the kept directory is the original; the new one holds every
 // file of the original but bin/, admin/ and the store, the same, except that
-// the migration has changed the templates (moveWantMigrated); the rest of HOME
+// the migration has changed the templates (moveWantMigrated) and the settled
+// exempt install established a usable versioned layout; the rest of HOME
 // (~/.config aside) is as it was. before is the snapshot taken before the move.
 func moveCheckMoved(t *testing.T, h *moveHome, before moveTree) {
 	t.Helper()
@@ -121,6 +122,10 @@ func moveCheckMoved(t *testing.T, h *moveHome, before moveTree) {
 	wantNew := moveWithout(original, skip...)
 	wantNew[""] = "dir drwx------"
 	gotNew := moveWithout(moveUnder(got, moveNewRel), skip...)
+	// Validate the new program resources before separating them from the
+	// original files. Pre-publication failure snapshots must still match exactly.
+	stagedLayout(t, h, moveVersion)
+	gotNew = moveWithout(gotNew, stagedEvidence[:6]...)
 	moveWantMigrated(t, wantNew, gotNew)
 	if d := moveDiff(wantNew, gotNew); d != "" {
 		t.Errorf("the new directory differs from the original's files:\n%s", d)
@@ -985,8 +990,10 @@ func TestMoveMarkerRecovery(t *testing.T) {
 	t.Run("marker-naming-a-kept-dir-while-the-old-dir-is-back", func(t *testing.T) {
 		h := newMoveHome(t)
 		h.BuildOld(withMoveNoStore())
-		moveMustInstall(t, h)
-		kept := filepath.Join(h.Home, moveKeptDir(t, h))
+		// A stale legacy marker, before any publication evidence exists.
+		kept := h.Old + ".pre-move-20010203-040506"
+		stagedMust(t, os.Rename(h.Old, kept))
+		h.BuildLegacyCurrent()
 		h.Write(filepath.Join(h.Old, "config.toml"), moveOldConfig, 0o600)
 		moveMarkerStale(h, kept+"\n")
 		before := h.Snapshot()
@@ -1001,12 +1008,8 @@ func TestMoveMarkerRecovery(t *testing.T) {
 
 	t.Run("marker-with-no-old-directory", func(t *testing.T) {
 		h := newMoveHome(t)
-		h.BuildOld(withMoveNoStore())
-		moveMustInstall(t, h)
-		kept := filepath.Join(h.Home, moveKeptDir(t, h))
-		if err := os.RemoveAll(kept); err != nil {
-			t.Fatal(err)
-		}
+		h.BuildLegacyCurrent()
+		kept := h.Old + ".pre-move-20010203-040506"
 		moveMarkerStale(h, kept+"\n")
 		res := moveMustInstall(t, h)
 		if strings.Contains(res.Stdout, "move    :") {

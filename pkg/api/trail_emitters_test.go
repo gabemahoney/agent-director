@@ -405,6 +405,18 @@ func TestPauseCodexTerminalReportingBounded(t *testing.T) {
 					if pr, err := e.st.GetPermissionRequest(r.ID, tokens[0]); err != nil || pr.Closed() || pr.Decision != "" {
 						t.Fatalf("end report must leave request open and undecided: %+v, %v", pr, err)
 					}
+					// The poll's second connection is opened, and its schema parsed,
+					// before Pause starts: under -race a fresh connection's parse of
+					// the v21 schema outlasts Pause's whole terminal path.
+					reader, err := apitest.OpenSpawnColumnsReader(e.dbPath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() {
+						if err := reader.Close(); err != nil {
+							t.Error(err)
+						}
+					})
 					mark := trailMark(t)
 					release := holdTrail(t)
 					baseline := trail.Default().Status()
@@ -435,7 +447,11 @@ func TestPauseCodexTerminalReportingBounded(t *testing.T) {
 					var lastLiveRead time.Time
 					for {
 						readStarted := time.Now()
-						if e.columns(t, r.ID).State == store.StateEnded {
+						cols, err := reader.Read(r.ID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if cols.State == store.StateEnded {
 							break
 						}
 						// Timestamp BEFORE a read that still sees the live row: this

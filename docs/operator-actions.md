@@ -3,7 +3,8 @@
 Human-only procedures. Automated callers (programs, scripts, agents, MCP
 clients) must not perform them.
 
-`kill-finished`, `delete`, `migrate-journal` and `snapshot-store` are verbs of `agent-director-admin`
+`kill-finished`, `delete`, `migrate-journal`, `snapshot-store`, `version-facts`,
+`publish-version`, `rollback-version` and `list-versions` are verbs of `agent-director-admin`
 (`~/.config/agent-director/admin/agent-director-admin`, never on PATH). Run it by that
 full path, only with a human's explicit approval for that run.
 
@@ -107,6 +108,14 @@ Automated input correction belongs
 in the [caller contract](caller-contract.md#spawn-and-template-input-refusals).
 
 ## Unresolved ordinary input
+
+For covered Claude, follow the Message's
+[Result and pair](caller-contract.md#message-results), never native transcript
+observation or manual re-entry. If a permission request blocks it, use
+[direct tmux and outside-answer recording](permissions.md#answering-at-the-pane).
+For reconnecting, use [keyless pause](caller-contract.md#keyless-pause-of-a-covered-agent)
+and [resume carry](caller-contract.md#launch-end-resume-and-reuse).
+The native and manual procedures below apply only to uncovered agents.
 
 Cursor's `gateway_refused` is not unresolved input: the text was discarded.
 Follow [Cursor input outcomes](caller-contract.md#cursor-input-outcomes).
@@ -221,6 +230,31 @@ A human removes the row, in order:
    ```sh
    ~/.config/agent-director/admin/agent-director-admin delete --instance-id <id>
    ```
+
+   For an `ErrSpawnNotDeletable` answer, see
+   [`delete` answers `ErrSpawnNotDeletable`](#delete-answers-errspawnnotdeletable).
+
+## `delete` answers `ErrSpawnNotDeletable`
+
+The row is a Covered Agent's, and a process one of its launches owns (the
+agent, or an agent-director hook or delivery job that could still give it
+input) still runs or cannot be checked. Nothing changed for that id; the
+batch's other ids went on. Deletion requires every owned process identity to
+be checked gone and the delivery destination fenced, then retires atomically.
+`ended`, `missing`, agent-only exit and a finished-row `kill` no-op do not
+establish that evidence. The check needs no tmux, so
+a row whose recorded name cannot be used gets it too.
+
+On a live row, end the agent with `agent-director kill --instance-id <id>`
+(for a row whose recorded name cannot be used, steps 4 and 5 of
+[Inspect and end a session by hand](#inspect-and-end-a-session-by-hand)
+instead), run `agent-director sweep`, then run `delete` again, following the
+[live-row sequence and pending grace](caller-contract.md) and each error's class. On a finished
+row, where `kill` ends nothing, run `delete` again once its processes have
+exited. A hook or delivery job that outlives the agent keeps the refusal until
+it exits. Once deleted, the row's Held Messages end `not_started` with reason
+`record_deleted` ([caller contract](caller-contract.md#launch-end-resume-and-reuse)).
+A row of an agent busy send does not cover is deleted as before.
 
 ## A spawn refused as "left over from an earlier life"
 
@@ -402,6 +436,11 @@ agent-director process started before it.
 
 ## Stopping a set of agents before a binary change
 
+This procedure is for an exempt/legacy binary change or explicit teardown.
+A [versioned upgrade or rollback](#rolling-back-a-versioned-install) needs no
+agent, caller or `serve` stop or restart. Classify by the
+[install policy](install.md#choose-the-upgrade-path) before using this procedure.
+
 When the caller's own stop path cannot run, a human stops one labelled set of
 agents (for example `service=<name>`) in this order before agent-director's
 binary changes. Never delete a row or edit `state.db`.
@@ -431,7 +470,11 @@ sessions do not prove exit. Follow the maintenance window below.
 
 ## Upgrading the native-input journal
 
-This upgrade moves operational input records into SQLite. Every upgrade of an
+This is an exempt/legacy procedure. A versioned install follows
+[file-only recovery](#recovering-a-versioned-install), even when its configured
+store is old; do not probe that store during an ordinary later install.
+
+This upgrade moves operational input records into SQLite. An exempt upgrade of an
 existing store below schema v16 crosses it, once; a fresh install or a store at
 schema v16 or later does not. `install.sh` checks the journal flags (step 3) and
 inventories holders in pre-flight, before restore copies, the binary swap or
@@ -1437,7 +1480,138 @@ a scope:
   get agent-director` shows one scope at a time, so run it again after each
   removal until it finds none.
 
+## Inspecting a versioned install
+
+Apply the [file-based classification](install.md#choose-the-upgrade-path)
+first. These commands use the effective HOME only; the shown `--home "$HOME"`
+selects `~/.config/agent-director`. They load no config and open no store.
+Explicit `--store-path`, `--tmux-command` and `--create-if-missing` flags are
+refused, even if their values match defaults.
+
+Run each administrator command by full path, as a human or with explicit
+human approval for that individual run. Keep `admin/` private (mode 0700)
+and off PATH. Installer-internal publication is part of an authorized install.
+
+```sh
+~/.config/agent-director/admin/agent-director-admin --home "$HOME" version-facts
+~/.config/agent-director/admin/agent-director-admin --home "$HOME" list-versions
+```
+
+`version-facts` reports the running admin's compiled stamp, commit, covered
+agents and permanent core identity. `list-versions` validates ready retained
+records and reports `versions` and separately observed `published_version`;
+that selection can change during the lock-free read. Discovery does not depend
+on `current`. Exact fields and exits are in the
+[admin reference](admin-reference.md#list-versions).
+
+## Rolling back a versioned install
+
+Inspect retained versions above, then replace `<retained-stamp>` with the exact
+`version` stamp of the compatible target, not its directory id:
+
+```sh
+~/.config/agent-director/admin/agent-director-admin --home "$HOME" rollback-version --version '<retained-stamp>'
+```
+
+Rollback publishes retained files and preserves runtime acceptance history.
+Sends and AD CLI calls continue; agents, callers and `serve` need no restart.
+It restores no database or `.prior` copy and truncates no publication history.
+The target must match the permanent anchored core identity and cover every
+agent covered by any earlier publication. A ready version never published does
+not expand that floor; a published coverage expansion can make rollback to an
+older retained version refuse. Handle refusal or uncertainty below.
+To return past the exempt schema conversion instead, use
+[stopped-writer teardown and restore](#returning-across-the-exempt-conversion).
+
+## Recovering a versioned install
+
+Preserve stdout, stderr and the exit status. Admin success is one stdout JSON
+object, exit 0; a publication refusal is one stderr
+`ErrVersionInstallRefused` envelope, exit 1. `install.sh` relays that envelope
+with exit 5 and final `install.sh: err_name=ErrVersionInstallRefused`.
+Missing candidate version-command support is installer exit 3. See the
+[exact publication contract](admin-reference.md#publish-version).
+
+Read `publication_state`, `durable`, `published_version`, `recovered_version`
+and `initialization_complete` separately. A requested target reported
+`not_published` can follow forward recovery of an earlier pending publication.
+`published` with `durable:false` means a complete version became visible before
+the parent-directory sync succeeded; a crash can expose either complete
+selection. Even a later error can report `durable:true`. Publication alone
+does not prove both permanent entries are initialized.
+
+| `details.reason` | Action |
+| --- | --- |
+| `lock_busy` | Immediate retryable contention. Retry after the other administrator finishes; never remove `install.lock`. |
+| `core_mismatch` | Choose a candidate or retained target with the anchored core identity. |
+| `coverage_regression` | Choose a target covering every previously published agent. |
+| `version_conflict` | Obtain a matching pair or a distinct correct stamp; never overwrite a retained generation. |
+| `layout_invalid` | Preserve evidence and seek operator repair; never reset the anchor. |
+| `io_failure` | Correct the I/O cause and rerun the same operation for forward recovery. |
+
+Only lock contention and I/O failure are retryable. Unknown, interrupted or
+unreadable output is uncertainty, not proof that the old selection was restored;
+it supplies no invented reason or durability fact. Rerun the **same install**
+with the same tag, pair and flags for forward recovery after correcting the
+cause. Do not run a store probe, stop agents or send input as recovery.
+
+For direct publication, prepare the candidate administrator and matching runtime
+from the same build; replace both absolute paths below and obtain approval for
+that run:
+
+```sh
+/absolute/candidate/agent-director-admin --home "$HOME" publish-version --binary /absolute/candidate/agent-director
+```
+
+The engine completes pending history/bootstrap work before handling the new
+request. If an old script overwrote the canonical entries, rerun a layout-aware
+installer for evidence-backed repair. If it refuses `layout_invalid`, preserve
+that refusal for operator repair. Never hand-repoint `current`, reconstruct
+initialization evidence, delete retained versions/history or unlink the lock.
+
+### An old configured store under a versioned layout
+
+An ordinary later install never inspects or migrates that store. If the
+configured store is known to be below v21, recovery is an exceptional teardown
+and exempt install, with operator authorization and all writers stopped.
+Use the [exempt stop procedure](#stopping-a-set-of-agents-before-a-binary-change)
+and [exempt upgrade steps](../skills/upgrade-agent-director/SKILL.md#1-stop-the-agents)
+1–2 to establish exclusion and record parent links before teardown. If the
+installed entry cannot read the old store, use the matching previous release's
+executable for that inventory. Keep the pre-install schema result and required
+journal flags for steps 3–4. Preserve the same store, sidecars, config and
+`db_path`; do not choose a replacement DB.
+Choose one supported layout-aware `<tag>`, download its uninstaller, then run
+it **without `--purge`**:
+
+```sh
+curl -fL -o ./ad-uninstall.sh https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/uninstall.sh
+bash ./ad-uninstall.sh
+```
+
+This removes program/layout evidence while retaining the same configured
+store. Reclassify by files: no layout evidence now selects the exempt path.
+Continue at exempt step 3 with exclusion still in force, the saved schema
+result, same tag and original install flags, including any required journal
+maintenance authorization. Do not repeat installed-binary inventory commands
+after uninstall removed that binary. The install command is:
+
+```sh
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag> "$@"' upgrade-agent-director
+```
+
+Run that command at exempt step 3, after its checks and authorization; append
+the required flags there. Verify the exempt hop and restart **every** agent,
+`serve` and caller, parents before children. Non-purge teardown is not a
+seamless rollback and must not be routine upgrade cleanup.
+
 ## Putting back a kept install
+
+This recipe applies only to an exempt/legacy crossing attempt. With versioned
+layout evidence, use [forward recovery](#recovering-a-versioned-install)
+instead. To undo the exempt conversion, first use the separate
+[teardown and backup restore](#returning-across-the-exempt-conversion);
+do not replace canonical entries by hand.
 
 This puts the previous release back from the copies a crossing upgrade kept:
 after a restore that could not finish (`ErrSchemaVerifyFailed`, the message
@@ -1623,12 +1797,58 @@ confirmed working.
 
 ## Going back to the previous release
 
+For an established or partial versioned layout, use
+[publication-only rollback or recovery](#rolling-back-a-versioned-install)
+between retained compatible versions. Going back past the exempt conversion
+is a different, stopped-writer restore: first remove layout evidence with the
+explicit non-purge teardown below. Never apply a DB restore or older installer
+directly over that evidence.
+
 Before either procedure restores or moves anything, confirm that the previous
 release's own `install.sh` [supports this host](install.md#requirements).
 If that release's install.sh refuses this host, keep this release.
 
+### Returning across the exempt conversion
+
+Use this only to undo the exempt conversion with the complete stopped-writer
+pre-upgrade backup and matching previous release. The pre-exempt binary is
+not a compatible retained target. This restore loses all later writes and
+can lose proof of input already delivered; it is not seamless rollback.
+Without that complete recovery set, or with unreconciled uncertain input,
+stop and obtain human help.
+
+1. Obtain explicit operator authorization. Stop all writers, agents, `serve`,
+   callers and launchers, including untracked ones, and keep a second installer
+   excluded through restoration. Preserve the post-upgrade DB with companions,
+   input evidence and provider logs/transcripts for reconciliation before
+   removing any program files. Keep the actual configured store path and
+   `db_path`, including a custom external path. Save schedule commands, cadence
+   and enablement too: non-purge removes managed schedules, so recreate them
+   for the matching previous release after restoration.
+2. Choose a layout-aware `<layout-tag>` for the uninstaller and download it
+   into a working directory outside the install root. Run it without `--purge`
+   and without `--mcp-also`:
+
+   ```sh
+   curl -fL -o ./ad-uninstall.sh https://raw.githubusercontent.com/gabemahoney/agent-director/<layout-tag>/skills/install-agent-director/uninstall.sh
+   bash ./ad-uninstall.sh
+   ```
+
+   Non-purge removes all program/layout evidence, retained generations,
+   publication history and lock while keeping config, `db_path`, DB/sidecars
+   and other runtime data under the documented [uninstall semantics](install.md#uninstall).
+   This explicit teardown is the exception to the normal retention rule.
+3. Run the upgrade skill's [file classifier](../skills/upgrade-agent-director/SKILL.md#choose-the-upgrade-path-first)
+   again. It must print `exempt`; if evidence remains or teardown failed, stop
+   for operator repair. Do not remove individual evidence files by hand.
+4. Continue the matching pre-upgrade backup/previous-release restore below,
+   with writers still excluded. Keep later evidence; never reset a version,
+   rebuild a replayable journal or infer nondelivery from an old backup.
+
+### Restore the previous release
+
 For an upgrade within the current `~/.config/agent-director` layout,
-including schema v9→v10 through v19→v20, the old-layout steps below do not
+including schema v9→v10 through v20→v21, the old-layout steps below do not
 apply. Before upgrading, stop all writers and keep a copy of the actual store
 (`[store] db_path` when set), its existing `-wal`/`-shm`, and all legacy input
 evidence. Keep provider logs/transcripts outside those roots too. The journal
@@ -1650,6 +1870,7 @@ the preserved evidence: restoration loses all later writes and can lose proof
 of input that already reached an agent.
 Never replay an attempt merely because the restored copy lacks its proof.
 
+Schema v21's busy-send core has no supported reverse recipe.
 Schema v20 display evidence has no supported reverse recipe.
 Schema v19 confirmation evidence has no supported reverse recipe.
 Schema v18 Cursor input and proof evidence has no supported reverse recipe.
@@ -1657,7 +1878,7 @@ Schema v17 permission provenance and response claims have no supported reverse
 recipe. Schema v16 has no in-place downgrade or replayable file-journal
 export. A binary swap or version reset cannot undo these changes. Schema v15,
 v14 and v13 are also restore-only. The v12→v11 family-history recipe applies
-only to genuine family-only v12 stores; it cannot operate on v13–v20. No
+only to genuine family-only v12 stores; it cannot operate on v13–v21. No
 supported reverse path crosses v11→v10 or v10→v9. A copy made after migration
 cannot replace the pre-upgrade set. Without that set, or while an uncertain
 attempt remains unreconciled, stop and obtain human help.
@@ -1734,8 +1955,8 @@ the move.
    claude mcp get agent-director
    ```
 
-   This release's `install.sh` cannot install the previous release: it refuses
-   an earlier release's binaries.
+   Use that previous release's own installer for its layout and restore
+   behavior.
 8. Change back by hand what was changed by hand to the new path after the
    upgrade: help hooks in the `settings.json` of other `CLAUDE_CONFIG_DIR`
    folders, Codex MCP and help entries, scripts, `$PATH` entries and an MCP

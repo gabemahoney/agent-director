@@ -25,8 +25,20 @@
 # wrapper wrote it to agent-director, both as `date +%s%N`. The variables
 # must not start with AGENT_DIRECTOR_: agent-director removes those from
 # every tmux client's environment.
+#
+# With TMUX_CALL_LOG set, every call it passes on first appends one line to
+# that file: the caller's command name (/proc/$PPID/comm), a TAB, then the
+# arguments, each shell-quoted (printf %q) and followed by a space. A case
+# that puts this directory first on its own PATH, with DELAY_CREATE_SECONDS=0,
+# sees every tmux call agent-director makes (comm agent-director), apart from
+# its own and pane-hook.sh's, so it can tell product typing from the input it
+# sends deliberately (busy-send-claude.sh).
 
 real=/usr/bin/tmux
+
+if [[ -n "${TMUX_CALL_LOG:-}" ]]; then
+    printf '%s\t%s\n' "$(cat "/proc/$PPID/comm" 2>/dev/null)" "$(printf '%q ' "$@")" >>"$TMUX_CALL_LOG"
+fi
 
 create=0
 for arg in "$@"; do

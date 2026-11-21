@@ -2,7 +2,8 @@ package api_test
 
 // pause_test.go: pause's state guards, the input line cleared before /exit
 // (b.9o4), its wait (SR-7.1, SR-7.2, SR-17) and its trail (SR-3.16, SR-14,
-// SR-15): no call event on any return path, and its ad.provenance.disagree
+// SR-15), on Codex rows (busy send covers Claude, whose pause is keyless:
+// pause_keyless_test.go): no call event on any return path, and its ad.provenance.disagree
 // records (verb pause, source ad_send_keys) written before the wait whatever
 // ends it. Which pane it types /exit into, with read-pane and send-keys, is
 // readpane_pane_test.go's; its failed keys calls and adoption write
@@ -25,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/internal/trail"
@@ -63,9 +65,11 @@ func pauSleeps(t *testing.T, interval time.Duration, sleep bool, at func(n int))
 
 // TestPauseGuards: an unknown id, a finished row and a non-waiting row are
 // answered before any tmux call though the row's own session is up; the row is unchanged.
+// On Codex and Cursor rows: a covered Claude row's pause is keyless, its guards
+// pause_keyless_test.go's.
 func TestPauseGuards(t *testing.T) {
 	t.Parallel()
-	for _, rowAgent := range []string{"claude", "cursor"} {
+	for _, rowAgent := range []string{"codex", "cursor"} {
 		t.Run(rowAgent, func(t *testing.T) {
 			seeded := func(state string) func(t *testing.T, e *killEnv) killRow {
 				return func(t *testing.T, e *killEnv) killRow { return e.seedRow(t, killRowSpec{State: state}) }
@@ -124,6 +128,7 @@ func TestPauseClearsInputLineFirst(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fastPausePolls(t)
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex
 			r := e.seedRow(t, killRowSpec{})
 			in := paneAgentExiting(t, e, r, false, 1)
 			in.box = tc.typed
@@ -156,6 +161,7 @@ func TestPauseWait(t *testing.T) {
 			if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", r.Spawn.SessionID); !a.Applied {
 				t.Errorf("SessionEnd not applied: %s", a.Reason)
 			}
+			e.pc.Set(r.AgentPID, procfix.Gone()) // a Codex end report ends the row with its process gone
 		}, false, nil, store.StateEnded},
 		{"context cancelled during the second sleep", 2, func(_ *testing.T, _ *killEnv, _ killRow, cancel context.CancelFunc) {
 			cancel()
@@ -165,6 +171,7 @@ func TestPauseWait(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex
 			r := e.seedRow(t, killRowSpec{})
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -201,7 +208,7 @@ func TestPauseWait(t *testing.T) {
 // real-clock deadline, the last sleep cut short so none passes it.
 func TestPauseTimeout(t *testing.T) {
 	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
-	for _, rowAgent := range []string{"claude", "cursor"} {
+	for _, rowAgent := range []string{"codex", "cursor"} {
 		t.Run(rowAgent, func(t *testing.T) {
 			const interval = 600 * time.Millisecond
 			e := newKillEnv(t)
@@ -228,11 +235,7 @@ func TestPauseTimeout(t *testing.T) {
 			if len(*slept) < 2 || (*slept)[0] != interval || total > pauseTimeoutSeconds*time.Second {
 				t.Errorf("sleeps = %v (total %v); want the interval first, then one cut at the deadline", *slept, total)
 			}
-			presses := 1
-			if rowAgent == "cursor" {
-				presses = codexClearPresses
-			}
-			e.assertExitDeliveredTimes(t, r.Socket, r.Spawn.Identity.PaneID, presses)
+			e.assertExitDeliveredTimes(t, r.Socket, r.Spawn.Identity.PaneID, codexClearPresses)
 			pauAssertState(t, e, r.ID, store.StateWaiting)
 		})
 	}
@@ -291,7 +294,9 @@ func ptrUnusableSocket(t *testing.T, e *killEnv) killRow {
 func ptrAssertOnlyDisagrees(t *testing.T, mark int, id string, none bool) {
 	t.Helper()
 	for _, l := range readAPITrailLines(t)[mark:] {
-		if l["instance_id"] != id || l["event"] == "ad.spawn.state_transition" {
+		// A Codex row's end is find-missing's guarded move by pause's end check:
+		// its state transition and recovery tick are the end's, not pause's.
+		if l["instance_id"] != id || l["event"] == "ad.spawn.state_transition" || l["event"] == "ad.find_missing.tick" {
 			continue
 		}
 		if none || l["event"] != "ad.provenance.disagree" || l["verb"] != "pause" {
@@ -351,6 +356,7 @@ func TestPauseTrailNoCallEvent(t *testing.T) {
 					t.Parallel()
 				}
 				e := newKillEnv(t)
+				e.rowAgent = store.AgentCodex
 				id := "pause-unknown-" + uuid.NewString()[:8]
 				if tc.seed != nil {
 					id = tc.seed(t, e).ID
@@ -442,6 +448,7 @@ func TestPauseTrailWrittenBeforeTheWait(t *testing.T) {
 				for i := range attempts {
 					t.Run(fmt.Sprintf("sample=%d", i), func(t *testing.T) {
 						e := newKillEnv(t)
+						e.rowAgent = store.AgentCodex
 						r, other := e.seedKeysDisagreeCase(t, row)
 						atSleep := ptrDisagreesAtFirstSleep(t, r.ID)
 						mark := trailMark(t)
@@ -526,6 +533,7 @@ func ptrFailOpenRuns(t *testing.T, prefix string, working bool) []string {
 	var lines []string
 	for _, tc := range cases {
 		e := newKillEnv(t)
+		e.rowAgent = store.AgentCodex
 		spec := tc.spec
 		spec.ID = prefix + "-" + tc.name
 		r := sktRow(spec, tc.setups...)(t, e)

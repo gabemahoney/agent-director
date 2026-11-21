@@ -78,6 +78,9 @@ func newCodexSubagentPAEnv(t *testing.T) *paEnv { return newPAEnvAgent(t, "codex
 func newPAEnvAgent(t *testing.T, agent, agentID string, eligible ...*bool) *paEnv {
 	t.Helper()
 	e := newKillEnv(t)
+	if agent != "claude" {
+		e.rowAgent = agent // the agent dimension of e's row assertions (assertLineCleared)
+	}
 	var r killRow
 	if agent == "claude" {
 		r = seedRelayRow(t, e)
@@ -112,6 +115,11 @@ var paAgents = []paAgent{
 	{"claude", newPAEnv, newSubagentPAEnv},
 	{"codex", newCodexPAEnv, newCodexSubagentPAEnv},
 }
+
+// paInputAgents are the relay rows whose send-keys, pane answers and pause
+// still type into the pane: Codex's. Busy send covers Claude, whose send is a
+// Message, which takes no keys, and whose pause is keyless.
+var paInputAgents = paAgents[1:]
 
 // label is a subtest name for a case on a's rows: name for Claude (the
 // pre-Codex name), "codex/"+name for Codex.

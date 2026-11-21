@@ -51,7 +51,8 @@
 //   - kill-pane -t <%N>: removes the pane; the last pane removes its session.
 //   - kill-session -t <$N>: removes the session.
 //   - send-keys -t <%N> -l -- <text>, send-keys -t <%N> Enter and another
-//     key send such as pause's send-keys -t <%N> C-u: no effect beyond the
+//     key send such as pause's send-keys -t <%N> C-u, or a Codex or Cursor
+//     row's repeated send-keys -t <%N> -N <count> C-u: no effect beyond the
 //     log. Each is its own call kind for injections (text send, Enter send,
 //     key send), so an Enter injection never hits pause's C-u.
 //   - capture-pane -p [-e] -t <%N> -S -<n>: the pane's capture text, else

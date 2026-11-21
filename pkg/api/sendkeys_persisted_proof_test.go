@@ -1,18 +1,20 @@
 package api_test
 
+// sendkeys_persisted_proof_test.go: send-keys' manual input (keys, hashed text,
+// no_enter, pane answers) through the real SQLite input journal
+// (sqliteSubmission) on a Codex row, whose manual input needs no native
+// capability. Busy send covers Claude, whose send-keys admits a Message; the
+// attempts a Claude launch persisted before are input_proof_test.go's.
+
 import (
-	"bytes"
 	"context"
-	"database/sql"
 	"errors"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -20,59 +22,6 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
-
-func TestSendKeysPersistedProofReconcilesAndAllowsManualInput(t *testing.T) {
-	t.Parallel()
-	e, r, launch := sqliteSubmission(t)
-	payload := "use <>& café 🌍"
-	raw := sqliteProofRecord(t, launch, payload)
-	e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, _ error) {
-		if c.Key == "Enter" {
-			_, a := sqliteAttempt(t, e, r)
-			if a == nil || !a.EnterAttempted || a.Phase != "enter_attempted" {
-				t.Fatalf("Enter without committed intent: %+v", a)
-			}
-			if err := os.WriteFile(launch.Capability.Transcript, append(append([]byte(nil), raw...), 10), 0600); err != nil {
-				t.Fatal(err)
-			}
-		}
-	})
-	e.rec.AfterCall(tmux.CallSendText, func(c tmuxfix.SocketCall, _ error) {
-		_, a := sqliteAttempt(t, e, r)
-		if a == nil || a.BytesAttempted < len(c.Text) || a.Phase != "text_attempted" || a.Confirmation.Source != "store" {
-			t.Fatalf("text without committed intent: %+v", a)
-		}
-	})
-	p := api.SendKeysParams{InstanceID: r.ID, Text: payload, AllowPending: true, DeliveryRequestID: "original"}
-	first, err := e.send(p)
-	if err != nil || first.Outcome != "submitted" || first.RecordSHA256 != inputdelivery.Hash(raw) {
-		t.Fatalf("initial proof=%+v err=%v", first, err)
-	}
-	// Reopen through the production default backend, without the terminal adapter.
-	e.env.Input = nil
-	before := len(e.rec.SocketCalls())
-	again, err := e.send(p)
-	if err != nil || again != first || len(e.rec.SocketCalls()) != before {
-		t.Fatalf("matching request replayed: %+v %v", again, err)
-	}
-	if _, err := e.send(api.SendKeysParams{InstanceID: r.ID, Key: "Escape", AllowPending: true}); err != nil {
-		t.Fatal(err)
-	}
-	l, current := sqliteAttempt(t, e, r)
-	if current == nil || current.Phase != "manual_input" || !current.ManualInterference {
-		t.Fatalf("manual ownership=%+v", current)
-	}
-	archived, err := e.st.ReadInputAttempt(context.Background(), *l, p.DeliveryRequestID)
-	if err != nil || archived == nil || !bytes.Equal(archived.Proof.Raw, raw) || archived.Proof.RawSHA256 != inputdelivery.Hash(raw) {
-		t.Fatalf("archived proof=%+v %v", archived, err)
-	}
-	before = len(e.rec.SocketCalls())
-	again, err = e.send(p)
-	if err != nil || again != first || len(e.rec.SocketCalls()) != before {
-		t.Fatalf("archived request replayed: %+v %v", again, err)
-	}
-	assertOrdinaryWrites(t, e.killEnv, r, payload)
-}
 
 // t2.7tz.tb.ib R5: failed cleanup cannot turn dispatched input into pre_input,
 // nor replace a primary refusal or transport failure with a cleanup diagnosis.
@@ -93,7 +42,7 @@ func TestSendKeysSQLiteCloseFailureRetainsDispatch(t *testing.T) {
 		{name: "primary Enter failure", text: "manual\r\n界"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e, r, _ := sqliteSubmission(t, tc.permission)
+			e, r, _ := sqliteSubmission(t, sqliteCodexSpec(store.StateWaiting, tc.permission))
 			const pane = "caller inspected this pane\n"
 			e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, pane)
 			params := api.SendKeysParams{InstanceID: r.ID, Text: tc.text, Key: tc.key, NoEnter: tc.noEnter,
@@ -101,7 +50,7 @@ func TestSendKeysSQLiteCloseFailureRetainsDispatch(t *testing.T) {
 			var permission *paEnv
 			var atKey store.PermissionRow
 			if tc.permission {
-				permission = &paEnv{killEnv: e.killEnv, r: r, now: e.clock.Now(), self: paSender, sks: e.st, agent: "claude"}
+				permission = &paEnv{killEnv: e.killEnv, r: r, now: e.clock.Now(), self: paSender, sks: e.st, agent: store.AgentCodex}
 				permission.pc.Set(paSender.PID, procfix.Alive(paSender.Starttime))
 				permission.seedRequest(t, storefix.TestRequestTokenA, paToolUseID, relayEnvHook)
 				params.RequestToken, params.As = storefix.TestRequestTokenA, "deny"
@@ -199,206 +148,6 @@ func TestSendKeysSQLiteCloseFailureRetainsDispatch(t *testing.T) {
 	}
 }
 
-// t2.7tz.tb.ib R5: an exact native receipt remains submitted even when cleanup
-// fails, on both first delivery and a later proof-only same-request read.
-func TestSendKeysSQLiteCloseFailureRetainsConfirmedProof(t *testing.T) {
-	t.Parallel()
-	e, r, launch := sqliteSubmission(t)
-	const payload = "confirmed <>& café 界"
-	raw := sqliteProofRecord(t, launch, payload)
-	e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, _ error) {
-		if c.Key == "Enter" {
-			if err := os.WriteFile(launch.Capability.Transcript, append(append([]byte(nil), raw...), '\n'), 0600); err != nil {
-				t.Fatal(err)
-			}
-		}
-	})
-	closed := 0
-	cleanup := errors.New("injected cleanup acknowledgement loss")
-	e.env.Input.(*sqliteDeliveryBackend).afterClose = func() error {
-		closed++
-		_, a := sqliteAttempt(t, e, r)
-		if a == nil || a.Phase != "submitted" || a.Proof == nil || !bytes.Equal(a.Proof.Raw, raw) {
-			t.Fatalf("cleanup ran before confirmed proof was persisted: %+v", a)
-		}
-		return cleanup
-	}
-	params := api.SendKeysParams{InstanceID: r.ID, Text: payload, AllowPending: true, DeliveryRequestID: "original"}
-	want := api.SendKeysResult{RequestID: "original", Outcome: "submitted", SessionID: launch.Capability.SessionID,
-		RecordID: "cde93519-6972-4b1b-a650-830a0042e876", RecordSHA256: inputdelivery.Hash(raw)}
-	var owner *api.InputDeliveryAttempt
-	for _, phase := range []string{"first delivery", "proof reconciliation"} {
-		t.Run(phase, func(t *testing.T) {
-			before := len(e.rec.SocketCalls())
-			got, err := e.send(params)
-			assertOneName(t, err, "ErrInternal")
-			if !errors.Is(err, cleanup) || got != want || api.ErrDetails(err) != want || jsonOf(t, api.ErrDetails(err)) != jsonOf(t, want) {
-				t.Errorf("confirmed cleanup result=%+v details=%+v err=%v; want %+v and cleanup cause", got, api.ErrDetails(err), err, want)
-			}
-			_, a := sqliteAttempt(t, e, r)
-			proof := &api.InputDeliveryProof{Path: launch.Capability.Transcript, SessionID: want.SessionID,
-				RecordID: want.RecordID, RawSHA256: want.RecordSHA256, Raw: raw}
-			if a == nil || a.RequestID != want.RequestID || a.Payload != payload || a.Phase != "submitted" ||
-				a.BytesAttempted != len(payload) || !a.EnterAttempted || !reflect.DeepEqual(a.Proof, proof) {
-				t.Fatalf("cleanup altered durable proof: %+v", a)
-			}
-			if phase == "proof reconciliation" && (len(e.rec.SocketCalls()) != before || !reflect.DeepEqual(a, owner)) {
-				t.Fatal("reconciliation replayed input or rewrote the submitted owner")
-			}
-			owner = a
-		})
-	}
-	if closed != 2 {
-		t.Fatalf("close count=%d; want 2", closed)
-	}
-	assertOrdinaryWrites(t, e.killEnv, r, payload)
-	// Once cleanup works, the same ID still returns the original receipt without
-	// starting any input. The default production backend needs no queue seam.
-	e.env.Input = nil
-	before := len(e.rec.SocketCalls())
-	got, err := e.send(params)
-	if err != nil || got != want || len(e.rec.SocketCalls()) != before {
-		t.Fatalf("same-ID receipt after cleanup recovery=%+v %v", got, err)
-	}
-}
-
-// Source review round 1: only a confirmed zero-intent refusal can restart its ID.
-func TestSendKeysSQLiteSameIDRetryAfterConfirmedNotStarted(t *testing.T) {
-	t.Parallel()
-	for _, mode := range []string{"confirmed zero intent", "unknown zero intent", "irreversible intent"} {
-		t.Run(mode, func(t *testing.T) {
-			e, r, l := sqliteSubmission(t)
-			backend := e.env.Input.(*sqliteDeliveryBackend)
-			backend.afterSave = func(a *api.InputDeliveryAttempt) error {
-				if a.Phase == "attempt_started" {
-					if mode == "unknown zero intent" {
-						return inputdelivery.ErrUnconfirmed
-					}
-					if mode == "confirmed zero intent" {
-						e.s.sent = true
-						e.s.read = func(row api.Spawn) (api.Spawn, error) { row.State = store.StateWorking; return row, nil }
-					}
-				}
-				if mode == "irreversible intent" && a.Phase == "text_attempted" {
-					return inputdelivery.ErrUnconfirmed
-				}
-				return nil
-			}
-			p := api.SendKeysParams{InstanceID: r.ID, Text: "retry exactly once", AllowPending: true, DeliveryRequestID: "same-id"}
-			_, err := e.send(p)
-			if !errors.Is(err, api.ErrSubmissionUnconfirmed) {
-				t.Fatalf("first result=%v", err)
-			}
-			_, owner := sqliteAttempt(t, e, r)
-			if owner == nil || owner.RequestID != p.DeliveryRequestID {
-				t.Fatalf("missing owner=%+v", owner)
-			}
-			if mode == "confirmed zero intent" && (owner.Phase != "not_started" || owner.BytesAttempted != 0 || owner.EnterAttempted || owner.Confirmation.At.IsZero()) {
-				t.Fatalf("not a confirmed refusal: %+v", owner)
-			}
-			e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendKey, tmux.CallSendEnter)
-			backend.afterSave = nil
-			e.s.read = nil
-			e.s.sent = false
-			raw := sqliteProofRecord(t, l, p.Text)
-			e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, _ error) {
-				if c.Key == "Enter" {
-					if err := os.WriteFile(l.Capability.Transcript, append(raw, '\n'), 0600); err != nil {
-						t.Fatal(err)
-					}
-				}
-			})
-			got, err := e.send(p)
-			if mode == "confirmed zero intent" {
-				if err != nil || got.Outcome != "submitted" || got.RequestID != p.DeliveryRequestID {
-					t.Fatalf("same-ID retry=%+v %v", got, err)
-				}
-				assertOrdinaryWrites(t, e.killEnv, r, p.Text)
-			} else {
-				if !errors.Is(err, api.ErrSubmissionUnconfirmed) {
-					t.Fatalf("unsafe retry=%+v %v", got, err)
-				}
-				e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendKey, tmux.CallSendEnter)
-				_, after := sqliteAttempt(t, e, r)
-				if !reflect.DeepEqual(owner, after) {
-					t.Fatal("unsafe retry replaced owner")
-				}
-			}
-		})
-	}
-}
-
-// Source review round 1: hold the real SQLite connection and operation lane
-// after the first chunk; the drain must retain its original phase/overall bound.
-func TestSendKeysSQLiteHeldAdmissionUsesOriginalDrainBudget(t *testing.T) {
-	t.Parallel()
-	for _, spent := range []time.Duration{0, 59 * time.Second} {
-		t.Run(spent.String(), func(t *testing.T) {
-			e, r, _ := sqliteSubmission(t)
-			backend := e.env.Input.(*sqliteDeliveryBackend)
-			var limits []time.Time
-			// Translate the fixture clock to the context clock, retaining each
-			// absolute virtual deadline for exact no-renewal assertions.
-			backend.limit = func(end time.Time) time.Time {
-				limits = append(limits, end)
-				return time.Now().Add(end.Sub(e.clock.Now()))
-			}
-			free, held, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-			var once sync.Once
-			release := func() { once.Do(func() { close(free) }) }
-			defer release()
-			watchdog := time.AfterFunc(5*time.Second, release)
-			defer watchdog.Stop()
-			var enteredAt, wantDrain time.Time
-			e.rec.AfterCall(tmux.CallSendText, func(_ tmuxfix.SocketCall, _ error) {
-				e.clock.Advance(spent)
-				enteredAt = time.Now()
-				wantDrain = minDeadline(limits[1], e.clock.Now().Add(3*time.Second))
-				go func() {
-					_, _, _, err := e.st.AckRelayDecision(r.ID, "absent", e.clock.Now(), store.DefaultLockWait, func() error { close(held); <-free; return nil })
-					done <- err
-				}()
-				select {
-				case <-held:
-				case err := <-done:
-					t.Fatalf("holder failed: %v", err)
-				}
-			})
-			_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: strings.Repeat("x", 600), AllowPending: true, DeliveryRequestID: "original"})
-			elapsed := time.Since(enteredAt)
-			release()
-			<-done
-			if !errors.Is(err, api.ErrSubmissionUnconfirmed) {
-				t.Fatalf("held drain=%v", err)
-			}
-			budget := 3 * time.Second
-			if spent > 0 {
-				budget = time.Second
-			}
-			if enteredAt.IsZero() || elapsed > budget+750*time.Millisecond {
-				t.Fatalf("held admission took %v; original remaining bound %v", elapsed, budget)
-			}
-			if len(limits) < 3 || !limits[2].Equal(wantDrain) {
-				t.Fatalf("drain renewed deadline: %v", limits)
-			}
-			if len(e.rec.SocketCallsOf(tmux.CallSendText)) != 1 || len(ordinaryEnters(e.killEnv)) != 0 {
-				t.Fatal("blocked drain authorized another chunk/Enter")
-			}
-			_, a := sqliteAttempt(t, e, r)
-			if a.RequestID != "original" || a.BytesAttempted != 512 || a.EnterAttempted {
-				t.Fatalf("lost partial owner: %+v", a)
-			}
-		})
-	}
-}
-
-func minDeadline(a, b time.Time) time.Time {
-	if a.Before(b) {
-		return a
-	}
-	return b
-}
-
 // t2.7tz.tb.ib round 3: the caller's pane hash must survive admission waits
 // before the first manual dispatch, but not be compared after our own text.
 func TestSendKeysSQLiteManualPaneHashAfterAdmissionWait(t *testing.T) {
@@ -413,7 +162,7 @@ func TestSendKeysSQLiteManualPaneHashAfterAdmissionWait(t *testing.T) {
 	} {
 		for _, mode := range []string{"unchanged", "changed during admission", "cancelled during capture"} {
 			t.Run(input.name+"/"+mode, func(t *testing.T) {
-				e, r, _ := sqliteSubmission(t)
+				e, r, _ := sqliteSubmission(t, sqliteCodexSpec(store.StateWaiting, false))
 				e.env.Input = nil // Production SQLite guards; manual input needs no terminal/proof stand-in.
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
@@ -457,7 +206,7 @@ func TestSendKeysSQLiteManualPaneHashAfterAdmissionWait(t *testing.T) {
 				if mode == "cancelled during capture" {
 					assertOneName(t, err, "ErrSubmissionUnconfirmed")
 					want := api.SubmissionUnconfirmedDetails{
-						Outcome: "not_started", Phase: "pre_input", RowState: store.StatePending,
+						Outcome: "not_started", Phase: "pre_input", RowState: store.StateWaiting,
 						Reason: "input admission expired during pane capture",
 					}
 					if ctx.Err() == nil || api.ErrDetails(err) != want {
@@ -500,10 +249,8 @@ func TestSendKeysSQLiteKeyPaneHashAfterAdmissionWait(t *testing.T) {
 					name = "permission pane/"
 				}
 				t.Run(name+key+"/"+mode, func(t *testing.T) {
-					e, r, _ := sqliteSubmission(t, permission)
-					_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: "unconfirmed", AllowPending: true, DeliveryRequestID: "original"})
-					assertDeliveryError(t, err, "submission_unconfirmed", len("unconfirmed"), true)
-					_, owner := sqliteAttempt(t, e, r)
+					e, r, launch := sqliteSubmission(t, sqliteCodexSpec(store.StateWaiting, permission))
+					_, owner := seedSQLiteOwner(t, e, r, launch, "unconfirmed")
 					e.rec.Reset()
 					ctx, cancel := context.WithCancel(context.Background())
 					defer cancel()
@@ -516,7 +263,7 @@ func TestSendKeysSQLiteKeyPaneHashAfterAdmissionWait(t *testing.T) {
 					params := api.SendKeysParams{InstanceID: r.ID, Key: key, AllowPending: true, ExpectPaneSHA256: api.PaneSHA256(pane)}
 					var p *paEnv
 					if permission {
-						p = &paEnv{killEnv: e.killEnv, r: r, now: e.clock.Now(), self: paSender, sks: e.st, agent: "claude"}
+						p = &paEnv{killEnv: e.killEnv, r: r, now: e.clock.Now(), self: paSender, sks: e.st, agent: store.AgentCodex}
 						p.pc.Set(paSender.PID, procfix.Alive(paSender.Starttime))
 						p.seedRequest(t, storefix.TestRequestTokenA, paToolUseID, relayEnvHook)
 						params.RequestToken, params.As = storefix.TestRequestTokenA, "deny"
@@ -642,13 +389,13 @@ func TestSendKeysSQLiteKeyPaneHashAfterAdmissionWait(t *testing.T) {
 	}
 }
 
+// TestSendKeysSQLitePermissionPaneKeepsUnresolvedOwner: a pane answer, refused for a stale
+// hash and then sent, records manual interference and keeps the unresolved ordinary owner.
 func TestSendKeysSQLitePermissionPaneKeepsUnresolvedOwner(t *testing.T) {
 	t.Parallel()
-	e, r, _ := sqliteSubmission(t, true)
-	_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: "unconfirmed", AllowPending: true, DeliveryRequestID: "original"})
-	assertDeliveryError(t, err, "submission_unconfirmed", len("unconfirmed"), true)
-	_, owner := sqliteAttempt(t, e, r)
-	p := &paEnv{killEnv: e.killEnv, r: r, now: e.clock.Now(), self: paSender, sks: e.st, agent: "claude"}
+	e, r, launch := sqliteSubmission(t, sqliteCodexSpec(store.StateWaiting, true))
+	_, owner := seedSQLiteOwner(t, e, r, launch, "unconfirmed")
+	p := &paEnv{killEnv: e.killEnv, r: r, now: e.clock.Now(), self: paSender, sks: e.st, agent: store.AgentCodex}
 	p.pc.Set(paSender.PID, procfix.Alive(paSender.Starttime))
 	p.seedRequest(t, storefix.TestRequestTokenA, paToolUseID, relayEnvHook)
 	p.setPane("permission request\n")
@@ -673,73 +420,5 @@ func TestSendKeysSQLitePermissionPaneKeepsUnresolvedOwner(t *testing.T) {
 	}
 	if len(e.rec.SocketCallsOf(tmux.CallSendKey)) != before+1 {
 		t.Fatal("pane answer did not issue exactly one authorized key")
-	}
-}
-
-func TestSendKeysSQLiteFencesDispatchAfterIntentBoundary(t *testing.T) {
-	t.Parallel()
-	for _, mode := range []string{"failed commit", "unknown commit", "cancelled after commit", "stale revision", "late transport"} {
-		t.Run(mode, func(t *testing.T) {
-			e, r, _ := sqliteSubmission(t)
-			backend := e.env.Input.(*sqliteDeliveryBackend)
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			backend.ctx, e.env.Context = ctx, ctx
-			db, err := sql.Open("sqlite", e.dbPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer db.Close()
-			if mode == "failed commit" {
-				storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailInputTextIntent, r.ID)
-			}
-			backend.afterSave = func(a *api.InputDeliveryAttempt) error {
-				if a.Phase != "text_attempted" {
-					return nil
-				}
-				switch mode {
-				case "unknown commit":
-					return inputdelivery.ErrUnconfirmed
-				case "cancelled after commit":
-					cancel()
-				case "stale revision":
-					_, err := db.Exec(`UPDATE spawns SET row_version=row_version+1 WHERE instance_id=?`, r.ID)
-					if err != nil {
-						t.Fatal(err)
-					}
-				}
-				return nil
-			}
-			e.rec.AfterCall(tmux.CallSendText, func(_ tmuxfix.SocketCall, _ error) {
-				if mode == "late transport" {
-					cancel()
-				}
-			})
-			p := api.SendKeysParams{InstanceID: r.ID, Text: strings.Repeat("x", 600), AllowPending: true, DeliveryRequestID: "original"}
-			_, err = e.send(p)
-			if !errors.Is(err, api.ErrSubmissionUnconfirmed) {
-				t.Fatalf("outcome=%v", err)
-			}
-			texts := len(e.rec.SocketCallsOf(tmux.CallSendText))
-			want := 0
-			if mode == "late transport" {
-				want = 1
-			}
-			if texts != want || len(ordinaryEnters(e.killEnv)) != 0 {
-				t.Fatalf("unauthorized dispatch: text=%d enter=%d", texts, len(ordinaryEnters(e.killEnv)))
-			}
-			_, owner := sqliteAttempt(t, e, r)
-			if owner == nil || owner.RequestID != "original" || owner.EnterAttempted {
-				t.Fatalf("lost original owner: %+v", owner)
-			}
-			e.env.Context, e.env.Input = context.Background(), nil
-			p.DeliveryRequestID = "different"
-			before := len(e.rec.SocketCalls())
-			_, err = e.send(p)
-			_, after := sqliteAttempt(t, e, r)
-			if !errors.Is(err, api.ErrSubmissionUnconfirmed) || !reflect.DeepEqual(owner, after) || len(e.rec.SocketCalls()) != before {
-				t.Fatalf("unresolved owner replayed/replaced: %+v %v", after, err)
-			}
-		})
 	}
 }

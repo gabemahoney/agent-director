@@ -33,7 +33,7 @@ func dollarBackslashNames(t testing.TB) []tmuxfix.StoredName {
 
 // namedRow starts the labelled bystanders $0 and $1, then the live row named
 // n.Raw (labelled by id); it returns the row and the bystanders' world.
-func (f *killFix) namedRow(t *testing.T, n tmuxfix.StoredName) (killRow, map[string]idtPane) {
+func (f *killFix) namedRow(t *testing.T, n tmuxfix.StoredName, opts ...apitest.SpawnOption) (killRow, map[string]idtPane) {
 	t.Helper()
 	for range 2 {
 		f.agent(t, createSpec{StoreID: f.StoreID})
@@ -42,7 +42,7 @@ func (f *killFix) namedRow(t *testing.T, n tmuxfix.StoredName) (killRow, map[str
 		t.Fatalf("no session $1 after two creates on a fresh server")
 	}
 	others := idtWorld(t, f.realTmux)
-	r := f.liveRow(t, killRowSpec{Name: n.Raw})
+	r := f.liveRow(t, killRowSpec{Name: n.Raw, Opts: opts})
 	if f.label(t, r.Reply.SessionID) == "" {
 		t.Fatalf("session %s (name %q) carries no label", r.Reply.SessionID, n.Stored)
 	}

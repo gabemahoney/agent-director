@@ -5,6 +5,8 @@ import (
 	"database/sql/driver"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/adminapi"
+	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -36,6 +38,18 @@ func SpawnWithReuseStore(c *Client, rs ReuseStore, params SpawnParams) (SpawnRes
 		return SpawnResult{}, err
 	}
 	return runSpawnWithReuseStore(c.st, c.st, rs, c.tmuxClient, c.procChecker, c.cfg, c.now, c.logger, params)
+}
+
+// ForceDeliveryStore is a force's store surface (forceDeliveryStore), so
+// package api_test can wrap a real store to observe each step's context.
+type ForceDeliveryStore = forceDeliveryStore
+
+// ForceDeliveryForTest runs force-delivery's flow on s with the force call's
+// existing injection points (forceCallEnv): the caller's context, clock,
+// pause and wake notification. External callers use (c *Client).ForceDelivery.
+func ForceDeliveryForTest(s ForceDeliveryStore, ctx context.Context, now func() time.Time, sleep func(time.Duration),
+	touch func(string) error, params ForceDeliveryParams) (ForceDeliveryResult, error) {
+	return forceDelivery(s, forceCallEnv{ctx: ctx, now: now, sleep: sleep, touch: touch}, params)
 }
 
 // SetClockForTest replaces c's clock (time.Now in production) for this Client only (Appendix F.5).
@@ -107,12 +121,42 @@ func SetPauseTestKnobs(interval time.Duration, sleeper func(time.Duration)) {
 // so a SetPauseTestKnobs caller restores them without spelling the default.
 func PauseTestKnobs() (time.Duration, func(time.Duration)) { return pausePollInterval, pauseSleep }
 
+// SetPauseTerminateForTest replaces keyless pause's identity-checked SIGTERM
+// (probe.TerminateIdentity) with terminate until restore; process-wide.
+func SetPauseTerminateForTest(terminate func(pid int, start string) error) (restore func()) {
+	prev := pauseTerminate
+	pauseTerminate = terminate
+	return func() { pauseTerminate = prev }
+}
+
+// SetPauseNowForTest replaces keyless pause's budget and poll clock
+// (pauseNow) with now until restore; process-wide.
+func SetPauseNowForTest(now func() time.Time) (restore func()) {
+	prev := pauseNow
+	pauseNow = now
+	return func() { pauseNow = prev }
+}
+
+// SetBusySendExitNamespaceForTest replaces the exit judgement's reader of
+// this process's own pid namespace with read until restore; process-wide.
+func SetBusySendExitNamespaceForTest(read func() (string, bool)) (restore func()) {
+	prev := busySendExitNamespace
+	busySendExitNamespace = read
+	return func() { busySendExitNamespace = prev }
+}
+
 // KillFinished and DeleteRows expose the operator-only actions that only
 // agent-director-admin reaches, through internal/adminapi (b.vqr).
-var (
-	KillFinished = killFinished
-	DeleteRows   = deleteRows
-)
+var KillFinished = killFinished
+
+// DeleteRows is deleteRows judging covered rows' owned processes with the
+// production start-time reader.
+func DeleteRows(s deleteStore, ids []string) (adminapi.DeleteResult, error) {
+	return deleteRows(s, probe.NewProcChecker(), ids)
+}
+
+// DeleteRowsWith is DeleteRows judging covered rows' owned processes with pc.
+var DeleteRowsWith = deleteRows
 
 // TmuxClientOf returns the tmux client c was built with, so package api_test
 // can drive the production client api.New wired from the [tmux] config.
@@ -216,7 +260,7 @@ func WaitClientStoreForTest(c *Client, id string, wait time.Duration) error {
 // read does, with no final projection, and returns each row's outcome log in
 // order as "adapter=result" entries (b.x9o cw deferral S3).
 func ActiveCheckOutcomesForTest(ctx context.Context, source any, view RelayView, rows []Spawn) map[string][]string {
-	run := checkActiveRows(ctx, source, view, store.SettleRead{}, rows, nil, false)
+	run := checkActiveRows(ctx, source, view, store.SettleRead{}, rows, nil, false, nil)
 	out := map[string][]string{}
 	for _, checked := range run.rows {
 		for _, o := range checked.outcomes {

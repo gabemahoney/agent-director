@@ -15,7 +15,9 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/clisetup"
@@ -23,6 +25,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/helptext"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/resumedelegate"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
@@ -107,6 +110,9 @@ func handlers(client *pkgapi.Client, cfg config.Config, o clisetup.Overrides) ma
 		"get":                func(args []string) error { return getHandlerWith(client, args) },
 		"get-many":           func(args []string) error { return getManyHandlerWith(client, args) },
 		"send-keys":          func(args []string) error { return sendKeysHandlerWith(client, args) },
+		"force-delivery":     func(args []string) error { return forceDeliveryHandlerWith(client, args) },
+		"get-force":          func(args []string) error { return getForceHandlerWith(client, args) },
+		"get-delivery":       func(args []string) error { return getDeliveryHandlerWith(client, args) },
 		"read-pane":          func(args []string) error { return readPaneHandlerWith(client, args) },
 		"kill":               func(args []string) error { return killHandlerWith(client, args) },
 		"pause":              func(args []string) error { return pauseHandlerWith(client, args) },
@@ -158,6 +164,11 @@ const hookExitCode = 0
 //
 // The function never returns an error; it logs and returns.
 func runHook() (exit int) {
+	// Private re-exec of SessionStart's finite startup job; it consumes no
+	// provider payload and must never open a permission-response path.
+	if len(os.Args) >= 3 && os.Args[2] == claudeStartupWakeArg {
+		return runClaudeStartupWake(os.Args[3:])
+	}
 	start := time.Now()
 	stdout := os.Stdout
 	relayActive := os.Getenv(hook.EnvRelayMode) == hook.RelayModeOn
@@ -174,6 +185,23 @@ func runHook() (exit int) {
 	// log, exiting silently.
 	stdinRaw, _ := io.ReadAll(io.LimitReader(os.Stdin, hook.MaxPayloadBytes+1))
 	eventName := hook.PeekEventName(stdinRaw)
+	if eventName == hook.EventNameFileChanged {
+		// Busy send's owned wake (SR-3.4): its stderr is the prompt it may
+		// hand the agent. Teardown's diagnostics go nowhere until the hook's
+		// own sink is known, and a panic, which would exit 2 with its trace
+		// on stderr, exits 0 instead and hands the agent nothing.
+		teardownDiagnostics = io.Discard
+	}
+	if eventName == hook.EventNameFileChanged || eventName == hook.EventNamePostToolBatch {
+		// Busy send's owned wake and steer (SR-3.4): a panic, which would exit
+		// 2 with its trace on stderr, exits 0 instead. Neither hands the agent
+		// that trace, and a steer's stdout gets nothing appended.
+		defer func() {
+			if recover() != nil {
+				exit = hookExitCode
+			}
+		}()
+	}
 	contextArgs := parseHookArgs(os.Args[2:])
 	if contextArgs.contextSource != "" {
 		eventName = ""
@@ -205,6 +233,14 @@ func runHook() (exit int) {
 	logger := log.New(io.Discard, "", 0)
 	if contextArgs.contextSource == "" {
 		logger = newHookLogger()
+	}
+	if eventName == hook.EventNameFileChanged {
+		// Busy send's owned wake (SR-3.4): its stderr is the prompt it may
+		// hand the agent, so no diagnostic may reach it, teardown's included.
+		if logger.Writer() == os.Stderr {
+			logger.SetOutput(io.Discard)
+		}
+		teardownDiagnostics = logger.Writer()
 	}
 	// Wire the hook logger into the trail writer so emit failures and
 	// ts-substitution warnings reach cfg.Log.ErrorLogPath rather than
@@ -301,8 +337,18 @@ func runHook() (exit int) {
 		RelayTimeout:         args.timeout,
 		Self:                 hookSelf(probe.NewProcChecker()),
 		RelayHookGone:        hookRelayHookGone(cfg.Relay),
+		Stderr:               hookStderr(eventName),
+		PrepareBusySendWake:  spawn.PrepareBusySendWake,
+		ScheduleClaudeStartupWake: func(job hook.ClaudeStartupWake) error {
+			return scheduleClaudeStartupWake(dbPath, logger, job)
+		},
+		ClaudeStartupPrompt: spawn.HasClaudeStartupPrompt,
 	}
-	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
+	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), hookStdout(eventName, stdout), st, hc, logger); err != nil {
+		if errors.Is(err, hook.ErrRewake) {
+			// Busy send's owned wake wrote one whole prompt on stderr.
+			return hook.RewakeExitCode
+		}
 		hookLog(logger, "hook: handle: %v", err)
 	}
 	return hookExitCode
@@ -500,6 +546,40 @@ func newHookLogger() *log.Logger {
 	// Best-effort: the file is intentionally leaked for the lifetime of
 	// the hook fire (short-lived process; the OS reclaims the fd on exit).
 	return log.New(f, "agent-director-hook ", log.LstdFlags)
+}
+
+// hookStderr is the error stream Handle may write busy send's one wake prompt
+// to (hook.HandleConfig.Stderr). For the owned FileChanged hook it is the
+// process's stderr made non-blocking, so the route's write deadline bounds a
+// stalled pipe (SR-3.2) and no write outlives its job; the hook logger and
+// teardown's diagnostics are kept off stderr for that event. Any other event,
+// or a descriptor that cannot be made non-blocking, gets os.Stderr, which
+// takes no write deadline, so the route issues nothing to it.
+func hookStderr(eventName string) io.Writer {
+	if eventName != hook.EventNameFileChanged || syscall.SetNonblock(syscall.Stderr, true) != nil {
+		return os.Stderr
+	}
+	return os.NewFile(uintptr(syscall.Stderr), "/dev/stderr")
+}
+
+// hookStdout is the output stream Handle writes to. For busy send's owned
+// PostToolBatch hook, which may write one Steer Turn prompt there as
+// additionalContext, it is the process's stdout made non-blocking, so the
+// route's write deadline bounds a stalled pipe (SR-3.2) and no write outlives
+// its job. That hook process also ignores SIGPIPE, so a write to a reader
+// that closed its end returns EPIPE with the bytes it wrote, which the route
+// records as partial or uncertain output before the hook exits 0, instead of
+// Go's rule for stdout ending the process by that signal. Any other event, or
+// a descriptor that cannot be made non-blocking, gets stdout as it is, which
+// takes no write deadline, so the route issues nothing to it; the relay's
+// decision, SessionStart's watchPaths and every other process keep their
+// path and signal handling.
+func hookStdout(eventName string, stdout *os.File) io.Writer {
+	if eventName != hook.EventNamePostToolBatch || syscall.SetNonblock(syscall.Stdout, true) != nil {
+		return stdout
+	}
+	signal.Ignore(syscall.SIGPIPE)
+	return os.NewFile(uintptr(syscall.Stdout), "/dev/stdout")
 }
 
 // hookLog is a small wrapper so the hook code path uses one log-line
@@ -740,6 +820,12 @@ func run() (code int, standalone bool) {
 // the CLI binary is short-lived and single-threaded at startup, so
 // process-wide env mutation is safe.
 func runOrdinary() int {
+	if handled, code := installVersionFacts(os.Args[1:]); handled {
+		return code
+	}
+	if len(os.Args) > 1 && os.Args[1] == resumedelegate.Argument {
+		return runResumeDelegation(os.Args[2:])
+	}
 	if len(os.Args) > 1 && os.Args[1] == "cursor-host" {
 		if err := cursorHostHandler(os.Args[2:]); err != nil {
 			return 1
@@ -855,7 +941,19 @@ func runOrdinary() int {
 	return 0
 }
 
+// teardownDiagnostics is where main's own teardown writes its diagnostics:
+// os.Stderr, except for busy send's owned FileChanged hook, whose stderr is
+// the prompt it may hand the agent; runHook points it at that hook's
+// diagnostic sink, so nothing follows a written prompt and the exit status
+// stays.
+var teardownDiagnostics io.Writer = os.Stderr
+
 func main() {
+	// The installation handshake must also bypass audit-worker teardown:
+	// constructing the default trail would introduce a filesystem participant.
+	if handled, code := installVersionFacts(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	code, standalone := run()
 	if standalone {
 		// The Guard has no audit work. Even constructing the default writer
@@ -868,7 +966,7 @@ func main() {
 	// before os.Exit kills the worker. An expired drain is still unconfirmed.
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	if err := trail.Default().Close(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, "agent-director: audit shutdown:", err)
+		fmt.Fprintln(teardownDiagnostics, "agent-director: audit shutdown:", err)
 	}
 	cancel()
 	os.Exit(code)

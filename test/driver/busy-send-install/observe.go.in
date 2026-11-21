@@ -1,0 +1,40 @@
+// Test-only overlay companion in package adminapi. Never compiled into a release.
+package adminapi
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+func installTestObserve(root string) func(string, string) error {
+	return func(point, path string) error {
+		data, err := os.ReadFile(filepath.Join(root, ".install-test-barrier.json"))
+		if os.IsNotExist(err) { return nil }
+		if err != nil { return err }
+		var gate struct { Point, Ready, Release string }
+		if err := json.Unmarshal(data, &gate); err != nil { return err }
+		if point != gate.Point { return nil }
+		data, err = json.Marshal(map[string]any{"pid": os.Getpid(), "point": point, "path": path})
+		if err != nil { return err }
+		if err := os.WriteFile(gate.Ready+".tmp", data, 0600); err != nil { return err }
+		if err := os.Rename(gate.Ready+".tmp", gate.Ready); err != nil { return err }
+		done := make(chan error, 1)
+		go func() {
+			f, err := os.Open(gate.Release) // Case-owned FIFO: release is causal, never a timed guess.
+			if err == nil {
+				var b [1]byte
+				_, err = f.Read(b[:])
+				_ = f.Close()
+				if err == nil && b[0] != 'G' { err = fmt.Errorf("invalid install test release") }
+			}
+			done <- err
+		}()
+		select {
+		case err := <-done: return err
+		case <-time.After(90*time.Second): return fmt.Errorf("INSTALL TEST BARRIER TIMEOUT at %s", point)
+		}
+	}
+}

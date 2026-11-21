@@ -18,6 +18,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -309,8 +310,7 @@ func cxResumed(t *testing.T, id, sid string) (*store.Store, string) {
 	t.Helper()
 	st, dbPath := cxSeedSession(t, id, store.StateEnded, sid,
 		apitest.WithJsonlPath("/x/"+sid+".jsonl"), apitest.WithLaunchIdentity(ssgOldPane))
-	res, moved, err := st.MoveToPending(id, mustGetSpawn(t, st, id).Snapshot, time.Now().UnixMilli(),
-		ssgNewPane.Token, ssgNewPane.Socket, "", store.LaunchOwner{})
+	res, moved, err := st.MoveToPendingWithExit(id, mustGetSpawn(t, st, id).Snapshot, time.Now().UnixMilli(), ssgNewPane.Token, ssgNewPane.Socket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, st, id))
 	if err != nil || res != store.CondApplied {
 		t.Fatalf("MoveToPending(%q) = %v, %v; want applied", id, res, err)
 	}

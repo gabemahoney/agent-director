@@ -92,7 +92,22 @@ func RefuseCursorPermissions(allow, deny, ask []string) error {
 // itself; other callers use the same canonical installed AD path as help hooks.
 func installedGatewayBinary() (string, error) {
 	if info, ok := debug.ReadBuildInfo(); ok && info.Path == "github.com/gabemahoney/agent-director/cmd/agent-director" {
-		return executablePath()
+		// Cursor's uncovered gateway keeps its pre-existing resolution rule.
+		// Own-stamp delivery capture applies to Claude/Codex hooks, not this
+		// retired route or the gateway's separate reporter self-invocation.
+		exe, err := os.Executable()
+		if err != nil {
+			return "", err
+		}
+		abs, err := filepath.Abs(exe)
+		if err != nil {
+			return "", err
+		}
+		resolved, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return abs, nil
+		}
+		return resolved, nil
 	}
 	path, err := helpHookBinPath()
 	if err != nil {

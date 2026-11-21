@@ -9,6 +9,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/contextfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
@@ -147,7 +148,7 @@ func TestClaudeCapacityRetryCannotCrossLaunch(t *testing.T) {
 		sp = mustGetSpawn(t, st, id)
 		identity := sp.Identity
 		identity.Token = "b2b2b2b2b2b2b2b2"
-		res, version, err := st.MoveToPending(id, sp.Snapshot, time.Now().UnixMilli(), identity.Token, identity.Socket, "", store.LaunchOwner{})
+		res, version, err := st.MoveToPendingWithExit(id, sp.Snapshot, time.Now().UnixMilli(), identity.Token, identity.Socket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, st, id))
 		if err != nil || res != store.CondApplied {
 			t.Fatalf("resume: %v %v", res, err)
 		}

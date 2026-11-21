@@ -40,9 +40,10 @@ var errInjectedStore = errors.New("injected store failure: database is locked")
 
 // hookedResumeStore implements api.ResumeStore (and RecordLaunchIdentity)
 // over a real store: a test can fail the move or the restore (failMove,
-// failRestore) and run a function once after GetSpawn (afterGet) or the move
-// (afterMove), cleared before it runs, so a nested resume does not rerun it.
-// moveToken is the last move's token. Safe for concurrent use.
+// failRestore) and run a function once after GetSpawn (afterGet), the exit
+// scope read (afterScope) or the move (afterMove), cleared before it runs, so
+// a nested resume does not rerun it. moveToken is the last move's token. Safe
+// for concurrent use.
 type hookedResumeStore struct {
 	st *store.Store
 
@@ -50,6 +51,7 @@ type hookedResumeStore struct {
 	moveErr    error
 	restoreErr error
 	afterGetFn func()
+	afterScFn  func()
 	afterMvFn  func()
 	moveToken  string
 }
@@ -68,11 +70,26 @@ func (w *hookedResumeStore) failRestore(err error) {
 	w.restoreErr = orInjected(err)
 }
 
+// failPublication fails explicit post-create publication without touching the real store.
+func (w *hookLock) failPublication(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.publishErr = orInjected(err)
+}
+
 // afterGet runs fn once, when the next GetSpawn returns (after the examination, before the move).
 func (w *hookedResumeStore) afterGet(fn func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.afterGetFn = fn
+}
+
+// afterScope runs fn once, when the next exit scope read returns (after the
+// exit judgement's read, before the move).
+func (w *hookedResumeStore) afterScope(fn func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.afterScFn = fn
 }
 
 // afterMove runs fn once, when the next MoveToPending returns (before the create).
@@ -92,7 +109,19 @@ func orInjected(err error) error {
 
 // hookLock guards a hooked store wrapper's injected errors and one-shot hooks
 // (hookedResumeStore, hookedReuseStore in spawn_reuse_fixture_test.go).
-type hookLock struct{ mu sync.Mutex }
+type hookLock struct {
+	mu                     sync.Mutex
+	publishErr             error
+	restores, publications int
+}
+
+// publicationError counts the shared outcome mapper's attempt and supplies its fault.
+func (w *hookLock) publicationError() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.publications++
+	return w.publishErr
+}
 
 // take returns *fn and clears it, under the lock.
 func (h *hookLock) take(fn *func()) func() {
@@ -126,6 +155,22 @@ func (w *hookedResumeStore) ListSessionHistory(instanceID string, life int64) ([
 
 // MoveToPending delegates unless failMove is set, then runs the afterMove hook.
 func (w *hookedResumeStore) MoveToPending(instanceID string, examined api.RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner api.LaunchOwner) (api.CondResult, int64, error) {
+	return w.move(token, func() (api.CondResult, int64, error) {
+		return w.st.MoveToPending(instanceID, examined, launchStartedAtMillis, token, socket, parentID, owner)
+	})
+}
+
+// MoveToPendingWithExit is MoveToPending's hooks around the store's move with
+// a covered conversation's exit evidence, the move resume makes.
+func (w *hookedResumeStore) MoveToPendingWithExit(instanceID string, examined api.RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner api.LaunchOwner, defaults store.BusySendDefaultsChoice, exit *store.BusySendExitEvidence) (api.CondResult, int64, error) {
+	return w.move(token, func() (api.CondResult, int64, error) {
+		return w.st.MoveToPendingWithExit(instanceID, examined, launchStartedAtMillis, token, socket, parentID, owner, defaults, exit)
+	})
+}
+
+// move records token and runs the delegated move unless failMove is set,
+// then runs the afterMove hook.
+func (w *hookedResumeStore) move(token string, delegate func() (api.CondResult, int64, error)) (api.CondResult, int64, error) {
 	var (
 		res     api.CondResult
 		version int64
@@ -135,7 +180,7 @@ func (w *hookedResumeStore) MoveToPending(instanceID string, examined api.RowSna
 	w.moveToken = token
 	w.mu.Unlock()
 	if err == nil {
-		res, version, err = w.st.MoveToPending(instanceID, examined, launchStartedAtMillis, token, socket, parentID, owner)
+		res, version, err = delegate()
 	}
 	if fn := w.take(&w.afterMvFn); fn != nil {
 		fn()
@@ -143,8 +188,21 @@ func (w *hookedResumeStore) MoveToPending(instanceID string, examined api.RowSna
 	return res, version, err
 }
 
+// ReadBusySendExitScope delegates, so resume judges the exit scope the store
+// holds, then runs the afterScope hook.
+func (w *hookedResumeStore) ReadBusySendExitScope(instanceID string) (store.BusySendExitScope, error) {
+	scope, err := w.st.ReadBusySendExitScope(instanceID)
+	if fn := w.take(&w.afterScFn); fn != nil {
+		fn()
+	}
+	return scope, err
+}
+
 // RestoreAfterFailedResume delegates unless failRestore is set.
 func (w *hookedResumeStore) RestoreAfterFailedResume(instanceID string, movedVersion int64, prior api.ResumePrior) (api.CondResult, error) {
+	w.mu.Lock()
+	w.restores++
+	w.mu.Unlock()
 	if err := w.injected(&w.restoreErr); err != nil {
 		return 0, err
 	}
@@ -351,7 +409,8 @@ func rstColumns(t *testing.T, e *resumeEnv, id string) (cols apitest.SpawnColumn
 	return cols, true
 }
 
-// rstRestored is r's row after a move and an applied restore with parent.
+// rstRestored is r's row after a move and an applied restore with parent: the
+// earlier Launch's Turn Start counter is back.
 func rstRestored(r resumableRow, parent any) apitest.SpawnColumns {
 	w := r.Before
 	w.ParentID = parent
@@ -359,13 +418,14 @@ func rstRestored(r resumableRow, parent any) apitest.SpawnColumns {
 	return w
 }
 
-// rstMoved is r's row after the move alone, with no parent.
+// rstMoved is r's row after the move alone, with no parent: the new Launch's
+// Turn Start counter is 0.
 func rstMoved(r resumableRow, launchStart int64, token, socket string) apitest.SpawnColumns {
 	w := r.Before
 	w.State, w.LaunchStartedAt, w.LaunchToken, w.TmuxSocket, w.ParentID = store.StatePending, launchStart, token, socket, nil
 	w.PID, w.ProcStarttime, w.EndedAt, w.LivenessUnverifiedSince, w.LivenessNote = nil, nil, nil, nil, nil
 	w.TmuxServerPID, w.TmuxServerStarted, w.TmuxServerStarttime, w.PaneID, w.PanePID, w.PaneStarttime = nil, nil, nil, nil, nil, nil
-	w.RowVersion = r.Before.RowVersion.(int64) + 1
+	w.RowVersion, w.TurnStarts = r.Before.RowVersion.(int64)+1, int64(0)
 	return w
 }
 
@@ -483,4 +543,17 @@ func pendRowNullOr(s string) any {
 // vanishedUserSocket is a socket under a missing per-user directory whose parent exists.
 func vanishedUserSocket(t *testing.T) string {
 	return filepath.Join(userSocketDir(t.TempDir()), "default")
+}
+
+// PublishBusySendLaunch forwards successful creation without an identity reply.
+func (w *hookedResumeStore) PublishBusySendLaunch(id string, version int64, token string) (api.CondResult, error) {
+	if err := w.publicationError(); err != nil {
+		return 0, err
+	}
+	return w.st.PublishBusySendLaunch(id, version, token)
+}
+
+// MarkBusySendLaunchUncertain forwards the creation outcome to the real core.
+func (w *hookedResumeStore) MarkBusySendLaunchUncertain(id, token string) error {
+	return w.st.MarkBusySendLaunchUncertain(id, token)
 }

@@ -42,10 +42,10 @@ const (
 
 // seedPaneRow seeds a waiting row id launched on a private socket whose pane
 // is apitest.TestPaneID with pid apitest.TestPanePID (seedKillRow).
-func seedPaneRow(t *testing.T, id string) (string, map[string]any) {
+func seedPaneRow(t *testing.T, id string, opts ...apitest.SpawnOption) (string, map[string]any) {
 	t.Helper()
 	socket, _ := usePrivateFakeTmux(t)
-	dir, storeID := seedKillRow(t, id, socket, apitest.TestPanePID, "")
+	dir, storeID := seedKillRow(t, id, socket, apitest.TestPanePID, "", opts...)
 	return dir, map[string]any{"id": id, ctxSocket: socket, ctxStoreID: storeID}
 }
 

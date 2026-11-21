@@ -1,0 +1,45 @@
+// Test-only bridge to the real per-engine fault seam, never a release input.
+package adminapi
+
+import (
+    "encoding/json"
+    "fmt"
+    "os"
+    "path/filepath"
+    "time"
+)
+
+func installerTestObserve(root string) func(string, string) error {
+    return func(point, path string) error {
+        b, err := os.ReadFile(filepath.Join(root, ".installer-test-fault.json"))
+        if os.IsNotExist(err) { return nil }
+        if err != nil { return err }
+        var gate struct { Point, Ready, Go, Action string }
+        if err := json.Unmarshal(b, &gate); err != nil { return err }
+        if point != gate.Point { return nil }
+        done := make(chan error, 1)
+        go func() {
+            ready, err := os.OpenFile(gate.Ready, os.O_WRONLY, 0)
+            if err != nil { done <- err; return }
+            _, err = ready.WriteString("ready\n")
+            _ = ready.Close()
+            if err != nil { done <- err; return }
+            release, err := os.Open(gate.Go)
+            if err != nil { done <- err; return }
+            var b [3]byte
+            _, err = release.Read(b[:])
+            _ = release.Close()
+            if err == nil && string(b[:]) != "go\n" { err = fmt.Errorf("invalid installer barrier release") }
+            done <- err
+        }()
+        select {
+        case err := <-done:
+            if err != nil { return err }
+            if gate.Action == "exit" { os.Exit(91) }
+            if gate.Action == "fail" { return fmt.Errorf("installer test fault at %s", point) }
+            return nil
+        case <-time.After(90*time.Second):
+            return fmt.Errorf("installer barrier timeout at %s", point)
+        }
+    }
+}

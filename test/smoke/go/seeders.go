@@ -59,7 +59,7 @@ type seedKind int
 const (
 	// seedNone means no DB row is seeded. Used for verbs whose happy path
 	// does not require any pre-existing row (spawn, find-missing, version,
-	// make-template).
+	// make-template, get-delivery).
 	seedNone seedKind = iota
 
 	// seedCheckPermission seeds a spawn in StateCheckPermission with
@@ -69,7 +69,8 @@ const (
 	// seedResumable seeds a spawn in StateEnded with session_id
 	// populated AND writes a JSONL placeholder on disk so the resume
 	// verb's os.Stat pre-flight passes. HOME must be redirected first
-	// (the smoke TestMain does this).
+	// (the smoke TestMain does this). Also force-delivery's and get-force's
+	// ended row, a Codex one (RowAgent), which busy send does not cover.
 	seedResumable
 
 	// seedExpired seeds an ended row through apitest.SeedSpawn (its SR-20.3
@@ -90,8 +91,8 @@ const (
 	// apitest.TestPaneID, whose pid reads gone) and the row's own labelled
 	// session into the Recorder (SeedRowSession). Used by kill, so its happy
 	// path finds the session, sends the kills and sees the agent gone, and by
-	// send-keys, so its happy path takes the Ours path and sends into the
-	// agent's pane by its pane id (SR-7.2).
+	// send-keys, on a Codex row (RowAgent), so its happy path takes the Ours
+	// path and pastes into the agent's pane by its pane id (SR-7.2).
 	seedLiveSession
 
 	// seedReadPane seeds a working row as seedLiveSession does and swaps the
@@ -110,12 +111,13 @@ const (
 	seedFallenBack
 
 	// seedPause seeds a waiting row through apitest.SeedSpawn (the same
-	// SR-20.3 defaults) and swaps the driver's Recorder for
-	// tmuxfix.NewRecorderForPause's, with an after-call hook on the Enter
-	// that ends the row as its own agent (a SessionEnd through
-	// apitest.ApplyAgentHook). Used by pause, so its happy path takes the
-	// Ours path, sends /exit and Enter by pane id and its wait sees the row
-	// ended (SR-7.2, SR-20.3).
+	// SR-20.3 defaults), a Codex one (RowAgent), and swaps the driver's
+	// Recorder for tmuxfix.NewRecorderForPause's, with an after-call hook on
+	// the Enter that reports the agent's end (its SessionEnd through
+	// apitest.ApplyAgentHook; its pane process reads gone). Used by pause, so
+	// its happy path takes the Ours path, clears the line, sends /exit and
+	// Enter by pane id and its wait's end check ends the row (SR-7.2,
+	// SR-20.3).
 	seedPause
 
 	// seedSubagentRecord seeds a working row through apitest.SeedSpawn (its
@@ -168,6 +170,15 @@ type seederSpec struct {
 	// SeedID is the instance_id the seeded row uses. Happy
 	// references this same id when calling the verb method.
 	SeedID string
+
+	// RowAgent, when non-empty, is the agent of the seeded row (seedResumable,
+	// seedLiveSession, seedPause) for a verb whose input busy send's coverage
+	// changes: busy send covers Claude, whose send-keys admits a Message, whose
+	// pause is keyless and whose force is a finite call of up to 15 seconds,
+	// so send-keys, pause, force-delivery and get-force run on Codex rows,
+	// where their typed or stored results still apply. Unlike Agent, it adds no
+	// launch checks.
+	RowAgent string
 
 	// Agent, when non-empty ("codex"), marks a Codex row of codexSeeders: a
 	// seedResumable row is seeded as that agent's (storefix.WithResumableAgent)
@@ -222,7 +233,7 @@ type seederSpec struct {
 
 	// SentText, when non-empty, is the text Happy sends. The driver asserts
 	// the Recorder saw one call carrying it, to apitest.TestPaneID (the pane
-	// the row records) on apitest.TestSocket, with Enter, and one Enter to
+	// the row records) on apitest.TestSocket, without Enter, and one Enter to
 	// that pane. Set by send-keys and pause.
 	SentText string
 

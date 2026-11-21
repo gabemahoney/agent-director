@@ -88,6 +88,8 @@ var Catalog = []Entry{
 	{Name: "ErrSpawnNotPausable", Err: api.ErrSpawnNotPausable},
 	{Name: "ErrPauseTimeout", Err: api.ErrPauseTimeout},
 	{Name: "ErrSubmissionUnconfirmed", Err: api.ErrSubmissionUnconfirmed},
+	{Name: "ErrCantSend", Err: api.ErrCantSend},
+	{Name: "ErrSendAcceptedForceFailed", Err: api.ErrSendAcceptedForceFailed},
 	{Name: "ErrListInvalidLabel", Err: api.ErrListInvalidLabel},
 	{Name: "ErrTemplateNameUnsafe", Err: config.ErrTemplateNameUnsafe},
 	{Name: "ErrTemplateNotFound", Err: config.ErrTemplateNotFound},
@@ -139,6 +141,7 @@ var Catalog = []Entry{
 	// The separate administrator command emits this existing typed category.
 	// It is not a public Client/MCP verb error or an additional API sentinel.
 	{Name: "ErrJournalMigrationRefused", Err: &adminapi.JournalRefusal{}},
+	{Name: "ErrVersionInstallRefused", Err: &adminapi.VersionInstallRefusal{}},
 	// ErrUnknownVerb, ErrJSONMarshal and ErrTrailWrite come from no verb
 	// handler either: the command binaries write them themselves (a verb the
 	// binary does not know; a JSON result the binary cannot write; a trail
@@ -173,6 +176,12 @@ var Catalog = []Entry{
 func Classify(err error) (name, description string) {
 	if err == nil {
 		return "", ""
+	}
+	// A retained newer version can return a name this binary predates. Keep
+	// that structured outcome intact instead of classifying it as internal.
+	var named interface{ ErrorName() string }
+	if errors.As(err, &named) {
+		return named.ErrorName(), err.Error()
 	}
 	for _, ec := range Catalog {
 		if errors.Is(err, ec.Err) {

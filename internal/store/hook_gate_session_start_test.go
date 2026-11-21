@@ -237,7 +237,7 @@ func TestHookGateRaceWithNewLaunch(t *testing.T) {
 			}
 		}, store.HookApplied{Reason: store.HookReasonPIDMismatch}},
 		{"row deleted", func(t *testing.T, f *v5Store, id string, _ store.RowSnapshot) {
-			if err := f.s.DeleteSpawn(id); err != nil {
+			if err := storefix.DeleteWithExit(t, f.s, id); err != nil {
 				t.Fatalf("DeleteSpawn: %v", err)
 			}
 		}, store.HookApplied{}},
@@ -280,7 +280,7 @@ func TestHookGateRaceWithNewLaunch(t *testing.T) {
 // hgMove is resume's move of id's finished row to pending on examined.
 func hgMove(t *testing.T, f *v5Store, id string, examined store.RowSnapshot) {
 	t.Helper()
-	if res, _, err := f.s.MoveToPending(id, examined, moveLaunchMillis, moveToken, moveSocket, "", store.LaunchOwner{}); err != nil || res != store.CondApplied {
+	if res, _, err := f.s.MoveToPendingWithExit(id, examined, moveLaunchMillis, moveToken, moveSocket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, id)); err != nil || res != store.CondApplied {
 		t.Fatalf("MoveToPending = %v, %v; want CondApplied", res, err)
 	}
 }

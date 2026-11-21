@@ -36,6 +36,10 @@ type ListFilters struct {
 	TmuxSessionName string
 	Limit           int
 	Settle          SettleRead
+	// Delivery, when set, receives the delivery facts of the selected covered
+	// rows, read in the same read transaction as the rows, begun before their
+	// SELECT (BusySendDeliveries). It selects nothing.
+	Delivery *BusySendDeliveries
 }
 
 // ListSpawns runs the filtered query and returns rows in unspecified
@@ -148,12 +152,18 @@ func (s *Store) listSpawns(f ListFilters, proofs []CursorMissingProof) ([]Spawn,
 	var out []Spawn
 	stale := &CursorMissingReadError{}
 	err = s.readWithin(0, "store: list spawns", func(ctx context.Context, conn *sql.Conn) error {
+		end, err := f.Delivery.beginRead(ctx, conn)
+		if err != nil {
+			return fmt.Errorf("store: list spawns: %w", err)
+		}
+		defer end()
 		rows, err := conn.QueryContext(ctx, q, args...)
 		if err != nil {
 			return fmt.Errorf("store: list spawns query: %w", err)
 		}
 		defer rows.Close()
 
+		var read []Spawn
 		for rows.Next() {
 			sp, err := scanSpawnRow(rows, listSpawnsErrs, f.Settle.on())
 			if err != nil {
@@ -163,11 +173,18 @@ func (s *Store) listSpawns(f ListFilters, proofs []CursorMissingProof) ([]Spawn,
 				stale.InstanceIDs = append(stale.InstanceIDs, sp.InstanceID)
 				continue
 			}
-			out = append(out, sp)
+			read = append(read, sp)
 		}
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("store: list spawns iterate: %w", err)
 		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("store: list spawns iterate: %w", err)
+		}
+		if err := f.Delivery.read(ctx, conn, s.StoreID(), read); err != nil {
+			return fmt.Errorf("store: list spawns delivery: %w", err)
+		}
+		out = append(out, read...)
 		return nil
 	})
 	if err != nil {

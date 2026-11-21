@@ -163,12 +163,15 @@ type opsShell struct {
 	cmd *exec.Cmd
 }
 
-func newOpsShell(h *moveHome) *opsShell {
+func newOpsShell(h *moveHome, decorate ...func(*exec.Cmd)) *opsShell {
 	h.t.Helper()
 	cmd := exec.Command(h.S.Bash, "--norc", "--noprofile")
 	cmd.Dir = h.Home
 	cmd.Env = []string{"HOME=" + h.Home, "PATH=" + h.S.Toolbox, "TMPDIR=" + h.Tmp}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	for _, apply := range decorate {
+		apply(cmd)
+	}
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		h.t.Fatal(err)

@@ -1,0 +1,448 @@
+{
+  "provenance": "Recorded a2 kit13 / a3 kit16, Claude 2.1.311. No response/thinking/explanation/account/host data. Request history projected to empty tails; original IDs/times/refusal ancestry retained. message.id/apiBlockIndex are parser-required grammar. Not live qualification authority.",
+  "clips": [
+    {
+      "attempt": "a2",
+      "kit": 13,
+      "provider": "2.1.311 (Claude Code)",
+      "source": "raw/live-ce5eb731-ca2a-4cd8-b4af-cb63246fbc67-typed-ad-start-fa631f385d24cf2d-transcript.jsonl",
+      "source_sha256": "1d28b11ef5b54c89d2a72d97483748b680aad9a6aa6b4ba61720b8571f892b41",
+      "original_lines": [
+        34,
+        45,
+        46,
+        49,
+        50,
+        51
+      ],
+      "owner": {
+        "instance_id": "live-ce5eb731-ca2a-4cd8-b4af-cb63246fbc67-typed-ad-start",
+        "launch_id": "bbc3ba95-27f1-427d-8839-bc2e59bda050",
+        "launch_token": "fa631f385d24cf2d",
+        "session_id": "da50087d-6333-4f06-a769-ba19b4d6c070",
+        "started": "2026-11-19T07:40:49.765928278Z",
+        "stopped_at": "2026-11-19T07:42:08.292655253Z",
+        "exited": true
+      },
+      "active_case": {
+        "id": "typed-long-tool-ad-input",
+        "instance_id": "live-ce5eb731-ca2a-4cd8-b4af-cb63246fbc67-typed-ad-start",
+        "mode": "steer_turn",
+        "started": "2026-11-19T07:40:52.704577078Z",
+        "ended": "2026-11-19T07:40:52.723008455Z"
+      },
+      "waiting_case": "typed-between-tools-ad-input",
+      "rows": [
+        {
+          "type": "api-request",
+          "id": "8817fc5e-a97e-4d66-9d8b-20e68fbd0115",
+          "sessionId": "da50087d-6333-4f06-a769-ba19b4d6c070",
+          "timestamp": "2026-11-19T07:41:52.894Z",
+          "querySource": "repl_main_thread",
+          "keep": 0,
+          "tail": []
+        },
+        {
+          "type": "api-request",
+          "id": "b18df752-8126-4b23-b947-2e540a3e5ad1",
+          "sessionId": "da50087d-6333-4f06-a769-ba19b4d6c070",
+          "timestamp": "2026-11-19T07:41:56.097Z",
+          "querySource": "repl_main_thread",
+          "keep": 0,
+          "tail": []
+        },
+        {
+          "type": "assistant",
+          "uuid": "2a534722-daf1-4389-b3b9-06cd8af1911d",
+          "parentUuid": "69069890-85c9-4419-a274-9533d40875b1",
+          "requestRef": "8817fc5e-a97e-4d66-9d8b-20e68fbd0115",
+          "requestId": "req_011ChBujqHhgXy1fin8mfESM",
+          "sessionId": "da50087d-6333-4f06-a769-ba19b4d6c070",
+          "session_id": "da50087d-6333-4f06-a769-ba19b4d6c070",
+          "isSidechain": false,
+          "timestamp": "2026-11-19T07:41:56.073Z",
+          "apiBlockIndex": 0,
+          "message": {
+            "id": "msg_011ChBujrC2tdT6eWBv6AXvG",
+            "role": "assistant",
+            "stop_reason": "refusal",
+            "content": [
+              {
+                "type": "thinking"
+              }
+            ]
+          }
+        },
+        {
+          "type": "assistant",
+          "uuid": "8aa986d7-e827-4970-bdf2-62942163edc9",
+          "parentUuid": "39489757-89ba-4f63-8ea9-d410de154668",
+          "requestRef": "b18df752-8126-4b23-b947-2e540a3e5ad1",
+          "requestId": "req_011ChBuk53CDLTKNmLyJzLtr",
+          "sessionId": "da50087d-6333-4f06-a769-ba19b4d6c070",
+          "session_id": "da50087d-6333-4f06-a769-ba19b4d6c070",
+          "isSidechain": false,
+          "timestamp": "2026-11-19T07:41:59.387Z",
+          "apiBlockIndex": 0,
+          "message": {
+            "id": "msg_011ChBuk5Yi6ofPkiShmjLYh",
+            "role": "assistant",
+            "stop_reason": "refusal",
+            "content": [
+              {
+                "type": "thinking"
+              }
+            ]
+          }
+        },
+        {
+          "type": "system",
+          "subtype": "model_refusal_no_fallback",
+          "uuid": "efca222a-8f3a-42ec-87a1-a45f74db62e0",
+          "parentUuid": "8aa986d7-e827-4970-bdf2-62942163edc9",
+          "requestId": "req_011ChBuk53CDLTKNmLyJzLtr",
+          "refusedUserMessageUuid": "a8c0edad-a934-4f47-a310-3687e7b6bd4f",
+          "sessionId": "da50087d-6333-4f06-a769-ba19b4d6c070",
+          "isSidechain": false,
+          "timestamp": "2026-11-19T07:41:59.402Z"
+        },
+        {
+          "type": "assistant",
+          "uuid": "c92d0184-fc74-46f6-8429-9ec557914f5d",
+          "parentUuid": "efca222a-8f3a-42ec-87a1-a45f74db62e0",
+          "requestId": "req_011ChBuk53CDLTKNmLyJzLtr",
+          "sessionId": "da50087d-6333-4f06-a769-ba19b4d6c070",
+          "session_id": "da50087d-6333-4f06-a769-ba19b4d6c070",
+          "isSidechain": false,
+          "timestamp": "2026-11-19T07:41:59.402Z",
+          "isApiErrorMessage": true,
+          "error": "invalid_request",
+          "message": {
+            "id": "68a23a20-e3f2-488d-bb96-66a342199433",
+            "role": "assistant",
+            "stop_reason": "refusal",
+            "content": [
+              {
+                "type": "text"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "attempt": "a2",
+      "kit": 13,
+      "provider": "2.1.311 (Claude Code)",
+      "source": "raw/live-ce5eb731-ca2a-4cd8-b4af-cb63246fbc67-typed-control-start-1e41e396e5903c93-transcript.jsonl",
+      "source_sha256": "a24db0e8302449ada36b9fec9452fccfc9433327a3388eafb0c4af7210e55638",
+      "original_lines": [
+        37,
+        47,
+        48,
+        49,
+        56
+      ],
+      "owner": {
+        "instance_id": "live-ce5eb731-ca2a-4cd8-b4af-cb63246fbc67-typed-control-start",
+        "launch_id": "4577f372-1a16-4ba3-b4f3-1a2e9526ba50",
+        "launch_token": "1e41e396e5903c93",
+        "session_id": "c1078f4a-6813-4b01-8cb8-9db5173c2bb7",
+        "started": "2026-11-19T07:40:49.814885201Z",
+        "stopped_at": "2026-11-19T07:42:09.162383547Z",
+        "exited": true
+      },
+      "active_case": {
+        "id": "typed-long-tool-typed-input",
+        "instance_id": "live-ce5eb731-ca2a-4cd8-b4af-cb63246fbc67-typed-control-start",
+        "mode": "typed",
+        "started": "2026-11-19T07:40:52.728289644Z",
+        "ended": "2026-11-19T07:40:52.732761263Z"
+      },
+      "waiting_case": "typed-between-tools-ad-input",
+      "rows": [
+        {
+          "type": "api-request",
+          "id": "573fe110-c811-4116-9ba4-3dfd8a420782",
+          "sessionId": "c1078f4a-6813-4b01-8cb8-9db5173c2bb7",
+          "timestamp": "2026-11-19T07:41:52.961Z",
+          "querySource": "repl_main_thread",
+          "keep": 0,
+          "tail": []
+        },
+        {
+          "type": "api-request",
+          "id": "b2803301-b7d9-460f-b633-ea41baf1ec3c",
+          "sessionId": "c1078f4a-6813-4b01-8cb8-9db5173c2bb7",
+          "timestamp": "2026-11-19T07:41:56.079Z",
+          "querySource": "repl_main_thread",
+          "keep": 0,
+          "tail": []
+        },
+        {
+          "type": "assistant",
+          "uuid": "86de98dc-613f-4724-b70c-fac2367fda73",
+          "parentUuid": "1e2d33d2-fb44-4bff-a810-fa4d8fd7eda2",
+          "requestRef": "573fe110-c811-4116-9ba4-3dfd8a420782",
+          "requestId": "req_011ChBujqoy2Vxb9JWL1GEnb",
+          "sessionId": "c1078f4a-6813-4b01-8cb8-9db5173c2bb7",
+          "session_id": "c1078f4a-6813-4b01-8cb8-9db5173c2bb7",
+          "isSidechain": false,
+          "timestamp": "2026-11-19T07:41:56.050Z",
+          "apiBlockIndex": 0,
+          "message": {
+            "id": "msg_011ChBujrJV1GgCquskuC8kY",
+            "role": "assistant",
+            "stop_reason": "refusal",
+            "content": [
+              {
+                "type": "thinking"
+              }
+            ]
+          }
+        },
+        {
+          "type": "assistant",
+          "uuid": "57d82a4f-5c43-4127-bde0-bb885cd46674",
+          "parentUuid": "86de98dc-613f-4724-b70c-fac2367fda73",
+          "requestRef": "573fe110-c811-4116-9ba4-3dfd8a420782",
+          "requestId": "req_011ChBujqoy2Vxb9JWL1GEnb",
+          "sessionId": "c1078f4a-6813-4b01-8cb8-9db5173c2bb7",
+          "session_id": "c1078f4a-6813-4b01-8cb8-9db5173c2bb7",
+          "isSidechain": false,
+          "timestamp": "2026-11-19T07:41:56.052Z",
+          "apiBlockIndex": 1,
+          "message": {
+            "id": "msg_011ChBujrJV1GgCquskuC8kY",
+            "role": "assistant",
+            "stop_reason": "refusal",
+            "content": [
+              {
+                "type": "thinking"
+              }
+            ]
+          }
+        },
+        {
+          "type": "api-request",
+          "id": "114f1df9-8db9-4c23-b01f-770525c6fe70",
+          "sessionId": "c1078f4a-6813-4b01-8cb8-9db5173c2bb7",
+          "timestamp": "2026-11-19T07:42:04.010Z",
+          "querySource": "repl_main_thread",
+          "keep": 0,
+          "tail": []
+        }
+      ]
+    },
+    {
+      "attempt": "a3",
+      "kit": 16,
+      "provider": "2.1.311 (Claude Code)",
+      "source": "raw/live-037798a6-1e39-4746-b72a-dd3481b9e3c0-typed-ad-start-cb4100f74aac7d9f-transcript.jsonl",
+      "source_sha256": "c2e36a29912972340335d698cb209d8021de8866cc4a95877ff42e44cabc021e",
+      "original_lines": [
+        34,
+        45,
+        46,
+        49,
+        50,
+        51
+      ],
+      "owner": {
+        "instance_id": "live-037798a6-1e39-4746-b72a-dd3481b9e3c0-typed-ad-start",
+        "launch_id": "526abb20-0069-4609-98ec-8f69b6481e7e",
+        "launch_token": "cb4100f74aac7d9f",
+        "session_id": "bc3f4856-4232-452c-b228-63f7349f2180",
+        "started": "2026-11-19T11:50:35.616303932Z",
+        "stopped_at": "2026-11-19T11:51:59.099491158Z",
+        "exited": true
+      },
+      "active_case": {
+        "id": "typed-long-tool-ad-input",
+        "instance_id": "live-037798a6-1e39-4746-b72a-dd3481b9e3c0-typed-ad-start",
+        "mode": "steer_turn",
+        "started": "2026-11-19T11:50:38.557420961Z",
+        "ended": "2026-11-19T11:50:38.57406241Z"
+      },
+      "waiting_case": "typed-between-tools-ad-input",
+      "rows": [
+        {
+          "type": "api-request",
+          "id": "49981935-80bb-4588-8cf3-a27c80f2cb06",
+          "sessionId": "bc3f4856-4232-452c-b228-63f7349f2180",
+          "timestamp": "2026-11-19T11:51:38.811Z",
+          "querySource": "repl_main_thread",
+          "keep": 0,
+          "tail": []
+        },
+        {
+          "type": "api-request",
+          "id": "cf1884f2-db69-4b09-9d9f-aa245e07febc",
+          "sessionId": "bc3f4856-4232-452c-b228-63f7349f2180",
+          "timestamp": "2026-11-19T11:51:40.736Z",
+          "querySource": "repl_main_thread",
+          "keep": 0,
+          "tail": []
+        },
+        {
+          "type": "assistant",
+          "uuid": "b9b0a7d3-ab36-42fc-b77c-fb5474817d9d",
+          "parentUuid": "b8ea411f-a5e2-4ae7-97a7-d5db443407db",
+          "requestRef": "49981935-80bb-4588-8cf3-a27c80f2cb06",
+          "requestId": "req_011ChCEnWc6WVBbsPfMpwGcH",
+          "sessionId": "bc3f4856-4232-452c-b228-63f7349f2180",
+          "session_id": "bc3f4856-4232-452c-b228-63f7349f2180",
+          "isSidechain": false,
+          "timestamp": "2026-11-19T11:51:40.714Z",
+          "apiBlockIndex": 0,
+          "message": {
+            "id": "msg_011ChCEnXWRjzgFJxfcq4xmg",
+            "role": "assistant",
+            "stop_reason": "refusal",
+            "content": [
+              {
+                "type": "thinking"
+              }
+            ]
+          }
+        },
+        {
+          "type": "assistant",
+          "uuid": "93449b85-8b0d-4246-a2ad-022e1ddb03cf",
+          "parentUuid": "4e0702a2-c297-423b-a4c2-2176cff94442",
+          "requestRef": "cf1884f2-db69-4b09-9d9f-aa245e07febc",
+          "requestId": "req_011ChCEneqDEZG8HBz9mi1za",
+          "sessionId": "bc3f4856-4232-452c-b228-63f7349f2180",
+          "session_id": "bc3f4856-4232-452c-b228-63f7349f2180",
+          "isSidechain": false,
+          "timestamp": "2026-11-19T11:51:45.389Z",
+          "apiBlockIndex": 0,
+          "message": {
+            "id": "msg_011ChCEnfKidXEMPhFEipmmj",
+            "role": "assistant",
+            "stop_reason": "refusal",
+            "content": [
+              {
+                "type": "thinking"
+              }
+            ]
+          }
+        },
+        {
+          "type": "system",
+          "subtype": "model_refusal_no_fallback",
+          "uuid": "e0962ea8-5ad3-46ea-820b-326ce383096c",
+          "parentUuid": "93449b85-8b0d-4246-a2ad-022e1ddb03cf",
+          "requestId": "req_011ChCEneqDEZG8HBz9mi1za",
+          "refusedUserMessageUuid": "e1dff83f-e549-4510-9867-dc00b3024776",
+          "sessionId": "bc3f4856-4232-452c-b228-63f7349f2180",
+          "isSidechain": false,
+          "timestamp": "2026-11-19T11:51:45.411Z"
+        },
+        {
+          "type": "assistant",
+          "uuid": "c2776e9e-3cf2-407a-a4a5-c5417d30aabb",
+          "parentUuid": "e0962ea8-5ad3-46ea-820b-326ce383096c",
+          "requestId": "req_011ChCEneqDEZG8HBz9mi1za",
+          "sessionId": "bc3f4856-4232-452c-b228-63f7349f2180",
+          "session_id": "bc3f4856-4232-452c-b228-63f7349f2180",
+          "isSidechain": false,
+          "timestamp": "2026-11-19T11:51:45.410Z",
+          "isApiErrorMessage": true,
+          "error": "invalid_request",
+          "message": {
+            "id": "b44aaf42-4099-417d-9331-57beca26cd38",
+            "role": "assistant",
+            "stop_reason": "refusal",
+            "content": [
+              {
+                "type": "text"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "attempt": "a3",
+      "kit": 16,
+      "provider": "2.1.311 (Claude Code)",
+      "source": "raw/live-037798a6-1e39-4746-b72a-dd3481b9e3c0-typed-control-start-c3436e9b855aa258-transcript.jsonl",
+      "source_sha256": "8e940e0bfee9dfb3bd10fcf74d81452d0450a8804f9f653d6f6e8de029217d2b",
+      "original_lines": [
+        37,
+        50,
+        52,
+        53
+      ],
+      "owner": {
+        "instance_id": "live-037798a6-1e39-4746-b72a-dd3481b9e3c0-typed-control-start",
+        "launch_id": "639317ba-4b0f-417e-a2c0-7dbd1cb76c8b",
+        "launch_token": "c3436e9b855aa258",
+        "session_id": "8b60b6f8-a730-4968-93c5-d2804815dc27",
+        "started": "2026-11-19T11:50:35.667170007Z",
+        "stopped_at": "2026-11-19T11:51:59.46787807Z",
+        "exited": true
+      },
+      "active_case": {
+        "id": "typed-long-tool-typed-input",
+        "instance_id": "live-037798a6-1e39-4746-b72a-dd3481b9e3c0-typed-control-start",
+        "mode": "typed",
+        "started": "2026-11-19T11:50:43.630860703Z",
+        "ended": "2026-11-19T11:50:43.635318433Z"
+      },
+      "waiting_case": "typed-between-tools-ad-input",
+      "rows": [
+        {
+          "type": "api-request",
+          "id": "fe98fc8b-6023-4887-9ec1-0eadca88a00b",
+          "sessionId": "8b60b6f8-a730-4968-93c5-d2804815dc27",
+          "timestamp": "2026-11-19T11:51:43.720Z",
+          "querySource": "repl_main_thread",
+          "keep": 0,
+          "tail": []
+        },
+        {
+          "type": "api-request",
+          "id": "1a4e6606-707e-4f5c-8cd0-30ea612112aa",
+          "sessionId": "8b60b6f8-a730-4968-93c5-d2804815dc27",
+          "timestamp": "2026-11-19T11:51:50.484Z",
+          "querySource": "repl_main_thread",
+          "keep": 0,
+          "tail": []
+        },
+        {
+          "type": "api-request",
+          "id": "a7ec8321-b122-4d14-81ea-49cfaed8b805",
+          "sessionId": "8b60b6f8-a730-4968-93c5-d2804815dc27",
+          "timestamp": "2026-11-19T11:51:52.629Z",
+          "querySource": "repl_main_thread",
+          "keep": 0,
+          "tail": []
+        },
+        {
+          "type": "assistant",
+          "uuid": "194dc11b-9a4a-4d8f-a140-91ff500ab3c4",
+          "parentUuid": "87b0f55c-7955-4a86-abc8-a9e2709ce378",
+          "requestRef": "1a4e6606-707e-4f5c-8cd0-30ea612112aa",
+          "requestId": "req_011ChCEoNR1dYXsHEvBDhy4S",
+          "sessionId": "8b60b6f8-a730-4968-93c5-d2804815dc27",
+          "session_id": "8b60b6f8-a730-4968-93c5-d2804815dc27",
+          "isSidechain": false,
+          "timestamp": "2026-11-19T11:51:52.608Z",
+          "apiBlockIndex": 0,
+          "message": {
+            "id": "msg_011ChCEoNwWoLkTPWSrX7YJ1",
+            "role": "assistant",
+            "stop_reason": "refusal",
+            "content": [
+              {
+                "type": "thinking"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

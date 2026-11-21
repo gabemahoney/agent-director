@@ -49,6 +49,11 @@ status_plain='["confirmations","context","failure_reason","family_state","idle_s
 status_idle='["confirmations","context","displayed_state","failure_reason","family_state","idle_screen_availability","process_liveness","since","state","tmux_session_name","unchanged_minutes"]'
 list_keys='["agent","confirmations","cwd","displayed_state","family_state","idle_screen_availability","instance_id","labels","last_seen_at","permission_requests","process_liveness","relay_mode","started_at","state","state_changed_at","tmux_session_name"]'
 list_optional='["ended_at","launch_started_at","liveness_note","liveness_unverified_since","parent_id"]'
+# A covered row (every Claude launch; busy send covers Claude Code) also shows
+# agent_defaults on status and list, and delivery on status. launch sets the
+# extra keys of the agent it started in status_extra and list_extra.
+status_extra='[]'
+list_extra='[]'
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 q() { printf "'%s'" "${1//\'/\'\'}"; }
@@ -140,6 +145,10 @@ launch() {
     shift 2
     local cwd sid tp home out end
     local spawn_extra=() hook_args=()
+    status_extra='[]' list_extra='[]'
+    if [[ "$agent" == claude ]]; then
+        status_extra='["agent_defaults","delivery"]' list_extra='["agent_defaults"]'
+    fi
     cwd="$(mktemp -d /tmp/idle-screen-XXXXXX)"
     cwd="$(cd -P "$cwd" && pwd)"
     work+=("$cwd")
@@ -233,7 +242,8 @@ check_idle() {
          and (.since | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"))' <<<"$2" >/dev/null ||
         fail "$1: not the displayed idle_screen of $3 with $4 minutes: $2"
     if [[ "$1" == status ]]; then
-        jq -e --argjson k "$status_idle" 'keys == $k' <<<"$2" >/dev/null || fail "status: keys are not $status_idle: $2"
+        jq -e --argjson k "$status_idle" --argjson x "$status_extra" 'keys == ($k + $x | sort)' <<<"$2" >/dev/null ||
+            fail "status: keys are not $status_idle with $status_extra: $2"
     else
         no_old_member "$2" "$1 of $3"
     fi
@@ -298,8 +308,9 @@ public)
         for filter in idle_screen working; do
             listed="$(agent-director list --state "$filter")" || fail "list --state $filter exited non-zero"
             jq -e --arg id "$id" --arg first "$(jq -r .since <<<"$status")" --argjson k "$list_keys" --argjson o "$list_optional" \
+                --argjson x "$list_extra" \
                 '[.spawns[] | select(.instance_id == $id)] | length == 1 and (.[0] | .state == "working" and .displayed_state == "idle_screen"
-                and .idle_screen_availability == "available" and (keys - $o) == $k
+                and .idle_screen_availability == "available" and (keys - $o) == ($k + $x | sort)
                 and (.confirmations | keys == ["displayed_state","process_liveness","state"])
                 and all(.confirmations[]; keys == ["checked_at","confirmed_at","reason","source","status"])
                 and .confirmations.displayed_state.status == "confirmed" and .confirmations.displayed_state.source == "pane"
@@ -380,7 +391,8 @@ override)
     # An hour unchanged: the config's 60 s would qualify; the row's 2 h does not.
     backdate "$id" 3600000
     early="$(read_row status "$id")"
-    jq -e --argjson k "$status_plain" '.state == "working" and .failure_reason == null and keys == $k' <<<"$early" >/dev/null ||
+    jq -e --argjson k "$status_plain" --argjson x "$status_extra" '.state == "working" and .failure_reason == null
+        and keys == ($k + $x | sort)' <<<"$early" >/dev/null ||
         fail "an hour unchanged under a 2 h override reads [$early]"
     backdate "$id" 7200000
     observe "$id"

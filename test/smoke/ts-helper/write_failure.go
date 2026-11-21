@@ -19,7 +19,7 @@ func cmdWriteFailure(command string, args []string, stdout, stderr io.Writer) in
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	path := fs.String("store", "", "existing temporary SQLite store (required)")
-	kindName := fs.String("kind", "", "input-attempt|input-text-intent|input-current|input-authority")
+	kindName := fs.String("kind", "", "input-attempt|input-text-intent|input-current|input-authority|busy-send-force-insert")
 	id := fs.String("id", "", "instance id; input-authority uses native_input_authority")
 	token := fs.String("handle", "", "opaque handle from install-write-failure")
 	if err := fs.Parse(args); err != nil {
@@ -33,10 +33,11 @@ func cmdWriteFailure(command string, args []string, stdout, stderr io.Writer) in
 	var handle writefailfix.Handle
 	if command == "install-write-failure" {
 		kinds := map[string]writefailfix.Kind{
-			"input-attempt":     writefailfix.InputAttemptInsert,
-			"input-text-intent": writefailfix.InputTextIntent,
-			"input-current":     writefailfix.InputCurrent,
-			"input-authority":   writefailfix.InputAuthority,
+			"input-attempt":          writefailfix.InputAttemptInsert,
+			"input-text-intent":      writefailfix.InputTextIntent,
+			"input-current":          writefailfix.InputCurrent,
+			"input-authority":        writefailfix.InputAuthority,
+			"busy-send-force-insert": writefailfix.BusySendForceInsert,
 		}
 		kind = kinds[*kindName]
 		if kind == 0 || *id == "" || *token != "" {

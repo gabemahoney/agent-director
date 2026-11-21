@@ -358,6 +358,8 @@ ad_db_path_refuse() {
 #           or check);
 #   launch  [launch] claude_path, then codex_path and cursor_path, resolved as above: each
 #           empty when unset or empty.
+# "launch-only" reads just those three launch keys, omitting the store path
+# and its validation. Later installers use it without consulting db_path.
 # Every line is printed, an empty one too, so a caller reads them by
 # position (command substitution drops trailing empty lines: read from a
 # here-string with `|| true` after each read). A '?' is refused in db_path
@@ -366,7 +368,7 @@ ad_db_path_refuse() {
 # the matching is bytewise whatever the caller's locale.
 ad_store_db_path() (
     LC_ALL=C
-    local config="$1" home="$2" base="$3" want_log=0 want_launch=0 n=0 line table=""
+    local config="$1" home="$2" base="$3" want_store=1 want_log=0 want_launch=0 n=0 line table=""
     local about_launch=0 seen_store=0 seen_log=0 seen_launch=0 have_value=0 have_log_value=0
     local have_claude=0 have_codex=0 have_cursor=0 claude_value="" codex_value="" cursor_value=""
     local value="" log_value="" key rest resolved name t k which parsed seen arg
@@ -376,6 +378,7 @@ ad_store_db_path() (
         case "$arg" in
             log) want_log=1; tables+=(log) ;;
             launch) want_launch=1; tables+=(launch) ;;
+            launch-only) want_store=0; want_launch=1; tables=(launch) ;;
         esac
     done
     local re_skip='^[[:blank:]]*(#.*)?$'
@@ -688,7 +691,7 @@ ad_store_db_path() (
                 fi
             done
             which=""
-            if [[ "$table" == store ]] && is_key "$key" store; then
+            if [[ "$want_store" -eq 1 && "$table" == store ]] && is_key "$key" store; then
                 which=store
             elif [[ "$want_log" -eq 1 && "$table" == log ]] && is_key "$key" log; then
                 which=log
@@ -796,6 +799,7 @@ ad_store_db_path() (
         done <"$config"
     fi
 
+    if [[ "$want_store" -eq 1 ]]; then
     case "$value" in
         "")    resolved="$(ad_clean_path "${base}/state.db")" ;;
         "~/"*) resolved="$(ad_clean_path "${home}/${value:2}")" ;;
@@ -803,6 +807,7 @@ ad_store_db_path() (
         *)     resolved="$(ad_clean_path "${base}/${value}")" ;;
     esac
     printf '%s\n' "$resolved"
+    fi
     if [[ "$want_log" -eq 1 ]]; then
         case "$log_value" in
             "")    resolved="" ;;
@@ -870,6 +875,8 @@ else
 fi
 DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
 DEFAULT_ADMIN_DIR="${DEFAULT_INSTALL_ROOT}/admin"
+ROOT_IS_LINK=0
+[[ ! -L "$DEFAULT_INSTALL_ROOT" ]] || ROOT_IS_LINK=1
 
 # The other AD directories this run names, and removes under --purge. A
 # kept, after-upgrade or recreated directory, a ~/.agent-director beside the
@@ -1032,7 +1039,7 @@ fi
 
 CONFIG_TOML="${DEFAULT_INSTALL_ROOT}/config.toml"
 config_edit=0
-if [[ -f "$CONFIG_TOML" ]]; then
+if [[ "$ROOT_IS_LINK" -eq 0 && -f "$CONFIG_TOML" ]]; then
     cleaned=$(LC_ALL=C awk '
         function flush_defaults() {
             has_content = 0
@@ -1378,6 +1385,7 @@ ad_sched_remove_units
 # present is a silent no-op.
 ad_sched_remove_local() {
     local dir="${DEFAULT_INSTALL_ROOT}/schedule" f
+    [[ "$ROOT_IS_LINK" -eq 0 ]] || return 0
     for f in "${DEFAULT_INSTALL_ROOT}"/.schedule.*; do
         if [[ -d "$f" && ! -L "$f" ]]; then
             rm -rf -- "$f"
@@ -1396,12 +1404,77 @@ ad_sched_remove_local() {
 
 ad_sched_remove_local
 
+# Remove only identifiable loose engine temporaries. Everything inside the
+# dedicated versions/publications namespaces goes with those directories;
+# a generic .tmp-* beside runtime data is not enough evidence of ownership.
+ad_version_remove_temps() {
+    local dir="$1" target="$2" f name link
+    [[ -d "$dir" && ! -L "$dir" ]] || return 0
+    for f in "$dir"/.tmp-link-*; do
+        name="${f##*/}"
+        [[ "$name" =~ ^\.tmp-link-[0-9]+$ && -L "$f" ]] || continue
+        link="$(readlink "$f")"
+        if [[ "$target" == current ]]; then
+            [[ "$link" =~ ^versions/[0-9a-f]{64}$ ]] || continue
+        else
+            [[ "$link" == "$target" ]] || continue
+        fi
+        rm -f -- "$f"
+    done
+    [[ "$target" == current ]] || return 0
+    for f in "$dir"/.tmp-*; do
+        name="${f##*/}"
+        [[ "$name" =~ ^\.tmp-[0-9]+$ && -f "$f" && ! -L "$f" ]] || continue
+        # Root records are only the anchor or initialization evidence.
+        # Incomplete/unrecognizable files are deliberately left alone.
+        if jq -e -s '
+            def digest: type == "string" and test("^[0-9a-f]{64}$");
+            length == 1 and (.[0] | type == "object"
+              and .format_version == 1 and (.core_version | type == "string" and length > 0)
+              and (.core_declarations_sha256 | digest)
+              and ((keys == ["core_declarations_sha256", "core_version", "format_version"])
+                or (keys == ["admin_target", "complete", "core_declarations_sha256", "core_version", "format_version", "initial_record_sha256", "initial_version_id", "runtime_target"]
+                    and (.initial_version_id | digest) and (.initial_record_sha256 | digest)
+                    and .runtime_target == "../current/agent-director"
+                    and .admin_target == "../current/agent-director-admin"
+                    and (.complete | type == "boolean"))))
+        ' "$f" >/dev/null 2>&1; then
+            rm -f -- "$f"
+        fi
+    done
+}
+
+# Explicit teardown owns the retained program files and installation lock.
+# It does not synchronize concurrent publication, inspect a store, or follow
+# a directory symlink. rm without a trailing slash removes a link itself.
+if [[ "$ROOT_IS_LINK" -eq 1 ]]; then
+    rm -f -- "$DEFAULT_INSTALL_ROOT"
+    echo "uninstall.sh: removed directory symlink $DEFAULT_INSTALL_ROOT; kept its target"
+else
+    ad_version_remove_temps "$DEFAULT_INSTALL_ROOT" current
+    ad_version_remove_temps "$DEFAULT_BIN_DIR" ../current/agent-director
+    ad_version_remove_temps "$DEFAULT_ADMIN_DIR" ../current/agent-director-admin
+    layout_removed=0
+    for f in current versions publications install-contract.json install-initialization.json install.lock; do
+        layout_path="${DEFAULT_INSTALL_ROOT}/${f}"
+        [[ -e "$layout_path" || -L "$layout_path" ]] || continue
+        rm -rf -- "$layout_path"
+        layout_removed=1
+    done
+    if [[ "$layout_removed" -eq 1 ]]; then
+        echo "uninstall.sh: removed the versioned program layout, retained versions, publication history and installation lock"
+    fi
+fi
+
 # --------------------------------------------------------------------
 # Remove binaries (canonical + .prior snapshot + any legacy
 # versioned-binary siblings from pre-b.43y installs).
 # --------------------------------------------------------------------
 
-if [[ -d "$DEFAULT_BIN_DIR" ]]; then
+if [[ -L "$DEFAULT_BIN_DIR" ]]; then
+    rm -f -- "$DEFAULT_BIN_DIR"
+    echo "uninstall.sh: removed directory symlink $DEFAULT_BIN_DIR; kept its target"
+elif [[ -d "$DEFAULT_BIN_DIR" ]]; then
     for f in "$DEFAULT_BIN_DIR"/agent-director "$DEFAULT_BIN_DIR"/agent-director.*; do
         [[ -e "$f" || -L "$f" ]] || continue
         rm -f "$f"
@@ -1416,7 +1489,10 @@ fi
 # place, with a note.
 # --------------------------------------------------------------------
 
-if [[ -d "$DEFAULT_ADMIN_DIR" ]]; then
+if [[ -L "$DEFAULT_ADMIN_DIR" ]]; then
+    rm -f -- "$DEFAULT_ADMIN_DIR"
+    echo "uninstall.sh: removed directory symlink $DEFAULT_ADMIN_DIR; kept its target"
+elif [[ -d "$DEFAULT_ADMIN_DIR" ]]; then
     for f in "$DEFAULT_ADMIN_DIR"/agent-director-admin "$DEFAULT_ADMIN_DIR"/agent-director-admin.*; do
         [[ -e "$f" || -L "$f" ]] || continue
         rm -f "$f"

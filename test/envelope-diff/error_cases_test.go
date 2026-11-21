@@ -20,6 +20,7 @@ package envelope_diff
 import (
 	"encoding/json"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -36,6 +37,7 @@ import (
 //   - Both err_name values equal the row's expected errName.
 //   - Both err_description values match under the prefix policy (errDescriptionsMatch)
 //     and, for a row with desc, pass apitest.AssertDescription for its case.
+//   - For a row with details, both envelopes carry exactly those err_details.
 func TestEnvelopeDiff_Error(t *testing.T) {
 	binPath := buildCLI(t)
 
@@ -66,6 +68,11 @@ func TestEnvelopeDiff_Error(t *testing.T) {
 				t.Fatalf("CLI exited 0 on error path; stdout:\n%s", cliEnv)
 			}
 
+			cliWant := ec.details
+			if ec.detailsFor != nil {
+				cliWant = ec.detailsFor(t, dbPath1, ctx)
+			}
+
 			// ── 4. Copy (Client) ───────────────────────────────────────
 			homeDir2, dbPath2 := copyFixtureStore(t, srcDir)
 			t.Setenv("HOME", homeDir2)
@@ -74,6 +81,11 @@ func TestEnvelopeDiff_Error(t *testing.T) {
 			clientEnv, errReturned := runClient(t, dbPath2, ec.verb, ec.params(ctx))
 			if !errReturned {
 				t.Fatalf("Client returned success envelope on error path:\n%s", clientEnv)
+			}
+
+			clientWant := ec.details
+			if ec.detailsFor != nil {
+				clientWant = ec.detailsFor(t, dbPath2, ctx)
 			}
 
 			// ── 6. Decode both envelopes ───────────────────────────────
@@ -112,6 +124,22 @@ func TestEnvelopeDiff_Error(t *testing.T) {
 				apitest.AssertDescription(t, cliParsed.ErrDescription, c, forbid...)
 				apitest.AssertDescription(t, clientParsed.ErrDescription, c, forbid...)
 			}
+			// ── 8b. Assert the row's err_details exactly ─────────────────
+			if ec.details != nil || ec.detailsFor != nil {
+				for _, side := range []struct {
+					name string
+					env  []byte
+					want map[string]any
+				}{{"CLI", cliEnv, cliWant}, {"Client", clientEnv, clientWant}} {
+					want := side.want
+					var got struct {
+						ErrDetails map[string]any `json:"err_details"`
+					}
+					if err := json.Unmarshal(side.env, &got); err != nil || !reflect.DeepEqual(got.ErrDetails, want) {
+						t.Errorf("%s err_details = %#v (%v); want %#v\nenvelope: %s", side.name, got.ErrDetails, err, want, side.env)
+					}
+				}
+			}
 
 			// ── 9. Structural diff on the error envelope ───────────────
 			// Verify overall envelope structure is identical; err_description
@@ -130,8 +158,12 @@ func TestEnvelopeDiff_Error(t *testing.T) {
 			// a refused decide's attempt, the hook's first gone instant)
 			// differ between the two runs; every other err_details field,
 			// and the key's presence, must match.
-			diffs := structuralDiff(cliNorm, clientNorm, []string{"err_description",
-				".err_details.attempted_at", ".err_details.hook_gone_at"})
+			ignored := []string{"err_description", ".err_details.attempted_at", ".err_details.hook_gone_at"}
+			if ec.detailsFor != nil {
+				// Each side already checked this instant against its own stored Result.
+				ignored = append(ignored, ".err_details.result.wait.since")
+			}
+			diffs := structuralDiff(cliNorm, clientNorm, ignored)
 			if len(diffs) > 0 {
 				t.Errorf("envelope-diff (error): %q/%q: %d structural field(s) differ:",
 					ec.verb, ec.errName, len(diffs))

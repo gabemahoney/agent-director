@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -46,7 +47,7 @@ func rvReset(t *testing.T, f *v5Store, target string, examined store.ReuseRow, w
 	if want == store.CondApplied {
 		wantV = examined.Snapshot.RowVersion + 1
 	}
-	got, archived, v, err := f.s.ResetForReuse(target, examined.Snapshot, examined.Agent, rvReuseFresh(""))
+	got, archived, v, err := f.s.ResetForReuse(target, examined.Snapshot, examined.Agent, storefix.WithExit(t, f.s, target, rvReuseFresh("")))
 	if err != nil || got != want || archived != wantArchived || v != wantV {
 		t.Fatalf("ResetForReuse = %v, %q, %d, %v; want %v, %q, %d, nil", got, archived, v, err, want, wantArchived, wantV)
 	}
@@ -178,7 +179,7 @@ func rvReuseNoOps() []rowVersionCase {
 			write: func(t *testing.T, f *v5Store, id string) {
 				n := historyLen(t, f, id)
 				row := rvReuseRead(t, f, id)
-				got, archived, v, err := f.s.ResetForReuse(id, row.Snapshot, row.Agent, rvReuseFresh("rv-no-such-parent"))
+				got, archived, v, err := f.s.ResetForReuse(id, row.Snapshot, row.Agent, storefix.WithExit(t, f.s, id, rvReuseFresh("rv-no-such-parent")))
 				if err == nil || errors.Is(err, store.ErrReuseArchive) || got != 0 || archived != "" || v != 0 {
 					t.Fatalf("ResetForReuse(bad parent) = %v, %q, %d, %v; want 0, \"\", 0, a non-archive error", got, archived, v, err)
 				}

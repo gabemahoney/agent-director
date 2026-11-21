@@ -1,5 +1,8 @@
 package api_test
 
+// The rows are Codex's native launches: busy send covers Claude, whose
+// send-keys admits a Message and never reaches native input.
+
 import (
 	"strings"
 	"testing"
@@ -14,7 +17,7 @@ func TestSendKeysUnsafeFramingBeforeInput(t *testing.T) {
 	for _, text := range []string{"hello\x1b[A", "hello\x00world", "hello\tworld", " /exit", "\n!shell", "hello\xff"} {
 		t.Run(text, func(t *testing.T) {
 			e := newNativeSubmissionEnv(t)
-			r := e.seedRow(t, killRowSpec{State: store.StateWaiting})
+			r := e.seedRow(t, codexSpec(store.StateWaiting, agentAlive, false))
 			_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: text})
 			if err == nil || !strings.Contains(err.Error(), "no input was attempted") {
 				t.Errorf("unsafe framing was not refused before input: %v", err)
@@ -27,7 +30,7 @@ func TestSendKeysUnsafeFramingBeforeInput(t *testing.T) {
 func TestSendKeysUnreadyLaunchNeverReceivesInput(t *testing.T) {
 	t.Parallel()
 	e := newNativeSubmissionEnv(t)
-	r := e.seedRow(t, killRowSpec{State: store.StateWaiting})
+	r := e.seedRow(t, codexSpec(store.StateWaiting, agentAlive, false))
 	e.b.ready = func() (bool, error) { return false, nil }
 	_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: "first ordinary prompt"})
 	if err == nil || !strings.Contains(err.Error(), "no input was attempted") {

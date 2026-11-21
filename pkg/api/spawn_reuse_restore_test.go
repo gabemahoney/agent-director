@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -89,6 +90,155 @@ func TestPaneOnlyLaunchFailureFiles(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// F1: fresh reuse remains successful after a lost-reply publication error,
+// retaining its new candidate, covered by its own provider (Claude, Task
+// 2o.iz), until a guarded adoption.
+func TestSpawnReuseLostReplyPublicationPreservesSuccess(t *testing.T) {
+	t.Parallel()
+	e := newReuseEnv(t)
+	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour})
+	prior := seedBusyCoveredConversation(t, e.dbPath, r.ID)
+	rs := &hookedReuseStore{st: e.st}
+	rs.failPublication(nil)
+	e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 0, Applied: true}, tmux.CallCreate)
+
+	result, logs, err := e.reuseWith(t, rs, reuseParams(t, r, reuseRequest{NoPreTrust: true}))
+
+	if err != nil || result.InstanceID != r.ID || result.PreTrust != "skipped" {
+		t.Fatalf("lost-reply reuse=%+v,%v; want baseline instance_id/pre_trust success", result, err)
+	}
+	if !strings.Contains(logs, "WARN") || !strings.Contains(logs, r.ID) || !strings.Contains(logs, errInjectedStore.Error()) {
+		t.Fatalf("publication store error was not warned: %q", logs)
+	}
+	assertBusyProjection(t, e.dbPath, r.ID, prior)
+	assertBusyLaunchPhase(t, e.dbPath, r.ID, "reuse", "uncertain", store.BusySendCovered)
+	facts := busyFacts(t, e.dbPath, r.ID)
+	if len(facts.Conversations) != 2 || len(facts.Launches) != 2 {
+		t.Fatalf("fresh-reuse core=%+v", facts)
+	}
+	for _, c := range facts.Conversations {
+		if c.ID != prior.Binding && (c.Publication != "candidate" || c.Coverage != string(store.BusySendCovered)) {
+			t.Fatalf("fresh reuse candidate = %+v; want a candidate covered by its provider", c)
+		}
+	}
+	cols := e.columns(t, r.ID)
+	if cols.State != store.StatePending || cols.LaunchOwnerPID != nil || cols.LaunchOwnerStarttime != nil || cols.LaunchOwnerPIDNS != nil || cols.TurnStarts != int64(0) {
+		t.Fatalf("reuse restored prior state or retained owner/counter: %+v", cols)
+	}
+	if rs.restores != 0 || rs.publications != 1 || !reflect.DeepEqual(callKinds(e.rec), []tmux.Call{tmux.CallLookup, tmux.CallCreate}) {
+		t.Fatalf("restores=%d, publications=%d, calls=%v; want no restore/recreate", rs.restores, rs.publications, callKinds(e.rec))
+	}
+	create := e.rec.SocketCallsOf(tmux.CallCreate)[0]
+	created := rplSessionNamed(t, e.rec, r.Socket, r.Name)
+	if created.Label != tmuxfix.Valid(create.Token, r.ID, e.storeID) || created.Panes[0].AdPane != create.Token {
+		t.Fatal("lost-reply success lost the created session")
+	}
+	row, err := e.st.GetSpawn(r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, _ := e.rec.Server(r.Socket)
+	identity := store.LaunchIdentity{Token: create.Token, Socket: r.Socket,
+		ServerPID: srv.PID, ServerStart: srv.Start, ServerStarttime: apitest.LinuxProcStarttime,
+		PaneID: created.Panes[0].ID, PanePID: created.Panes[0].PID, PaneStarttime: apitest.LinuxProcStarttime}
+	if res, _, err := e.st.AdoptIdentityIfSameLife(r.ID, row.Snapshot, identity); err != nil || res != store.CondApplied {
+		t.Fatalf("later guarded adoption=%v,%v", res, err)
+	}
+	assertBusyLaunchPhase(t, e.dbPath, r.ID, "reuse", "current", store.BusySendCovered)
+	if published := busyFacts(t, e.dbPath, r.ID); published.Binding == prior.Binding || published.Coverage != store.BusySendCovered {
+		t.Fatalf("reuse adoption did not publish its fresh covered conversation: %+v", published)
+	}
+	if len(e.rec.SocketCallsOf(tmux.CallCreate)) != 1 || rs.restores != 0 {
+		t.Fatal("adoption restored or duplicated the running launch")
+	}
+}
+
+// TestSpawnReusePendingAdmissionBinding (SR-6.3; M1 NoStalePublication): a
+// Message admitted while a covered row's reuse is creating its launch binds
+// to the published conversation and its Agent Defaults (its caller UUID alone
+// confirms it by the published default, which the fresh conversation lacks).
+// A failed or uncertain creation keeps it Held there beside the candidate's
+// record, its Launch covered as Claude's; a published reuse retires the old
+// conversation, finalizing it not_started conversation_replaced, and
+// publishes the fresh conversation's own provider and defaults. A covered
+// deletion that overtakes the reuse
+// finalizes it record_deleted, and the failed creation's restore brings
+// neither the row nor its custody back.
+func TestSpawnReusePendingAdmissionBinding(t *testing.T) {
+	t.Parallel()
+	failed := &tmuxfix.Script{Failure: tmux.FailNoServer, ExitStatus: 1, Times: 1}
+	for _, tc := range []struct {
+		name     string
+		create   *tmuxfix.Script // the create's failure; nil succeeds
+		overtake bool            // a covered deletion runs as the create returns
+		want     error           // the reuse's error
+		phase    string          // the reuse Launch's phase after ("" with the row gone)
+		result   string          // the Message after: its Held wait, or its not_started reason
+	}{
+		{name: "failed creation", create: failed, want: tmux.ErrTmuxSessionCreate, phase: "failed", result: "launch_ended"},
+		{name: "uncertain creation", create: &tmuxfix.Script{Failure: tmux.FailTimeout, Applied: true, Times: 1},
+			want: api.ErrTmuxUnresponsive, phase: "uncertain", result: "agent_starting"},
+		{name: "published", phase: "current", result: "conversation_replaced"},
+		{name: "overtaken by a covered deletion", create: failed, overtake: true, want: tmux.ErrTmuxSessionCreate, result: "record_deleted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newKillEnv(t)
+			c, _ := e.client(t)
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour, Bare: true})
+			seedBusyCovered(t, e, r.ID)
+			if err := apitest.SeedBusySendDefaults(e.dbPath, r.ID, store.BusySendAgentDefaults{SendMode: store.BusySendWaitTurn, Confirmed: true}); err != nil {
+				t.Fatal(err)
+			}
+			prior := busyFacts(t, e.dbPath, r.ID)
+			if tc.create != nil {
+				e.rec.Script(r.Socket, *tc.create, tmux.CallCreate)
+			}
+			adviceOnceAfter(e.rec, tmux.CallCreate, func() {
+				busyAdmit(t, c, api.SendKeysParams{InstanceID: r.ID, Text: "while reusing", CallerUUID: ptr(busyCaller), DeliveryRequestID: "ru-1"})
+				if m := busyFacts(t, e.dbPath, r.ID).Messages; len(m) != 1 || m[0].Conversation != prior.Binding || !m[0].Confirmed {
+					t.Errorf("Messages admitted while pending = %+v; want one, confirmed, in conversation %s", m, prior.Binding)
+				}
+				if tc.overtake {
+					if res, err := adminapi.Delete(c, []string{r.ID}); err != nil || res.Results[r.ID] != "ok" {
+						t.Errorf("overtaking delete = %v, %v; want ok", res.Results, err)
+					}
+				}
+			})
+
+			_, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
+
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("reuse = %v; want %v", err, tc.want)
+			}
+			got := lcLookup(t, c, "ru-1")
+			switch tc.phase {
+			case "":
+				assertRowGone(t, e, r.ID)
+			case "current":
+				facts := busyFacts(t, e.dbPath, r.ID)
+				for _, conv := range facts.Conversations {
+					if conv.ID == prior.Binding && (conv.Publication != "retired" || conv.RetiredReason.String != "conversation_replaced") ||
+						conv.ID == facts.Binding && (conv.Provider != "claude" || conv.Defaults != store.BusySendOutOfBoxDefaults) {
+						t.Errorf("conversation %+v after the published reuse; want the old one retired, the fresh one with its own defaults", conv)
+					}
+				}
+				assertBusyLaunchPhase(t, e.dbPath, r.ID, "reuse", tc.phase, store.BusySendCovered)
+			default:
+				assertBusyProjection(t, e.dbPath, r.ID, prior)
+				assertBusyLaunchPhase(t, e.dbPath, r.ID, "reuse", tc.phase, store.BusySendCovered)
+				if got.Class != "held" || got.Final || got.Wait == nil || got.Wait.Reason != tc.result {
+					t.Errorf("ru-1 = %+v; want Held waiting %s", got, tc.result)
+				}
+				return
+			}
+			if want := lcNotStarted(r.ID, "ru-1", tc.result); !reflect.DeepEqual(got, want) {
+				t.Errorf("ru-1 = %+v; want %+v", got, want)
+			}
+		})
 	}
 }
 
@@ -191,11 +341,12 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 					// Claude, so a codex row's agent column and its subagent_tracking 0 are the ones the reset moved and the restore brings back.
 					// The old life's idle_screen override (90) comes back over the call's (30), on every agent's row.
 					spec := reuseRowSpec{State: prior, Age: time.Hour, NoPreTrust: true,
-						Opts: append(agentRowOpts(rowAgent), apitest.WithIdleScreenTimeout(int64(90)))}
+						Opts: append(agentRowOpts(rowAgent), apitest.WithIdleScreenTimeout(int64(90)), apitest.WithTurnStarts(8))}
 					if prior == store.StateMissing {
 						spec.EndedAt = endedNull
 					}
 					r := e.seedReusable(t, agentGone, spec)
+					priorBusy := seedBusyCoveredConversation(t, e.dbPath, r.ID)
 					tr.arrange(e, r)
 					before, hist := e.columns(t, r.ID), rrHistory(t, e, r.ID)
 					var launching any // the override while the reuse launched
@@ -209,6 +360,9 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 					if launching != int64(30) {
 						t.Errorf("override while launching = %v; want the call's 30", launching)
 					}
+					assertBusyProjection(t, e.dbPath, r.ID, priorBusy)
+					// The reuse launches Claude, a covered agent (Task 2o.iz).
+					assertBusyLaunchPhase(t, e.dbPath, r.ID, "reuse", "failed", store.BusySendCovered)
 					assertLaunchSentinel(t, err, tr.want)
 					c := rlOneCreate(t, e, r.Socket, tr.calls...)
 					restore := apitest.ResumeRestore{Outcome: apitest.RestoreApplied, PriorState: prior, Launch: apitest.LaunchReuse}
@@ -228,6 +382,13 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 					// AC-REUSE-07: with the cause gone, an immediate second reuse launches.
 					if _, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{})); err != nil {
 						t.Fatalf("second reuse: %v", err)
+					}
+					assertBusyLaunchPhase(t, e.dbPath, r.ID, "reuse", "current", store.BusySendCovered)
+					if facts := busyFacts(t, e.dbPath, r.ID); facts.Binding == priorBusy.Binding || facts.Coverage != store.BusySendCovered {
+						t.Fatal("successful retry inherited old conversation")
+					}
+					if cols := e.columns(t, r.ID); cols.TurnStarts != int64(0) {
+						t.Errorf("retry counter=%v", cols.TurnStarts)
 					}
 					wantLife := reuseLife
 					if r.Spawn.Agent != "claude" {
@@ -382,7 +543,15 @@ func TestSpawnReuseRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
 	}{
 		{"parent id written", func(e *killEnv, id, other string) error { return e.st.SetParentID(id, other) },
 			apitest.RestoreRowChanged},
-		{"row deleted", func(e *killEnv, id, _ string) error { return e.st.DeleteSpawn(id) }, apitest.RestoreRowRemoved},
+		// Administrator deletion: a covered conversation (a Claude row, Task
+		// 2o.iz) is deleted with its old Launch's exit evidence.
+		{"row deleted", func(e *killEnv, id, _ string) error {
+			res, err := api.DeleteRowsWith(e.st, e.pc, []string{id})
+			if err == nil && res.Results[id] != "ok" {
+				err = errors.New(res.Results[id])
+			}
+			return err
+		}, apitest.RestoreRowRemoved},
 		{"restore store error", nil, apitest.RestoreStoreError},
 	}
 	for _, agent := range []string{"claude", "cursor"} {

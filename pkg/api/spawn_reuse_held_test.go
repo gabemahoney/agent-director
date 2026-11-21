@@ -140,7 +140,7 @@ func TestSpawnReuseHeldRowResult(t *testing.T) {
 		{name: "row deleted at the create", outcome: apitest.RestoreRowRemoved, rowResult: "left_changed",
 			arrange: func(t *testing.T, e *killEnv, s *ruhScene, _ *hookedReuseStore) {
 				e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) {
-					if err := e.st.DeleteSpawn(s.r.ID); err != nil {
+					if err := storefix.DeleteWithExit(t, e.st, s.r.ID); err != nil {
 						t.Errorf("DeleteSpawn: %v", err)
 					}
 				})

@@ -2,7 +2,9 @@ package api_test
 
 // lookup_calltable_sendkeys_test.go is send-keys' two rows of the call-site
 // table (lookup_calltable_test.go; SR-7.2, SR-7.3, SR-20.6): the live row,
-// and a pending row sent to with allow_pending (SR-7.1, SR-22.8). Only the
+// and a pending row sent to with allow_pending (SR-7.1, SR-22.8), each a
+// pane-only Droid row's (busy send covers Claude, whose send types nothing):
+// its text call carries its Enter, with no recheck before it. Only the
 // text call is failed in the action columns. The agent's pane and lost
 // replies are readpane_pane_test.go's (TestPaneVerbs*); the Enter-call
 // failures, the other follow-up outcomes and the adoption write are
@@ -32,8 +34,8 @@ func sendKeysCallTableInvoke(allowPending bool) func(*testing.T, *killEnv, killR
 		typed := len(e.rec.SocketCallsOf(tmux.CallSendText)) > 0
 		if typed {
 			pane := labelledPane(t, r.Session, r.Session.Label.Token)
-			assertTextSent(t, e.rec, r.Socket, pane, callTableKeys)
-			for _, c := range e.rec.SocketCallsOf(callEnterKey) {
+			assertTextCall(t, e.rec, r.Socket, pane, callTableKeys, e.paneOnlyRows())
+			for _, c := range e.rec.SocketCallsOf(e.rowEnterCall()) {
 				if c.Socket != r.Socket || c.Target != pane {
 					t.Errorf("Enter to %q on %s; want %q on %s", c.Target, c.Socket, pane, r.Socket)
 				}
@@ -56,7 +58,7 @@ func callTableSendKeys() callTableVerb {
 		}}
 	cells := callTableLookupRefusals()
 	maps.Copy(cells, map[callTableOutcome]callTableCell{
-		ctOurs: {sent: true, calls: paneSendCalls},
+		ctOurs: {sent: true, calls: paneOnlySendCalls},
 		ctLeftover: {errName: "ErrTmuxSessionConflict", calls: []tmux.Call{tmux.CallLookup},
 			desc: func(_ *killEnv, r killRow) apitest.DescCase {
 				return apitest.DescPaneLeftover(apitest.PaneLeftover{Verb: apitest.PaneSendKeys, InstanceID: r.ID,
@@ -71,11 +73,11 @@ func callTableSendKeys() callTableVerb {
 		ctGoneEmptyServer:          gone,
 		ctGoneNoServer:             gone,
 		ctGoneNoSocket:             gone,
-		ctActionRecognised: {errName: "ErrTmuxUnresponsive", sent: true, calls: withFollowUp(paneTextCalls),
+		ctActionRecognised: {errName: "ErrTmuxUnresponsive", sent: true, calls: withFollowUp(paneOnlyTextCalls),
 			desc: func(*killEnv, killRow) apitest.DescCase {
 				return apitest.DescUnrecognisedReply(tmux.CallSendText, "").AfterTextFailed()
 			}},
-		ctActionTimeout: {errName: "ErrTmuxUnresponsive", sent: true, calls: paneTextCalls,
+		ctActionTimeout: {errName: "ErrTmuxUnresponsive", sent: true, calls: paneOnlyTextCalls,
 			desc: func(e *killEnv, _ killRow) apitest.DescCase {
 				return apitest.DescKeysTimeout(apitest.PaneSendKeys, tmux.CallSendText, e.cfg.EffectiveActionTimeout())
 			}},
@@ -83,9 +85,10 @@ func callTableSendKeys() callTableVerb {
 	maps.Copy(cells, callTableUnusableRefused())
 	return callTableVerb{
 		name:        "send-keys",
+		agent:       store.AgentDroid,
 		invoke:      sendKeysCallTableInvoke(false),
 		firstAction: tmux.CallSendText,
-		actions:     []tmux.Call{tmux.CallSendText, callEnterKey},
+		actions:     []tmux.Call{tmux.CallSendText, tmux.CallSendEnter},
 		cells:       cells,
 	}
 }
@@ -98,21 +101,7 @@ func callTableSendKeysPending() callTableVerb {
 	v := callTableSendKeys()
 	v.name = "send-keys, pending with allow_pending"
 	v.invoke = sendKeysCallTableInvoke(true)
-	v.startBeforeInput = true
 	v.cells = maps.Clone(v.cells)
-	// b.qcf: pending Claude reads terminal mode and rechecks ownership before input.
-	for _, outcome := range []callTableOutcome{ctOurs, ctActionRecognised, ctActionTimeout} {
-		cell := v.cells[outcome]
-		cell.calls = slices.Insert(slices.Clone(cell.calls), 2, tmux.CallPaneTerminal, tmux.CallPaneTerminal, tmux.CallLookup, tmux.CallListPanes)
-		if outcome == ctOurs {
-			cell.errName = "ErrSubmissionUnconfirmed"
-			cell.desc = func(_ *killEnv, r killRow) apitest.DescCase {
-				return apitest.DescCase{Name: "pending Claude submission", Require: []string{r.ID,
-					"Claude Code submission could not be confirmed", "no turn activity was observed within 2 seconds"}}
-			}
-		}
-		v.cells[outcome] = cell
-	}
 	v.cells[ctLeftover] = callTableCell{errName: "ErrSpawnNotInteractive", calls: []tmux.Call{tmux.CallLookup},
 		desc: func(_ *killEnv, r killRow) apitest.DescCase {
 			return apitest.DescSendKeysPendingLeftover(r.ID, []apitest.DescSession{{Name: r.Session.Name, ID: r.Session.ID}})

@@ -17,6 +17,9 @@ the [caller contract](../../docs/caller-contract.md).
   - [ReadPane](#readpane)
   - [Kill](#kill)
   - [Sweep](#sweep)
+  - [Pause](#pause)
+  - [ForceDelivery](#forcedelivery)
+  - [GetForce and GetDelivery](#getforce-and-getdelivery)
 - [Permission relay](#permission-relay)
 - [Version mapping](#version-mapping)
 - [Errors](#errors)
@@ -126,6 +129,19 @@ asynchronous failures are covered by
 timeout in whole seconds (0 for none); its range and lifecycle are in
 [Configuration](../../docs/configuration.md#idle-screen-timeout-state).
 
+Claude's defaults are Wait Turn and unconfirmed delivery; resume carries Held
+Messages without replaying startup input.
+
+`SpawnParams`, `ResumeParams` and `MakeTemplateParams` take the Agent Defaults
+`SendMode` and `ConfirmedDelivery` and the experimental
+`ConfirmFromTranscripts` ([Confirm From Transcripts](../../docs/caller-contract.md#confirm-from-transcripts)).
+It relies on agent internals with no published contract and may change without
+notice; changes to this setting or its reports are not breaking changes.
+Each is a pointer: nil leaves it unset, and a pointer
+to any value, `false` or `"wait_turn"` included, sets it. They apply only to
+Covered Agents; see
+[Busy-send options](../../docs/caller-contract.md#busy-send-options).
+
 Returns `SpawnResult`:
 
 - `InstanceID`: the tracked id.
@@ -137,8 +153,8 @@ Returns `SpawnResult`:
   [Cursor launch settings](../../docs/settings.md#cursor-launch-settings).
 
 Input errors include `ErrAgentMissing`, `ErrAgentInvalid`,
-`ErrAgentArgsMismatch`, `ErrTemplateAgentMissing`, `ErrPermissionsUnsupported`
-and `ErrSpawnDeniedFlag`; meanings and handling are in
+`ErrAgentArgsMismatch`, `ErrTemplateAgentMissing`, `ErrPermissionsUnsupported`,
+`ErrSpawnDeniedFlag` and `ErrCantSend`; meanings and handling are in
 [Spawn and template input refusals](../../docs/caller-contract.md#spawn-and-template-input-refusals).
 Other common errors: `ErrCwdNotFound`, `ErrCwdNotADirectory`,
 `ErrRelayModeInvalid`, `ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`,
@@ -224,6 +240,17 @@ in [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-
 
 ### GetMany
 
+`Get` and each found `GetMany` row expose `BusySend`; covered rows also have
+`AgentDefaults`, `Delivery` and `DeliveryCapabilities`. `Status` has defaults
+and delivery facts; `List` has defaults. Reads deliver nothing. See
+[Busy-send coverage](../../docs/caller-contract.md#busy-send-coverage).
+`DeliveryCapabilities.Force` is a `*DeliveryForceCapability` (nil when none)
+whose `States` are `DeliveryForceState` rows
+([Claude Code force capability](../../docs/caller-contract.md#claude-code-force-capability)).
+`ConfirmFromTranscriptsCapability` is one of the `api.ConfirmFromTranscripts*`
+constants, with `ConfirmFromTranscriptsReason`
+([Confirm From Transcripts](../../docs/caller-contract.md#confirm-from-transcripts)).
+
 ```go
 	result, err := c.GetMany([]string{"agent-b", "unknown", "agent-a"})
 	if err != nil {
@@ -307,19 +334,15 @@ not a `RelayView`. See `(*Client).ListSubagents` godoc.
 
 ### SendKeys
 
-Send text into the agent's own pane. CR bytes (`\r`, `0x0D`) are
-stripped automatically before delivery to prevent premature buffer
-submission; LF bytes (`\n`, `0x0A`) are preserved as composed newlines
-in the agent's input box. A single Enter is appended to submit the buffer
-unless `NoEnter`; an empty `Text` sends that Enter only, submitting what
-is already typed. `Key` sends one key alone instead (a named key `Escape`,
-`Enter`, `Up`, `Down`, `Tab`, or one character), with no Enter. With
-`ExpectPaneSHA256` (the `PaneSHA256` of the `ReadPane` you looked at, with
-its `NLines`) the pane is checked first and nothing is sent if it changed
-(`ErrPaneChanged`); on a relayed Spawn a match also passes the API's dialog hold
-(`ErrDialogMaybeOpen`, below). Set it only for a pane a person or an LLM
-judged, never from an automatic flow. There is no flag to suppress CR
-stripping; it applies to every call.
+Behavior follows `Get`/`GetMany`'s `BusySend`. Covered Claude stores an ordinary
+Message byte for byte; CR is refused, empty text and raw-key parameters are
+malformed, and `AllowPending` changes nothing. Busy, permission and dialog
+boundaries hold accepted Messages instead of refusing or typing them.
+A successful send returns `SendKeysResult.Delivery *DeliveryResult`, never
+`ErrSubmissionUnconfirmed`; shared fields such as `Class` and `RequestID`
+repeat the Result for Go callers. See [Covered sends](../../docs/caller-contract.md#covered-sends).
+
+This send uses the target's defaults:
 
 ```go
 _, err := c.SendKeys(api.SendKeysParams{
@@ -331,21 +354,58 @@ if err != nil {
 }
 ```
 
-On a supported native launch, ordinary nonempty text with Enter and no pane
-hash returns `SendKeysResult` with `Outcome: "submitted"`, `RequestID`,
-`SessionID`, `RecordSHA256` and optional `RecordID`. `DeliveryRequestID`
-identifies one attempt. Fallback and manual operations (`NoEnter`, `Key`,
-empty text, pane hashes and permission answers) return an empty result on
-success. Supported launches, proof, request-ID rules and recovery are in
-[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission);
-manual guards are in [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
-Most-likely sentinel errors: `ErrSpawnNotFound`, `ErrSpawnNotInteractive`,
-`ErrSubmissionUnconfirmed`, `ErrInvalidFlags`, `ErrSendKeysWhileRelayed`,
-`ErrRelayFallenBack`, `ErrDialogMaybeOpen`, `ErrPaneChanged`, `ErrTmuxSendKeys`,
-`ErrTmuxSessionConflict`, `ErrTmuxUnresponsive` and `ErrTmuxNotAvailable`.
-`api.ErrDetails(err)` gives structured submission, permission and pane facts.
-Permission holds, retry rules and timeout recovery are in the
-[caller contract](../../docs/caller-contract.md#permission-relay).
+For a confirmed Wait Turn Message, keep your pair for later reads or a repeat:
+
+```go
+mode, confirmed := "wait_turn", true
+caller := "7af00f9e-f42d-4a24-9cc1-c9697d17c261"
+sent, err := c.SendKeys(api.SendKeysParams{
+    InstanceID: id, Text: "Review the project entry points",
+    SendMode: &mode, ConfirmedDelivery: &confirmed, CallerUUID: &caller,
+    DeliveryRequestID: "review-1",
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(sent.Delivery.Class, sent.Delivery.Final)
+lookup, err := c.GetDelivery(api.GetDeliveryParams{
+    CallerUUID: caller, DeliveryRequestID: "review-1",
+})
+if err != nil {
+    log.Fatal(err)
+}
+if lookup.Result != nil {
+    fmt.Println(lookup.Lookup, lookup.Result.Class, lookup.Result.Final)
+}
+```
+
+The default is unconfirmed: no pair and no lookup. Result semantics and safe
+repeat rules live in the [caller contract](../../docs/caller-contract.md#message-results).
+
+Uncovered Codex, Cursor and pane-only agents keep their native/manual paths.
+For those agents CR is stripped, LF preserved and one Enter appended unless
+`NoEnter`; empty `Text` sends Enter only and `Key` sends one key alone.
+`ExpectPaneSHA256`, with the inspected `ReadPane`'s `NLines`, guards that
+exact screen. A supported native Codex send returns `Outcome: "submitted"`
+and receipt fields; fallback and manual success return an empty result.
+Their errors include `ErrSubmissionUnconfirmed`, state, relay and dialog
+refusals. See [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission),
+[Manual input ownership](../../docs/caller-contract.md#manual-input-ownership)
+and [Permission relay](../../docs/caller-contract.md#permission-relay).
+
+`SendMode`, `ConfirmedDelivery`, `CallerUUID` and `Force` are pointers with
+the same rule as Spawn's Agent Defaults: nil omits one, and any value names
+it. They apply only to Covered Agents; when the target's current launch is not
+covered, a call naming one
+returns `ErrCantSend` (see [Errors](#errors)) and sends nothing. See
+[Busy-send options](../../docs/caller-contract.md#busy-send-options).
+
+With `Force: &force` (`force := true`), an accepted send also forces the
+agent's Held Messages, as [ForceDelivery](#forcedelivery) does, and blocks for
+up to about 15 seconds: `SendKeysResult.Force` is that attempt's
+`*ForceResult`, nil for any other send, and its JSON is `force_result`. A
+force-step error returns `ErrSendAcceptedForceFailed` with the accepted
+result; see [Errors](#errors).
 
 `SendKeysContext(ctx, params)` uses the caller's context; `SendKeys` uses a
 background context. A cleanup error can accompany a confirmed result;
@@ -355,7 +415,8 @@ for cancellation and retry rules.
 
 #### `AllowPending` — reaching a `pending` launch
 
-Set `AllowPending: true` to allow input to a pending launch, for example a
+For covered Claude, `AllowPending` is ignored. For uncovered agents, set
+`AllowPending: true` to allow input to a pending launch, for example a
 startup choice with `Key: "Enter"`. It defaults to false and does not bypass
 ownership, readiness, relay or dialog guards. See
 [Pending rows and startup screens](../../docs/caller-contract.md#pending-rows-and-startup-screens).
@@ -402,21 +463,13 @@ paths:
   `PasteKeysPaneGuarded(socket, paneID, text string, beforeWrite func(enter bool) error) error`.
   It invokes the guard immediately before paste and Enter and stops on refusal,
   with the same framing and error rules as `PasteKeysTmux`.
-- `PaneTerminalTmux` supports ordinary pending Claude fallback:
-  `PaneTerminalRaw(socket, paneID string, maxWait time.Duration) (bool, error)`.
-  It reports whether canonical mode, echo and CR-to-NL translation are all off,
-  without writing to the terminal. `maxWait` bounds the tmux read and pipe-close
-  wait together; a nonpositive allowance refuses without invoking tmux. tmux
-  failures use `*TmuxCallError` with `TmuxCallPaneTerminal`; terminal-device
-  failures retain their OS error.
-
-Adapters without the needed capability remain source-compatible but receive a
-pre-input `not_started` refusal on that path. The default client provides all three.
+Adapters without a needed paste capability receive a pre-input `not_started`
+refusal on that fallback path. The default client provides both.
 See their godoc for each field's contract.
 
 ```go
 _, err := c.SendKeys(api.SendKeysParams{
-    InstanceID:   "claude_2026-05-22T18-23-15",
+    InstanceID:   "codex_example",
     Text:         "",       // press Enter to dismiss the prompt
     AllowPending: true,
 })
@@ -519,6 +572,60 @@ grace, budget, clock and logger arguments as `FindMissing`. `FindMissing` and
 live identities and its available checks, so it cannot promise an all-agent
 snapshot and reports unsupported coverage explicitly.
 
+---
+
+### Pause
+
+`c.Pause(ctx, api.PauseParams{InstanceID: id})` is keyless for covered Claude
+in any live state. It preserves Held Messages for resume and returns
+`ErrSpawnNotPausable` with `NotPausableDetails` on refusal; see
+[keyless pause](../../docs/caller-contract.md#keyless-pause-of-a-covered-agent).
+For uncovered agents it types exit only while waiting and can return
+`ErrPauseTimeout` (see [Errors](#errors)). A finished row is a no-op, unless
+a [pause claim](../../docs/caller-contract.md#standing-pause-claims) still
+stands or `OnlyIfWaiting` is refused below.
+
+`PauseParams.OnlyIfWaiting: true` ends a Covered Agent only if it is waiting
+with no turn pending, else returns `ErrSpawnNotPausable` with
+`api.ErrDetails(err)` a `NotPausableDetails` whose `Cause` is `"not_waiting"`,
+with the raw state in `ObservedState`, or `"turn_pending"`; nothing is
+changed. When the row's current launch is not covered, `true` returns
+`ErrSpawnNotPausable` in any row state, `Cause` `"agent_not_covered"`;
+nothing is ended. `SignalSent` is a `*bool`, nil when not known or not
+applicable. `false` is the default pause. Causes, retries, standing claims and
+limits are in
+[Pause only if waiting](../../docs/caller-contract.md#pause-only-if-waiting).
+
+---
+
+### ForceDelivery
+
+`res, err := c.ForceDelivery(api.ForceDeliveryParams{InstanceID: id})` forces
+a Covered Agent's Held Messages and blocks for up to about 15 seconds. It
+returns `ForceDeliveryResult`, whose `ForceResult` has `ForceID`, `Outcome`
+(`api.ForceOutcomeHandedOver`, `ForceOutcomePending`, `ForceOutcomeRefused` or
+`ForceOutcomeFailed`), `Reason`, `StartedAt`, `EndedAt` (`*time.Time`, nil
+while pending), `CarriedPairs` and `CarriedResults` (`[]DeliveryResult`; both
+never nil). Keep `res.ForceResult.ForceID` for `GetForce`. Outcomes, reasons
+and errors are in
+[Stored force attempts](../../docs/caller-contract.md#stored-force-attempts).
+
+---
+
+### GetForce and GetDelivery
+
+`c.GetForce(api.GetForceParams{ForceID: id})` returns `GetForceResult`
+(`Lookup`, `ForceResult *ForceResult`). A read's `Outcome` may also be
+`api.ForceOutcomeRunning`, with `Reason` `""`, while the attempt's call has
+not returned; so may `Delivery.Force` on `Get`, `GetMany` and `Status`.
+`c.GetDelivery(api.GetDeliveryParams{CallerUUID: caller, DeliveryRequestID: request})`
+returns `GetDeliveryResult` (`Lookup`, `Result *DeliveryResult`). `Lookup` is
+`"found"`, `"unknown"` or `"retention_expired"`; the pointer is nil unless
+`"found"`. `DeliveryResult` carries the Result's `Class`, `Final`, `Reason`,
+`ResendSafe`, `RetryWith`, `Wait` (nil when final), target, hand-over binding,
+receipt identity and `Outcome`, never the Message text. See
+[Durable lookups](../../docs/caller-contract.md#durable-lookups).
+
 ## Permission relay
 
 `(*Client).Decide` returns a `DecideResult` embedding `RequestDelivery`.
@@ -539,16 +646,18 @@ Closed requests stay closed after `Resume`; `GetPermission` can still read
 their delivery. Requests with no recorded settle instant follow
 [time-derived delivery](../../docs/permissions.md#requests-with-no-recorded-settle-instant).
 `ErrRelayFallenBack` carries `RelayFallenBackDetails` from `api.ErrDetails`.
-`SendKeys` answers a pane request using `RequestToken`, `As`, `Key` and
-`ExpectPaneSHA256`. `RecordPaneAnswer` records an outside answer using
+For uncovered agents, `SendKeys` answers a pane request using `RequestToken`, `As`, `Key` and
+`ExpectPaneSHA256`. Covered Claude uses [direct tmux](../../docs/permissions.md#answering-at-the-pane).
+`RecordPaneAnswer` records an outside answer using
 `RequestToken`, `As`, `ExpectPaneSHA256` and `NLines`, without typing.
 `PaneAnswer` is `sent`, `outside` or `tool_ran`; `PaneAs` is the caller's claim.
 `Pause` accepts no pane hash. Handling and dialog proof are defined in
 [Permission relay](../../docs/caller-contract.md#permission-relay).
-`api.DetailedError` is the error type that carries such facts: its `Err`
+Local errors carry such facts in `api.DetailedError`: its `Err`
 holds the catalogued sentinel (`errors.Is` sees through it) and `Details`
 the object; `api.ErrDetails(err)` returns the `Details` of the first one in
-`err`'s chain, or nil. `ErrPaneChanged` (`PaneChangedDetails`),
+`err`'s chain, or nil. Delegated `resume` uses the [raw details described below](#errors).
+`ErrPaneChanged` (`PaneChangedDetails`),
 `ErrPaneAnswerInProgress` (`PaneAnswerInProgressDetails`),
 `ErrClaimTooSoon` (`ClaimTooSoonDetails`), `ErrDialogMaybeOpen`
 (`DialogMaybeOpenDetails`) and `ErrTooManyIds` (`TooManyIdsDetails`)
@@ -573,12 +682,29 @@ binary: `pkg/api@v0.X.Y` requires binary `v0.X.Y`.
 
 Named errors can wrap sentinel values and structured details. Use `errors.Is`
 to inspect them — never compare error strings.
+Delegated `resume` preserves known `errors.Is` identity; its details remain raw
+`json.RawMessage` even for a known sentinel, including explicit null (nil means
+omitted). Decode those details instead of assuming the local concrete type;
+see [Covering-version resume](../../docs/architecture.md#covering-version-resume).
 
-`ErrPauseTimeout` matches with `errors.Is`; `api.ErrDetails(err)`
+For uncovered agents, `ErrPauseTimeout` matches with `errors.Is`; `api.ErrDetails(err)`
 returns an `api.PauseTimeoutDetails` value after exit keys were sent but
 `ended` was not observed. Its fields are `InspectionRequired`, `ExitKeysSent`,
 `ExitConfirmed` and `RowState`, with the shared meanings and recovery in
 [When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit).
+
+For local `ErrCantSend`, `errors.Is` matches and `api.ErrDetails(err)` returns an
+`api.CantSendDetails` with `Class`, `Reason`, `ResendSafe` and `RetryWith`.
+`Limit` describes a capacity refusal; `Result` carries the owner of a
+conflicting pair. Both are nil for `"agent_not_covered"`. Meanings are in
+[Busy-send refusals](../../docs/caller-contract.md#busy-send-refusals).
+
+For local `ErrSendAcceptedForceFailed`, use `errors.Is(err,
+api.ErrSendAcceptedForceFailed)`; `api.ErrDetails(err)` returns
+`api.SendAcceptedForceFailedDetails`, whose required `Result` is the accepted
+`DeliveryResult`. `SendKeys` also returns its populated `SendKeysResult`
+beside the error. Never send the Message as new; recovery and stored-force
+deadlines are in [Stored force attempts](../../docs/caller-contract.md#stored-force-attempts).
 
 ```go
 res, err := c.SendKeys(api.SendKeysParams{

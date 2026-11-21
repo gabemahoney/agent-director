@@ -1,9 +1,10 @@
 package main_test
 
 // dialog_hold_codex_cli_test.go — demo step 3 of b.ssz Epic 4 through the
-// built CLI and its real hooks: the Codex variant of the b.146 step 2c hold
-// (dialog_hold_cli_test.go). Which hook proves what on Codex is internal/hook's
-// and pkg/api's; this is the one flow whose facts the envelope carries.
+// built CLI and its real hooks: b.146 step 2c's hold on an agent busy send
+// doesn't cover (a covered Claude send is Held instead, never refused). Which
+// hook proves what is internal/hook's and pkg/api's; this is the one flow
+// whose facts the envelope carries.
 
 import (
 	"encoding/json"
@@ -75,22 +76,16 @@ func TestCLICodexDialogHeldUntilAnInterruptProvesItGone(t *testing.T) {
 	assertUnproven(t, h.home, id)
 }
 
-// TestCLIClaudeDialogHoldKeepsItsText: the same refusal on a Claude row keeps
-// its own description (the end of the main agent's turn and the subagent's
-// SubagentStop; b.wbs), unchanged by the Codex wording.
-func TestCLIClaudeDialogHoldKeepsItsText(t *testing.T) {
-	h := newGateHome(t)
-	const id = "id-cli-hold-claude-text"
-	h.seedAgentRow(t, id, "claude", hook.RelayModeOn)
-	writeRelayTimeout(t, h.home)
-	h.hook(t, id, hook.RelayModeOn,
-		`{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"},"tool_use_id":"toolu_cli_text"}`)
-
-	env := cliErrorEnvelope(t, h.home, "send-keys", "--instance-id", id, "--text", "hi")
-
-	var description string
-	if string(env["err_name"]) != `"ErrDialogMaybeOpen"` || json.Unmarshal(env["err_description"], &description) != nil {
-		t.Fatalf("send-keys envelope = %v; want ErrDialogMaybeOpen with a description", env)
+// assertUnproven fails unless get's unproven_requests for id are exactly tokens.
+func assertUnproven(t *testing.T, home, id string, tokens ...string) {
+	t.Helper()
+	reqs, ok := cliJSON(t, home, "get", "--instance-id", id)["unproven_requests"].([]any)
+	if !ok || len(reqs) != len(tokens) {
+		t.Fatalf("get unproven_requests = %v; want %v", reqs, tokens)
 	}
-	apitest.AssertDescription(t, description, apitest.DescDialogMaybeOpenClaude())
+	for i, r := range reqs {
+		if m, _ := r.(map[string]any); m["request_token"] != tokens[i] {
+			t.Errorf("get unproven_requests[%d] = %v; want %s", i, r, tokens[i])
+		}
+	}
 }

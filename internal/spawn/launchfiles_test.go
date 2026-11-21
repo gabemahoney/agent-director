@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"golang.org/x/sys/unix"
 )
@@ -77,6 +78,55 @@ func TestPaneOnlyLaunchFiles(t *testing.T) {
 				t.Fatalf("absent directory: %v", err)
 			}
 		})
+	}
+}
+
+// TestBusySendWakeEndpoint (SR-3.4, SR-7.2): a covered Claude Launch's wake
+// endpoint is an empty private file at store.BusySendWakePath in its private
+// launch directory; preparing it again keeps it, a symbolic link in its place
+// is refused with its target untouched, and reclaim removes it with the
+// then-empty directory.
+func TestBusySendWakeEndpoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	mask := unix.Umask(0)
+	t.Cleanup(func() { unix.Umask(mask) })
+	want, err := store.BusySendWakePath("store", "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		path, err := PrepareBusySendWake("store", "token")
+		if err != nil || path != want {
+			t.Fatalf("PrepareBusySendWake = %q, %v; want %q", path, err, want)
+		}
+		for p, mode := range map[string]os.FileMode{path: 0600, filepath.Dir(path): 0700 | os.ModeDir} {
+			if info, err := os.Lstat(p); err != nil || info.Mode() != mode || (p == path && info.Size() != 0) {
+				t.Fatalf("%s: %v, %v; want mode %v, and an empty file", p, info, err, mode)
+			}
+		}
+	}
+	if err := reclaimLaunchFiles("store", "token"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Dir(want)); !os.IsNotExist(err) {
+		t.Fatalf("launch directory after reclaim: %v; want removed", err)
+	}
+
+	outside := filepath.Join(t.TempDir(), "untouched")
+	if err := os.WriteFile(outside, []byte("untouched"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(want), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, want); err != nil {
+		t.Fatal(err)
+	}
+	if path, err := PrepareBusySendWake("store", "token"); err == nil {
+		t.Fatalf("PrepareBusySendWake over a symbolic link = %q; want refused", path)
+	}
+	if got, err := os.ReadFile(outside); err != nil || string(got) != "untouched" {
+		t.Fatalf("link target = %q, %v; want untouched", got, err)
 	}
 }
 

@@ -466,8 +466,16 @@ func (w *hookedReuseStore) ResetForReuse(instanceID string, examined api.RowSnap
 	return res, archived, version, err
 }
 
+// ReadBusySendExitScope delegates, so reuse judges the exit scope the store holds.
+func (w *hookedReuseStore) ReadBusySendExitScope(instanceID string) (store.BusySendExitScope, error) {
+	return w.st.ReadBusySendExitScope(instanceID)
+}
+
 // RestoreAfterFailedReuse delegates.
 func (w *hookedReuseStore) RestoreAfterFailedReuse(instanceID string, resetVersion int64, prior store.RawLife, failedAt time.Time) (api.CondResult, error) {
+	w.mu.Lock()
+	w.restores++
+	w.mu.Unlock()
 	return w.st.RestoreAfterFailedReuse(instanceID, resetVersion, prior, failedAt)
 }
 
@@ -562,6 +570,19 @@ func (e *killEnv) assertReused(t *testing.T, r reuseRow, life any, calls int, er
 	if token == r.Token || labelled != 1 {
 		t.Errorf("token %q (was %q), %d sessions labelled with it; want a new token on one session", token, r.Token, labelled)
 	}
+}
+
+// PublishBusySendLaunch forwards successful creation without an identity reply.
+func (w *hookedReuseStore) PublishBusySendLaunch(id string, version int64, token string) (api.CondResult, error) {
+	if err := w.publicationError(); err != nil {
+		return 0, err
+	}
+	return w.st.PublishBusySendLaunch(id, version, token)
+}
+
+// MarkBusySendLaunchUncertain forwards the creation outcome to the real core.
+func (w *hookedReuseStore) MarkBusySendLaunchUncertain(id, token string) error {
+	return w.st.MarkBusySendLaunchUncertain(id, token)
 }
 
 // passingDroidGuard supplies the shared stand-in to serial launch tests.

@@ -1,0 +1,87 @@
+{
+  "provider": "Claude Code 2.1.311",
+  "public": {
+    "caller_uuid": "00000000-0000-4000-8000-000000000001",
+    "request_id": "21-idleA-force",
+    "class": "held",
+    "final": false,
+    "reason": "readiness_unknown",
+    "resend_safe": false,
+    "retry_with": "none",
+    "wait": {
+      "reason": "readiness_unknown",
+      "since": "2026-11-16T08:58:11.101Z"
+    },
+    "forced": false,
+    "instance_id": "historical-e5-parent",
+    "launch_token": null,
+    "evidence_kind": null,
+    "outcome": "not_started",
+    "force_result": {
+      "force_id": "00000000-0000-4000-8000-000000000002",
+      "outcome": "handed_over",
+      "reason": "admitted",
+      "started_at": "2026-11-16T08:58:11.103Z",
+      "ended_at": "2026-11-16T08:58:11.811Z",
+      "carried_pairs": [
+        {
+          "caller_uuid": "00000000-0000-4000-8000-000000000001",
+          "request_id": "21-idleA-force"
+        }
+      ],
+      "carried_results": [
+        {
+          "caller_uuid": "00000000-0000-4000-8000-000000000001",
+          "request_id": "21-idleA-force",
+          "class": "sent_unconfirmed",
+          "final": true,
+          "reason": "handed_over_not_proven",
+          "resend_safe": false,
+          "retry_with": "none",
+          "wait": null,
+          "forced": true,
+          "instance_id": "historical-e5-parent",
+          "launch_token": "a5995a496ba830af",
+          "session_id": "00000000-0000-4000-8000-000000000003",
+          "evidence_kind": null,
+          "outcome": "submission_unconfirmed"
+        }
+      ]
+    }
+  },
+  "force": {
+    "force_id": "00000000-0000-4000-8000-000000000002",
+    "instance_id": "historical-e5-parent",
+    "handover_id": "00000000-0000-4000-8000-000000000004",
+    "outcome": "handed_over",
+    "reason": "admitted",
+    "started_at_ms": 1794819491103,
+    "call_deadline_ms": 1794819506103,
+    "call_ended_at_ms": 1794819491811,
+    "ended_at_ms": 1794819491811
+  },
+  "prompt": {
+    "handover_id": "00000000-0000-4000-8000-000000000004",
+    "prompt_index": 0,
+    "message_count": 1,
+    "rendered_bytes": 257,
+    "emission": "issued",
+    "intent_at_ms": 1794819491722,
+    "issued_at_ms": 1794819491722,
+    "released_at_ms": null,
+    "transport": "written",
+    "order_kind": "emission_complete",
+    "order_at_ms": 1794819491725,
+    "admission_kind": "prompt_sighting",
+    "admitted_at_ms": 1794819491762,
+    "negative_kind": null,
+    "fenced_at_ms": null
+  },
+  "candidate": {
+    "version": "0.19.0-rc.kii.e5",
+    "commit": "f495ac3ecde68c07d4df508e058ef8dbb9dc210d",
+    "config_dir": "~/.config/agent-director"
+  },
+  "run": "ac7-live-20261116",
+  "rules": "historical pre-wake-order revision; order_kind is NOT revised-order proof"
+}

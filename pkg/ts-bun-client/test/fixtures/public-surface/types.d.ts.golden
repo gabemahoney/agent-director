@@ -399,9 +399,122 @@ export interface ListRow {
      * `displayed_state`).
      */
     permission_requests: PermissionRequestInfo[];
+    /** A covered row's published Agent Defaults; omitted for an uncovered row. */
+    agent_defaults?: AgentDefaults;
+}
+/**
+ * A Covered Agent's published Agent Defaults: the Send Mode and Confirmed Delivery its
+ * Messages take when the send names none, and the experimental `confirm_from_transcripts`.
+ */
+export interface AgentDefaults {
+    send_mode: SendMode;
+    confirmed_delivery: boolean;
+    confirm_from_transcripts: boolean;
+}
+/**
+ * A Covered Agent's delivery block on get, getMany and status, read from durable records only:
+ * reading it delivers, wakes and changes nothing.
+ */
+export interface DeliveryFacts {
+    /** Messages Held now and their text bytes. The held limits also count custody that can return to Held. */
+    held_count: number;
+    held_bytes: number;
+    /** What the first Held Message waits on; null with none Held. */
+    first_wait: DeliveryWait | null;
+    /** Non-Final hand-overs: each hand-over of one or more Messages with a member whose Result is not yet Final counts once. */
+    handover_count: number;
+    /** Waiting startup work; null for Claude Code, whose startup prompt is part of its Launch. */
+    startup_wait: DeliveryWait | null;
+    /**
+     * The running or pending force, else the latest force that began a hand-over; null with
+     * neither. Its outcome is `running` while that force's call has not returned.
+     */
+    force: ForceResult | null;
+    /** This Launch's completed hand-overs with no evidence yet that the agent took their input. */
+    awaiting_turn_start: number;
+}
+/** One offered Send Mode's limits, in UTF-8 bytes. */
+export interface DeliveryModeLimits {
+    send_mode: SendMode;
+    /** The most bytes of one Message's own text. */
+    message_bytes: number;
+    /** The most bytes of a complete prompt with AD's separators and the route's wrapper; a Message at message_bytes always fits alone. */
+    prompt_bytes: number;
+    /** `utf8_tab_lf`: valid UTF-8 with no C0 control characters other than TAB and LF. */
+    text_kind: string;
+}
+/** What busy send offers a Covered Agent, on get and getMany. */
+export interface DeliveryCapabilities {
+    modes: DeliveryModeLimits[];
+    /** The most Held Messages and bytes, counting custody that can return to Held. */
+    held_count: number;
+    held_bytes: number;
+    /** The agent's force capability; null when this version publishes none for its agent. */
+    force: ForceCapability | null;
+    /**
+     * What the experimental Confirm From Transcripts setting can add to a force's evidence, whatever
+     * the setting: `not_needed` on Claude Code.
+     */
+    confirm_from_transcripts_capability: ConfirmFromTranscriptsCapability;
+    /**
+     * Why, a stable code (`""` for none recorded): `hook_sighting_first` on Claude Code, since AD's
+     * own UserPromptSubmit sighting preceded the native input record in every measured state.
+     */
+    confirm_from_transcripts_reason: string;
+}
+/** What Confirm From Transcripts can do for an agent's force evidence. */
+export type ConfirmFromTranscriptsCapability = "can_confirm" | "not_needed" | "cannot_confirm";
+/**
+ * A Covered Agent's force capability: `admission`, the route's qualified admission event
+ * (`prompt_sighting` on Claude Code); `limits`, that evidence's named limits in order
+ * (`duplicate_text`, `unrecoverable_escaping`, `user_hook_after_sighting`); and `states`, the
+ * force-state table in order. It describes measured behaviour only and promises no time: a force
+ * whose sighting arrives after its call returns reports `pending`, even in a state listed
+ * `handed_over`, and a force's own outcome and reason are its `force_result`'s.
+ */
+export interface ForceCapability {
+    admission: string;
+    limits: string[];
+    states: ForceStateCapability[];
+}
+/**
+ * One row of a force-state table: the agent's `state` when a force is made (`idle`,
+ * `tool_running`, `between_tools`, `permission_dialog`, `plan_dialog`, `compacting`,
+ * `not_started` or `ended`), the measured `outcome` (`handed_over` at once; `pending` first, then
+ * `handed_over` on the later sighting; or `refused`, its Messages Held) and `reason`, an existing
+ * force reason: the outcome's own, or for `pending` its wait cause (`turn_running`, `dialog` or
+ * `compaction`).
+ */
+export interface ForceStateCapability {
+    state: string;
+    outcome: "handed_over" | "pending" | "refused";
+    reason: ForceReason;
+}
+/** A busy-send Send Mode. */
+export type SendMode = "wait_turn" | "steer_turn";
+/**
+ * Busy send's Agent Defaults and the experimental `confirm_from_transcripts`, taken by spawn
+ * (reuse included), resume and makeTemplate. Covered Agents only: setting one, `false` and
+ * `"wait_turn"` included, is refused with `ErrCantSend`, reason `agent_not_covered`, before
+ * anything is written, when busy send would not cover the new Launch: for resume, the resumed
+ * conversation's recorded coverage (raised by the agent kind); for spawn, reuse and a template
+ * naming its agent, the resolved agent's. Omit a field to leave it unset; an agent-less template
+ * stores it for the spawn that uses it to decide.
+ */
+export interface AgentDefaultParams {
+    /** Agent Default Send Mode. */
+    send_mode?: SendMode;
+    /** Agent Default Confirmed Delivery. */
+    confirmed_delivery?: boolean;
+    /**
+     * Experimental: whether a force may be confirmed from transcripts. Relies on agent internals
+     * with no published contract; may change without notice. Changes to this setting or its
+     * reports are not breaking changes.
+     */
+    confirm_from_transcripts?: boolean;
 }
 /** Parameters for launching a tracked agent. */
-export interface SpawnParams {
+export interface SpawnParams extends AgentDefaultParams {
     /** Absolute (or ~/-prefixed) path the Spawn's agent starts in. Required. */
     cwd: string;
     /** Named template under ~/.config/agent-director/templates/. */
@@ -599,6 +712,10 @@ export interface StatusResult {
      * set, a row whose agent has reported in can read pending without it for up to settle_ms.
      */
     launch_started_at?: string | null;
+    /** A covered row's published Agent Defaults; omitted for an uncovered row. */
+    agent_defaults?: AgentDefaults;
+    /** A covered row's delivery block; omitted for an uncovered row. */
+    delivery?: DeliveryFacts;
 }
 /**
  * Experimental: agent internals and this output shape have no stable-format guarantee.
@@ -626,6 +743,14 @@ export interface GetParams {
 }
 /** One tracked agent row, with its current session and request facts. */
 export interface GetResult {
+    /** Published current Launch coverage; pending resume/reuse retains it until successful creation publishes its candidate. */
+    busy_send: "covered" | "not_covered";
+    /** A covered row's published Agent Defaults; omitted for an uncovered row. */
+    agent_defaults?: AgentDefaults;
+    /** A covered row's delivery block; omitted for an uncovered row. */
+    delivery?: DeliveryFacts;
+    /** What busy send offers a covered row; omitted for an uncovered row. */
+    delivery_capabilities?: DeliveryCapabilities;
     /** Fixed supervised-pane contract; omitted for native integrations. Live rows stay pending, context is null, idle screen unavailable and subagents untracked. */
     integration_mode?: "pane_only";
     /**
@@ -849,9 +974,37 @@ export interface SendKeysParams {
      * offered option's verdict.
      */
     as?: "allow" | "deny";
+    /**
+     * Busy send's options: this Message's Send Mode, Confirmed Delivery, Caller UUID (hyphenated
+     * hexadecimal) and whether to also force Held Messages. Covered Agents only: naming any of them,
+     * `false` and `"wait_turn"` included, when the row's current Launch is recorded `not_covered`
+     * rejects with `ErrCantSend`, reason `agent_not_covered` (`errDetails` CantSendDetails), and
+     * nothing is sent. Omit them for today's behaviour. Omitted on a Covered Agent, the Message takes
+     * its Agent Defaults; a confirmed send needs `caller_uuid`, an unconfirmed one takes neither
+     * `caller_uuid` nor `delivery_request_id` (`ErrInvalidFlags`).
+     */
+    send_mode?: SendMode;
+    confirmed_delivery?: boolean;
+    caller_uuid?: string;
+    force?: boolean;
+    /**
+     * For an agent busy send does not cover: owns one native ordinary text attempt (1-128 letters,
+     * digits, `_` or `-`); retry the same id and text to observe it without replay. For a Covered
+     * Agent: a confirmed send's Message ID, any nonempty UTF-8, only with `caller_uuid`; omitted, AD
+     * makes one, and given empty it is `ErrInvalidFlags`. Repeating the pair with the same text and
+     * target returns the stored Result.
+     */
+    delivery_request_id?: string;
 }
-/** Successful sendKeys calls return an empty object. */
-export interface SendKeysResult {
+/**
+ * A Covered Agent's accepted send returns its Message's current Result, stored Held before the
+ * call returns (an unconfirmed send has no `caller_uuid` or `request_id`), and, with `force:
+ * true`, its own force attempt as `force_result`. Other successful sendKeys calls return an empty
+ * object, or native proof fields.
+ */
+export interface SendKeysResult extends Partial<DeliveryResult> {
+    /** A send with `force: true` only: its force attempt, as forceDelivery returns it. */
+    force_result?: ForceResult;
 }
 /** Parameters for capturing the agent's pane. */
 export interface ReadPaneParams {
@@ -998,6 +1151,56 @@ export interface TooManyIdsDetails {
     id_cap: number;
 }
 /**
+ * `ErrCantSend`'s `errDetails`: class `cant_send`, the reason (such as `agent_not_covered`),
+ * whether a new send may carry the Message and with what (`new_send` for `agent_not_covered`:
+ * the same call without busy-send options; also for `steer_unsupported`, `held_count`,
+ * `held_bytes` and `id_conflict`, whose Message may go as a new send under a new
+ * `delivery_request_id`). `limit` holds a refused limit's actual and allowed values
+ * (`text_bytes`, `prompt_size`, `held_count`, `held_bytes`); `result` is an `id_conflict`'s
+ * owner Result.
+ */
+export interface CantSendDetails {
+    class: "cant_send";
+    reason: string;
+    resend_safe: boolean;
+    retry_with: string;
+    limit?: {
+        actual: number;
+        allowed: number;
+    };
+    result?: DeliveryResult;
+}
+/**
+ * `ErrSendAcceptedForceFailed`'s `errDetails`: the exact accepted Message Result,
+ * with its confirmed pair when present. No force outcome is reported; a force
+ * stored before the failure retains its authority and recovery.
+ */
+export interface SendAcceptedForceFailedDetails {
+    result: DeliveryResult;
+}
+/**
+ * `ErrSpawnNotPausable`'s `errDetails`: its cause. `agent_not_covered` when pause refuses
+ * `only_if_waiting` for an agent busy send does not cover; on a Covered Agent `only_if_waiting`
+ * refuses `not_waiting` (with `observed_state`, the raw state) or `turn_pending`, changing
+ * nothing. A pause claim standing on the Launch answers a pause, with or without the option,
+ * signalling nothing (see `PauseParams.only_if_waiting` for the exceptions): `pause_in_progress`,
+ * `pause_uncertain` (past the claiming pause's deadline, its signal intent has no outcome), or
+ * the earlier pause's recorded outcome replayed (`exit_uncertain` with `signal_sent` true; a
+ * failure's cause, or `pause_uncertain` with none, `signal_sent` omitted). A covered agent's
+ * keyless pause adds
+ * `signal_sent` (whether its SIGTERM was sent, absent when not known) and one of
+ * `agent_process_unverifiable`, `launch_changed`, `signal_unsupported`, `signal_uncertain`,
+ * `exit_uncertain` (signalled, exit not verified within the budget), `budget_exhausted` (the
+ * budget ran out at a store read or write, or before the signal), `owned_process_running`,
+ * `owned_process_unverifiable` or `destination_unfenced`.
+ */
+export interface NotPausableDetails {
+    cause: string;
+    signal_sent?: boolean;
+    /** The raw lifecycle state pause observed, for cause `not_waiting` only. */
+    observed_state?: string;
+}
+/**
  * ErrPauseTimeout's errDetails after exit keys were sent but ended was not
  * observed. Pass the outcome to a caller that can inspect the session and
  * decide before more input; it does not prove a prompt is open or why exit is delayed.
@@ -1095,8 +1298,13 @@ export interface PaneChangedDetails {
     n_lines: number;
     request_token?: string;
 }
+/** No retained compatible version covers this conversation; nothing changed. */
+export interface NotResumableDetails {
+    cause: "covering_version_unavailable";
+    provider: string;
+}
 /** Parameters for relaunching the latest session. */
-export interface ResumeParams {
+export interface ResumeParams extends AgentDefaultParams {
     /** Id of the finished (ended or missing) row whose latest session is resumed. */
     instance_id: string;
 }
@@ -1252,7 +1460,7 @@ export interface ExpireResult {
     kept_ids: string[];
 }
 /** Parameters for writing a named template. */
-export interface MakeTemplateParams {
+export interface MakeTemplateParams extends AgentDefaultParams {
     /** Template filename (without extension). Must be filename-safe. Required. */
     name: string;
     /** Default working directory to bake in. */
@@ -1399,9 +1607,133 @@ export interface ListSubagentsResult {
 export interface PauseParams {
     /** Id of the Spawn to pause gracefully. */
     instance_id: string;
+    /**
+     * Pause only an agent proven waiting with no turn pending. Covered Agents only. With `true`, the
+     * coverage the row's current Launch recorded decides first, in any state: `not_covered` rejects
+     * with `ErrSpawnNotPausable`, `errDetails` NotPausableDetails cause `agent_not_covered`, nothing
+     * ended. On a covered Launch one store transaction checks the raw state and delivery records:
+     * not waiting rejects with cause `not_waiting` (`observed_state` holds the state), and a turn
+     * pending (input not started, a prompt with incomplete output, or a pending force) with
+     * `turn_pending`, each changing nothing and retryable; otherwise pause claims the Launch, so no
+     * input is issued to it after the claim, and ends the agent keylessly, Held Messages kept. With
+     * or without this option, a pause of a Launch whose claim stands signals nothing and gets the
+     * claim's answer: `pause_in_progress`, `pause_uncertain`, or the claiming pause's recorded
+     * `exit_uncertain` (`signal_sent` true) or failure (its cause, or `pause_uncertain`); a claim
+     * abandoned before its signal intent is instead released and the pause goes on as if none
+     * stood. Once the agent's exit is known (the claim ended, or recorded `paused`) or, with this
+     * option, the Launch ended with no claim, pause of a finished row resolves as a no-op and of a
+     * live row finishes the shutdown with no signal. The claim and its fence end only at Launch End
+     * with exit evidence (kill establishes it) or a new Launch, judged on its own. Table:
+     * docs/caller-contract.md#standing-pause-claims. `false` or omitted is today's pause, which
+     * signals only while no claim stands.
+     */
+    only_if_waiting?: boolean;
 }
 /** Successful pause calls return an empty object. */
 export interface PauseResult {
+}
+/** Parameters for forcing an agent's Held Messages. */
+export interface ForceDeliveryParams {
+    /** Id of the agent whose Held Messages to force. */
+    instance_id: string;
+}
+/** A confirmed Message's pair: its Caller UUID and Message ID. */
+export interface DeliveryPair {
+    caller_uuid: string;
+    request_id: string;
+}
+/**
+ * One force attempt's outcome. `force_id` is AD-made; `ended_at` is null while `pending` or
+ * `running`; `carried_pairs` lists the carried Messages' confirmed pairs in carried order, and
+ * `carried_results` the Results of those still retained, in the same order (shorter once one has
+ * expired). A force call (forceDelivery, sendKeys with `force: true`) resolves with one of the four
+ * call outcomes; only a read of a stored attempt (getForce, `delivery.force`) may show `running`,
+ * with `reason` `""`, while that attempt's call has not returned.
+ */
+export interface ForceResult {
+    force_id: string;
+    outcome: ForceOutcome;
+    reason: ForceReason;
+    started_at: string;
+    ended_at: string | null;
+    carried_pairs: DeliveryPair[];
+    carried_results: DeliveryResult[];
+}
+/**
+ * A force_result's outcome. A force call resolves with `handed_over`, `pending`, `refused` or
+ * `failed`; `running` appears only on reads, while the attempt's call has not returned. `pending`
+ * means an issued prompt's admission can still arrive; `running` says nothing about admission.
+ */
+export type ForceOutcome = "handed_over" | "pending" | "refused" | "failed" | "running";
+/**
+ * A force_result's reason: why it was refused or failed, that it is `awaiting_admission` while
+ * `pending`, `admitted` once `handed_over`, or `""` while `running`. Other strings may be added
+ * later.
+ */
+export type ForceReason = "admitted" | "awaiting_admission" | "no_held_messages" | "handover_in_progress" | "earlier_message" | "input_unresolved" | "agent_starting" | "launch_ended" | "route_unavailable" | "not_submitted" | "not_issued" | "admission_unknown" | "agent_not_covered" | "record_deleted" | "" | (string & {});
+/**
+ * forceDelivery's result: this attempt, stored before the call returns (each call its own, within
+ * about 15 seconds), which getForce reads again by `force_id`. Every outcome is a success. When
+ * the row's published current Launch is recorded `not_covered` it is `refused`, reason
+ * `agent_not_covered`.
+ */
+export interface ForceDeliveryResult {
+    force_result: ForceResult;
+}
+/** A durable lookup's answer. `unknown` and `retention_expired` are not permission to resend. */
+export type Lookup = "found" | "unknown" | "retention_expired";
+/** Parameters for reading a force attempt. */
+export interface GetForceParams {
+    /** A force_result's `force_id`: a hyphenated hexadecimal UUID. */
+    force_id: string;
+}
+/**
+ * getForce's answer: `force_result` is null unless `lookup` is `found`; its outcome may be
+ * `running` while the attempt's call has not returned. Reads durable facts only.
+ */
+export interface GetForceResult {
+    lookup: Lookup;
+    force_result: ForceResult | null;
+}
+/** Parameters for reading a confirmed Message's Result by its pair. */
+export interface GetDeliveryParams {
+    /** The send's Caller UUID: a hyphenated hexadecimal UUID, either case. */
+    caller_uuid: string;
+    /** The send's Message ID: nonempty UTF-8. */
+    delivery_request_id: string;
+}
+/** What a non-Final Result waits on. */
+export interface DeliveryWait {
+    reason: string;
+    since: string;
+    earlier?: DeliveryPair;
+}
+/**
+ * A confirmed Message's Result. Never holds Message text or raw evidence. `resend_safe` and
+ * `retry_with` are `true`/`"new_id"` only for `not_started`; `wait` is null when `final`.
+ */
+export interface DeliveryResult {
+    caller_uuid?: string;
+    request_id?: string;
+    class: "held" | "queued" | "delivered_confirmed" | "sent_unconfirmed" | "not_started";
+    final: boolean;
+    reason: string;
+    resend_safe: boolean;
+    retry_with: "new_id" | "none";
+    wait: DeliveryWait | null;
+    forced: boolean;
+    instance_id: string;
+    launch_token: string | null;
+    session_id?: string;
+    evidence_kind: string | null;
+    record_id?: string;
+    record_sha256?: string;
+    outcome: "submitted" | "not_started" | "submission_unconfirmed" | "partial_input_unconfirmed";
+}
+/** getDelivery's answer: `result` is null unless `lookup` is `found`. Reads durable facts only. */
+export interface GetDeliveryResult {
+    lookup: Lookup;
+    result: DeliveryResult | null;
 }
 /** The version call takes no parameters. */
 export interface VersionParams {

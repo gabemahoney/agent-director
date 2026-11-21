@@ -108,7 +108,8 @@ func TestMCPErrDetails(t *testing.T) {
 // TestMCPPaneAnswerKeySent (b.146 rule 8, rule 15): a pane answer through the
 // send-keys tool whose sent write fails after its one key (no Enter) returns
 // ErrInternal with err_details {key_sent: true, request_token}, so a caller
-// tells it from one that sent nothing.
+// tells it from one that sent nothing. The row is Codex's: a Claude row takes
+// no keys through send-keys.
 func TestMCPPaneAnswerKeySent(t *testing.T) {
 	e := newEnv(t)
 	const id = "mcp-pane-answer"
@@ -116,7 +117,8 @@ func TestMCPPaneAnswerKeySent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false, apitest.WithLaunchIdentity(writer)); err != nil {
+	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false, apitest.WithAgent("codex"),
+		apitest.WithLaunchIdentity(writer)); err != nil {
 		t.Fatalf("SeedSpawn: %v", err)
 	}
 	req, err := apitest.SeedPermissionRequest(e.storePath, id, "Bash")
@@ -145,7 +147,8 @@ func TestMCPPaneAnswerKeySent(t *testing.T) {
 	}
 }
 
-// TestMCPDialogMaybeOpen (b.146 step 2c rules 2-4): a fallen-back request
+// TestMCPDialogMaybeOpen (b.146 step 2c rules 2-4), on a Codex row (a
+// Claude row's plain send is Held instead): a fallen-back request
 // closed through the record-pane-answer tool is not proven gone, so the
 // send-keys tool's plain call is ErrDialogMaybeOpen with err_details naming
 // it (pane_answer outside, unproven_since set, state, unproven_requests []),
@@ -158,7 +161,8 @@ func TestMCPDialogMaybeOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false, apitest.WithLaunchIdentity(writer)); err != nil {
+	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false, apitest.WithAgent("codex"),
+		apitest.WithLaunchIdentity(writer)); err != nil {
 		t.Fatalf("SeedSpawn: %v", err)
 	}
 	req, err := apitest.SeedPermissionRequest(e.storePath, id, "Bash")

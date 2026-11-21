@@ -34,7 +34,7 @@ export {
   ErrCallTimeout,
   ErrUnknownErrorName,
   errorFromEnvelope,
-  // Catalog-derived subclasses (61 entries from pkg/api/errnames/catalog.json).
+  // Catalog-derived subclasses (69 entries from pkg/api/errnames/catalog.json).
   ErrCwdMissing,
   ErrCwdNotAPath,
   ErrCwdNotFound,
@@ -66,6 +66,8 @@ export {
   ErrTmuxKillFailed,
   ErrSpawnNotInteractive,
   ErrSubmissionUnconfirmed,
+  ErrCantSend,
+  ErrSendAcceptedForceFailed,
   ErrSendKeysWhileRelayed,
   ErrSpawnNotPausable,
   ErrPauseTimeout,
@@ -142,6 +144,10 @@ export type {
   PaneKeySentDetails,
   SubmissionUnconfirmedDetails,
   DialogMaybeOpenDetails,
+  CantSendDetails,
+  SendAcceptedForceFailedDetails,
+  NotPausableDetails,
+  NotResumableDetails,
 } from "./types.js";
 
 // Verb Params / Result interfaces.
@@ -164,5 +170,11 @@ export type {
   ListParams, ListResult,
   ListSubagentsParams, ListSubagentsResult, SubagentRecord,
   PauseParams, PauseResult,
+  ForceDeliveryParams, ForceDeliveryResult, ForceResult, ForceOutcome, ForceReason,
+  GetForceParams, GetForceResult,
+  GetDeliveryParams, GetDeliveryResult, DeliveryResult, DeliveryWait, DeliveryPair, Lookup,
+  AgentDefaultParams, SendMode,
+  AgentDefaults, DeliveryFacts, DeliveryCapabilities, DeliveryModeLimits,
+  ForceCapability, ForceStateCapability, ConfirmFromTranscriptsCapability,
   VersionParams, VersionResult,
 } from "./types.js";

@@ -30,6 +30,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
@@ -67,6 +68,14 @@ type errorCase struct {
 	// values they must never carry (a token, a store id, a label value), for
 	// rows whose errName alone does not show which path gave it.
 	desc func(ctx map[string]any) (c apitest.DescCase, forbid []string)
+
+	// details, if set, is the err_details both envelopes must carry exactly
+	// (as JSON decodes it): a refusal's machine fields, such as ErrCantSend's,
+	// whose loss on both sides the structural diff alone would pass.
+	details map[string]any
+
+	// detailsFor checks per-call state and builds an exact oracle for dynamic fields.
+	detailsFor func(t *testing.T, dbPath string, ctx map[string]any) map[string]any
 }
 
 // zeroPaneHash is a well-formed expect_pane_sha256 (64 hex digits) no pane has.
@@ -76,10 +85,11 @@ var zeroPaneHash = strings.Repeat("0", 64)
 // below, then the spawn, kill, read-pane, send-keys, pause and resume rows
 // that need a private fake-tmux socket (spawnTmuxErrorCases,
 // killTmuxErrorCases, paneTmuxErrorCases, keysTmuxErrorCases,
-// resumeTmuxErrorCases; error_cases_*_tmux.go). The
+// resumeTmuxErrorCases; error_cases_*_tmux.go), then busy send's
+// (busySendErrorCases, error_cases_busy_send.go). The
 // init() guard below validates every errName and verb name at startup.
 // TestErrorTableCoverage (error_cases_test.go) enforces completeness.
-var errorCases = append(append(append(append(append([]errorCase{
+var errorCases = append(append(append(append(append(append([]errorCase{
 	{
 		verb:    "spawn",
 		errName: "ErrLaunchGuardRefused",
@@ -301,13 +311,17 @@ var errorCases = append(append(append(append(append([]errorCase{
 
 	// ── send-keys / ErrSpawnNotInteractive ────────────────────────────────
 	// Most representative send-keys error: state check fires before any
-	// tmux interaction, so fake-tmux is not reached.
+	// tmux interaction, so fake-tmux is not reached. The ended row is a
+	// Codex agent's: a covered Claude row holds a Message in any state.
 	{
 		verb:    "send-keys",
 		errName: "ErrSpawnNotInteractive",
 		seed: func(t *testing.T) (string, map[string]any) {
 			t.Helper()
-			_, dbPath := apitest.SeedErrSpawnNotInteractive(t)
+			dbPath := filepath.Join(t.TempDir(), "state.db")
+			if _, err := apitest.SeedSpawn(dbPath, "id-err-ni-1", store.StateEnded, "/tmp", "off", "", true, apitest.WithAgent("codex")); err != nil {
+				t.Fatal(err)
+			}
 			return filepath.Dir(dbPath), nil
 		},
 		params: func(_ map[string]any) map[string]any {
@@ -643,7 +657,7 @@ var errorCases = append(append(append(append(append([]errorCase{
 		},
 	},
 }, spawnTmuxErrorCases...), killTmuxErrorCases...), paneTmuxErrorCases...),
-	keysTmuxErrorCases...), resumeTmuxErrorCases...)
+	keysTmuxErrorCases...), resumeTmuxErrorCases...), busySendErrorCases...)
 
 // ── lookup helper ─────────────────────────────────────────────────────────────
 

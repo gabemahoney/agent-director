@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
@@ -115,6 +116,114 @@ var _ ResumeTmux = TmuxClient(nil)
 type ResumeParams struct {
 	// InstanceID identifies the finished (ended or missing) row to resume.
 	InstanceID string `json:"instance_id"`
+	// SendMode (wait_turn or steer_turn), ConfirmedDelivery and
+	// ConfirmFromTranscripts override the conversation's Agent Defaults and
+	// SR-4.5's experimental setting for the resumed Launch; nil keeps them.
+	// Any supplied value, false and wait_turn included, sets one. They become
+	// the conversation's values when the resumed Launch is published, never
+	// before, and a failed or uncertain launch leaves the published values.
+	// They apply only to a Covered Agent: when busy send would not cover the
+	// resumed Launch, a resume that sets one is refused with ErrCantSend,
+	// reason agent_not_covered, before anything is written (SR-9.2).
+	// ConfirmFromTranscripts relies on agent internals with no published
+	// contract and may change without notice. Changes to this setting or
+	// its reports are not breaking changes.
+	SendMode               *string `json:"send_mode,omitempty"`
+	ConfirmedDelivery      *bool   `json:"confirmed_delivery,omitempty"`
+	ConfirmFromTranscripts *bool   `json:"confirm_from_transcripts,omitempty"`
+}
+
+// busySendConversationCoverageReader is resume's optional read of the
+// published conversation's coverage, which a resume that sets an Agent Default
+// or confirm_from_transcripts is decided from (store.ResumeLaunchCoverage). It
+// is not part of ResumeStore; resume finds it by a type assertion, as it finds
+// resumeIdentityWriter. A store without it refuses such a resume, since its
+// new Launch's coverage cannot be read; a resume that sets none never reads it.
+type busySendConversationCoverageReader interface {
+	GetBusySendConversationCoverage(instanceID string) (BusySendCoverage, error)
+}
+
+var _ busySendConversationCoverageReader = (*store.Store)(nil)
+
+// busySendResumeMover is resume's move to pending that also stages its Agent
+// Default overrides on the candidate Launch (store.MoveToPendingWithDefaults),
+// so the Launch's publication, whoever makes it, applies them. It is not part
+// of ResumeStore; resume finds it by a type assertion, as it finds
+// resumeIdentityWriter, and a store without it can take no override.
+type busySendResumeMover interface {
+	MoveToPendingWithDefaults(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner, defaults store.BusySendDefaultsChoice) (CondResult, int64, error)
+}
+
+var _ busySendResumeMover = (*store.Store)(nil)
+
+// busySendExitResumeMover is resume's move to pending with the positive exit
+// evidence a covered conversation's resume needs (SR-6.1, SR-6.2;
+// store.MoveToPendingWithExit). Like busySendResumeMover it is found by a type
+// assertion; a store without it gives the move no evidence, which a covered
+// conversation's move refuses.
+type busySendExitResumeMover interface {
+	MoveToPendingWithExit(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner, defaults store.BusySendDefaultsChoice, exit *store.BusySendExitEvidence) (CondResult, int64, error)
+}
+
+var _ busySendExitResumeMover = (*store.Store)(nil)
+
+// resumeDefaultsGate decides a resume that sets an Agent Default or
+// confirm_from_transcripts from the coverage its new Launch would record: the
+// published conversation's, raised by the row's agent kind (SR-9.1), and from
+// the Send Modes that agent is offered (SR-1.4). It reads durable facts only,
+// before any write; a binding or read failure is an error, never a refusal.
+// Accepted, the overrides are staged with the candidate Launch and published
+// with it (busySendResumeMover); a store that cannot stage them refuses.
+func resumeDefaultsGate(s ResumeStore, row Spawn, params ResumeParams) error {
+	named := agentDefaultsNamed(params.SendMode, params.ConfirmedDelivery, params.ConfirmFromTranscripts)
+	if named == "" {
+		return nil
+	}
+	reader, ok := s.(busySendConversationCoverageReader)
+	if !ok {
+		return fmt.Errorf("resume %s: the store cannot read busy-send coverage, so %s cannot be decided; nothing was written or launched", row.InstanceID, named)
+	}
+	conversation, err := reader.GetBusySendConversationCoverage(row.InstanceID)
+	if err != nil {
+		return err
+	}
+	target := "resume " + row.InstanceID
+	if err := busySendDefaultsGate(target, row.Agent, store.ResumeLaunchCoverage(conversation, row.Agent), named, params.SendMode); err != nil {
+		return err
+	}
+	if _, ok := s.(busySendResumeMover); !ok {
+		return fmt.Errorf("%s: the store cannot stage %s with the resumed Launch; nothing was written or launched", target, named)
+	}
+	return nil
+}
+
+// resumeBusySendCoverage is the coverage a resume of row's Launch records
+// (store.ResumeLaunchCoverage of the published conversation's coverage and the
+// row's agent), which decides whether a Claude resume composes busy send's
+// owned wake (SR-3.4); the store records the same coverage with the new
+// Launch. A store that cannot read the conversation's coverage gives the
+// agent's own coverage.
+func resumeBusySendCoverage(s ResumeStore, row Spawn) (store.BusySendCoverage, error) {
+	reader, ok := s.(busySendConversationCoverageReader)
+	if !ok {
+		return store.BusySendCoverageForAgent(row.Agent), nil
+	}
+	conversation, err := reader.GetBusySendConversationCoverage(row.InstanceID)
+	if err != nil {
+		return "", fmt.Errorf("resume of instance %s: its busy-send coverage could not be read (%w), so nothing was written and nothing was launched", row.InstanceID, err)
+	}
+	return store.ResumeLaunchCoverage(conversation, row.Agent), nil
+}
+
+// resumeDefaultsChoice is the resume's Agent Default overrides; nil keeps the
+// published conversation's value.
+func resumeDefaultsChoice(p ResumeParams) store.BusySendDefaultsChoice {
+	c := store.BusySendDefaultsChoice{Confirmed: p.ConfirmedDelivery, ConfirmFromTranscripts: p.ConfirmFromTranscripts}
+	if p.SendMode != nil {
+		mode := store.BusySendMode(*p.SendMode)
+		c.SendMode = &mode
+	}
+	return c
 }
 
 // ResumeResult is the typed return shape: the id and what the launch's
@@ -128,6 +237,9 @@ type ResumeParams struct {
 // The saved prompt is never replayed, and changed Claude clusters are
 // re-encoded only when needed to preserve the original parsed meaning.
 type ResumeResult struct {
+	// The full delegated result survives an older library's JSON encoding,
+	// including fields this version does not yet know and explicit nulls.
+	delegatedJSON string
 	// InstanceID is the id of the resumed row — identical to the
 	// value passed in ResumeParams.InstanceID.
 	InstanceID string `json:"instance_id"`
@@ -152,6 +264,14 @@ type ResumeResult struct {
 	PreTrust string `json:"pre_trust"`
 }
 
+func (r ResumeResult) MarshalJSON() ([]byte, error) {
+	if r.delegatedJSON != "" {
+		return []byte(r.delegatedJSON), nil
+	}
+	type plain ResumeResult
+	return json.Marshal(plain(r))
+}
+
 // resumeDeps is what resume's launch uses besides the row: the handler's
 // store, tmux client, start-time reader, configuration, this store's id, clock
 // and logger, and the caller identity collected at entry, carried from
@@ -165,6 +285,10 @@ type resumeDeps struct {
 	now     func() time.Time
 	lg      *log.Logger
 	who     caller
+	parent  string
+	// defaults are the call's Agent Default overrides, staged by the move
+	// with the candidate Launch (busySendResumeMover).
+	defaults store.BusySendDefaultsChoice
 }
 
 // launchOnto returns resume's launch after its move applied (finishedLaunch,
@@ -194,6 +318,7 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 		lg:       d.lg,
 		who:      d.who,
 		identity: identity,
+		busySend: busySendWriter(d.s),
 		release:  ownerReleaser(d.s, owner),
 		restoreWrite: func() (CondResult, error) {
 			return d.s.RestoreAfterFailedResume(row.InstanceID, movedVersion, resumePriorOf(row))
@@ -216,7 +341,11 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 // Guards (SR-8.1 step 1, in order; each refusal writes nothing and makes no
 // tmux call):
 //
-//  1. GetSpawn → ErrSpawnNotFound when the id is unknown.
+//  1. GetSpawn → ErrSpawnNotFound when the id is unknown, after a send_mode
+//     that is neither wait_turn nor steer_turn → ErrInvalidFlags. Then a
+//     resume setting an Agent Default or confirm_from_transcripts is
+//     decided (resumeDefaultsGate): busy send not covering the new Launch
+//     → ErrCantSend, reason agent_not_covered (SR-9.2).
 //     Cursor follows the same state and latest-session checks.
 //  2. State must be `ended` or `missing` → otherwise
 //     ErrSpawnNotResumable. The verb does NOT touch a live Spawn. A
@@ -306,14 +435,38 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 // examined, and followed by one ad.launch.name_held). Every refusal before
 // the move writes nothing: no move, no parent id, no trust entry, no
 // ad.resume.* event.
-func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, storeID string, now func() time.Time, lg *log.Logger, params ResumeParams) (ResumeResult, error) {
+func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, storeID string, now func() time.Time, lg *log.Logger, params ResumeParams, calls ...resumeCall) (ResumeResult, error) {
 	if lg == nil {
 		lg = log.New(io.Discard, "", 0)
 	}
-	d := resumeDeps{s: s, t: t, pc: pc, cfg: cfg, storeID: storeID, now: now, lg: lg, who: callerIdentity()}
+	var call resumeCall
+	if len(calls) != 0 {
+		call = calls[0]
+	} else {
+		call = resumeCall{who: callerIdentity(), parent: spawn.ParentIDFromEnv()}
+	}
+	d := resumeDeps{s: s, t: t, pc: pc, cfg: cfg, storeID: storeID, now: now, lg: lg, who: call.who, parent: call.parent, defaults: resumeDefaultsChoice(params)}
 
+	if err := checkSendMode("resume", params.SendMode); err != nil {
+		return ResumeResult{}, err
+	}
 	row, err := s.GetSpawn(params.InstanceID)
 	if err != nil {
+		return ResumeResult{}, err
+	}
+	if reader, ok := s.(busySendConversationBindingReader); ok {
+		binding, err := reader.GetBusySendConversationBinding(params.InstanceID)
+		if err != nil {
+			return ResumeResult{}, err
+		}
+		if binding.Coverage == store.BusySendCovered && store.BusySendCoverageForAgent(binding.Provider) != store.BusySendCovered {
+			if call.delegate == nil {
+				return ResumeResult{}, fmt.Errorf("resume: this runtime cannot serve the covered provider; nothing was written or launched")
+			}
+			return call.delegate(params, binding.Provider)
+		}
+	}
+	if err := resumeDefaultsGate(s, row, params); err != nil {
 		return ResumeResult{}, err
 	}
 	if spawn.IsPaneOnly(row.Agent) {
@@ -576,6 +729,9 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     (a competing resume moved it), the move's lost-race
 //     ErrSpawnNotResumable is returned instead, and if the row was removed,
 //     the move's ErrSpawnNotFound (SR-8.6).
+//     Then, for a covered published conversation, old-issuer exclusion
+//     (resumeBusySendExit): every owned process of its Launches checked gone
+//     by identity, else ErrSpawnNotResumable with nothing written.
 //  4. A new launch token (a failure → ErrInternal, nothing written), then
 //     the environment, settings and argv (spawn.ComposeRelaunch, for the row's
 //     agent), filtering stored session selectors and Claude print mode plus
@@ -601,10 +757,12 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     for the stored opt-out; its permission policy is unchanged.
 //  6. The move to pending (MoveToPending): one conditional write with the
 //     snapshot of the row as read, the launch start from one read of now in
-//     milliseconds, the token, the socket, the parent id re-derived from
-//     the caller's AGENT_DIRECTOR_INSTANCE_ID (spawn.ParentIDFromEnv, "" =
+//     milliseconds, the token, the socket, the parent id captured from
+//     the original caller's AGENT_DIRECTOR_INSTANCE_ID at call entry ("" =
 //     NULL; the only parent-id write) and the launch owner, this process
-//     (spawn.CurrentLaunchOwner through the start-time reader; b.kdf). Row
+//     (spawn.CurrentLaunchOwner through the start-time reader; b.kdf), with
+//     the exit evidence, which the move validates and applies in its own
+//     transaction (store.MoveToPendingWithExit). Row or owned processes
 //     changed → ErrSpawnNotResumable; row removed →
 //     ErrSpawnNotFound; store error → ErrInternal. Each writes nothing and
 //     launches nothing.
@@ -612,26 +770,11 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     store, file or network I/O between them: the recorded name on the
 //     launch's socket, labelled "ad1 <token> <session id> <instance id>
 //     <store id>". Once it returns, ad.resume.moved_to_pending is emitted.
-//  8. Its outcome (SR-8.5), mapped by finishedLaunch.outcome, which reuse
-//     shares (resumeDeps.launchOnto, verb values resumeLaunchVerb): a labelled
-//     session → the identity write with the move's version and token (when
-//     the store provides it), success; a lost reply → success with no
-//     identity; a timeout or a non-zero-exit unparseable reply →
-//     ErrTmuxUnresponsive, the row stays pending. Every path that ends with
-//     no identity write applied and no restore applied ends the launch's
-//     hold (finishedLaunch's release, b.kdf), the only other write.
-//     "duplicate session" → finishedLaunch.heldName: exactly one re-lookup of the
-//     recorded name on the launch socket for the row as examined (its id,
-//     earlier token and recorded server identity), the restore, the holder's
-//     classified error carrying the restore's sentence (the holder class; the
-//     row's own session by the starting-session rule with the examined
-//     ended_at; an old-label holder while the examined row's latest launch
-//     records no session, this id's own abandoned launch by the rule's age
-//     step; ErrTmuxSessionCreate only when no session holds the name any
-//     more), the re-lookup's disagree reasons not already written, and one
-//     ad.launch.name_held. Every other failure (tmux unavailable, a session
-//     that could not be labelled, any other launch failure) → the restore,
-//     then the launch error.
+//  8. Its outcome (SR-8.5), through resumeDeps.launchOnto with resumeLaunchVerb.
+//     finishedLaunch.outcome owns the shared resume/reuse mapping, including
+//     identity and publication writes, preserved success despite publication
+//     uncertainty, guarded restoration on creation failure and owner release.
+//     finishedLaunch.heldName owns the duplicate-session re-lookup and outcome.
 //
 // On success the row stays pending until the resumed agent's first
 // SessionStart hook moves it and rotates its session_id.
@@ -662,16 +805,26 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 		return ResumeResult{}, pre.Err
 	}
 
+	exit, err := resumeBusySendExit(d, id)
+	if err != nil {
+		return ResumeResult{}, err
+	}
+
 	token, err := spawn.NewLaunchToken()
 	if err != nil {
 		return ResumeResult{}, fmt.Errorf("resume of instance %s: the launch could not be recorded (%v), so nothing was written and nothing was launched", id, err)
 	}
+	coverage, err := resumeBusySendCoverage(d.s, row)
+	if err != nil {
+		return ResumeResult{}, err
+	}
 	composed, err := spawn.ComposeRelaunch(spawn.RelaunchInput{
-		Row:       row,
-		SessionID: sessionID,
-		Socket:    socket,
-		Token:     token,
-		StoreID:   d.storeID,
+		Row:              row,
+		SessionID:        sessionID,
+		Socket:           socket,
+		Token:            token,
+		StoreID:          d.storeID,
+		BusySendCoverage: coverage,
 	}, d.cfg)
 	if err != nil {
 		return ResumeResult{}, err
@@ -693,9 +846,20 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	// A failure never fails the launch; the outcome goes into the result.
 	preTrust := spawn.RunPreTrust(row.Agent, composed.PreTrust, row.CWD, row.ExtraEnv, row.NoPreTrust, d.cfg.PreTrust)
 
-	parent := spawn.ParentIDFromEnv()
+	parent := d.parent
 	owner := spawn.CurrentLaunchOwner(d.pc)
-	res, movedVersion, err := d.s.MoveToPending(id, row.Snapshot, d.now().UnixMilli(), token, socket, parent, owner)
+	move := d.s.MoveToPending
+	if mover, ok := d.s.(busySendResumeMover); ok {
+		move = func(id string, examined RowSnapshot, at int64, token, socket, parent string, owner LaunchOwner) (CondResult, int64, error) {
+			return mover.MoveToPendingWithDefaults(id, examined, at, token, socket, parent, owner, d.defaults)
+		}
+	}
+	if mover, ok := d.s.(busySendExitResumeMover); ok {
+		move = func(id string, examined RowSnapshot, at int64, token, socket, parent string, owner LaunchOwner) (CondResult, int64, error) {
+			return mover.MoveToPendingWithExit(id, examined, at, token, socket, parent, owner, d.defaults, exit)
+		}
+	}
+	res, movedVersion, err := move(id, row.Snapshot, d.now().UnixMilli(), token, socket, parent, owner)
 	if err := resumeMoveError(id, res, err); err != nil {
 		return ResumeResult{}, err
 	}
@@ -714,6 +878,33 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	return ResumeResult{InstanceID: id, PreTrust: string(preTrust)}, nil
 }
 
+// resumeBusySendExit is resume's old-issuer exclusion (SR-6.1, SR-6.2; M1's
+// Resume), after the pre-launch decision and before anything is written: for
+// a covered published conversation, the shared exit judgement of every owned
+// process of its Launches (judgeBusySendExit), whose evidence the move then
+// applies; nil for an uncovered one. An owned process still running or that
+// cannot be checked refuses with ErrSpawnNotResumable, nothing written or
+// launched: the earlier Launch cannot be shown unable to emit, so its Held
+// Messages may not carry yet. The row is finished, where kill is a no-op, so
+// the advice names the condition that clears the refusal (decision 16:
+// retry resume once that process has exited). A row removed since the examination gives no
+// evidence, so the move reports it as it reports any removed row (SR-8.6);
+// any other failed scope read is the store's error.
+func resumeBusySendExit(d resumeDeps, id string) (*store.BusySendExitEvidence, error) {
+	exit, refusal, err := busySendExitFor(d.s, d.pc, id)
+	if errors.Is(err, store.ErrSpawnNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resume of instance %s: reading its busy-send exit scope failed, so nothing was written and nothing was launched: %v", id, err)
+	}
+	if refusal != nil {
+		return nil, fmt.Errorf("%w: spawn %s: %s, so the earlier Launch cannot be shown unable to deliver; nothing was written and nothing was launched; retry resume %s",
+			ErrSpawnNotResumable, id, refusal.describe(), refusal.clears())
+	}
+	return exit, nil
+}
+
 // resumePriorOf returns what the move to pending clears, from the row as
 // read: the restore writes it back byte for byte (SR-8.5).
 func resumePriorOf(row Spawn) ResumePrior {
@@ -729,6 +920,7 @@ func resumePriorOf(row Spawn) ResumePrior {
 		Identity:                row.Identity,
 		StateEvidence:           row.PriorStateEvidence(),
 		ProcessEvidence:         row.PriorProcessEvidence(),
+		TurnStarts:              row.TurnStarts,
 	}
 }
 
@@ -738,6 +930,9 @@ func resumePriorOf(row Spawn) ResumePrior {
 // wrapped, so the ErrInternal matches no catalogued sentinel (SR-1.5).
 func resumeMoveError(id string, res CondResult, err error) error {
 	switch {
+	case errors.Is(err, store.ErrBusySendExitNotEstablished):
+		return fmt.Errorf("%w: spawn %s: the processes its earlier Launch owns changed after resume checked them; nothing was written and nothing was launched; retry resume",
+			ErrSpawnNotResumable, id)
 	case err != nil:
 		return fmt.Errorf("resume of instance %s: recording the launch failed and nothing was launched: %v", id, err)
 	case res == CondApplied:
@@ -906,6 +1101,14 @@ func launchInProgressError(row Spawn) error {
 // CLI: agent-director resume
 //
 // Errors:
+//   - [ErrInvalidFlags]: SendMode is neither wait_turn nor steer_turn;
+//     nothing was read, written or launched.
+//   - [ErrCantSend]: SendMode, ConfirmedDelivery or ConfirmFromTranscripts is
+//     set and busy send would not cover the resumed Launch (the published
+//     conversation's recorded coverage, raised by the row's agent kind):
+//     reason agent_not_covered; or SendMode is one the covered agent is not
+//     offered: reason steer_unsupported ([CantSendDetails]); before every
+//     other refusal below and before anything is written or launched.
 //   - [ErrAgentCapabilityUnsupported]: the row's agent is pane-only and
 //     cannot be resumed; nothing is changed or launched.
 //   - [ErrSpawnNotFound]: no row exists for the instance id, or the row was
@@ -1031,5 +1234,6 @@ func (c *Client) Resume(params ResumeParams) (ResumeResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ResumeResult{}, err
 	}
-	return resumeImpl(c.st, c.tmuxClient, c.procChecker, c.cfg, c.st.StoreID(), c.now, c.logger, params)
+	call := c.newResumeCall()
+	return resumeImpl(c.st, c.tmuxClient, c.procChecker, c.cfg, c.st.StoreID(), c.now, c.logger, params, call)
 }

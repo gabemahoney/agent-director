@@ -66,6 +66,7 @@ func inputAuthority(ctx context.Context, q inputSQL, storeID string) error {
 // FULL is per connection. Never trust the opener or a different pool lease.
 // Setting synchronous inside BEGIN is illegal, so establish it before BEGIN,
 // then verify both settings on this lease before any intent can be admitted.
+// Busy-send admission establishes it the same way (inDurableWriteTxContext).
 func inputDurability(ctx context.Context, conn *sql.Conn) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -82,7 +83,7 @@ func inputDurability(ctx context.Context, conn *sql.Conn) error {
 		return err
 	}
 	if mode != "wal" || sync != 2 {
-		return fmt.Errorf("%w: native intent requires WAL synchronous FULL", inputjournal.ErrInvalidState)
+		return fmt.Errorf("%w: a durable write requires WAL synchronous FULL", inputjournal.ErrInvalidState)
 	}
 	return ctx.Err()
 }

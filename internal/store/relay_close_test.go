@@ -75,6 +75,10 @@ func makeRelayRowCodex(t *testing.T, s *Store, endReported bool) {
 	if _, err := s.db.Exec(`UPDATE spawns SET agent = ?, end_reported_at = ? WHERE instance_id = ?`, AgentCodex, report, relayID); err != nil {
 		t.Fatalf("make %s a Codex row: %v", relayID, err)
 	}
+	// This fixture changes the historical provider, not a real resume.
+	mustExec(t, s.db, `UPDATE busy_conversations SET provider='codex' WHERE instance_id=?`, relayID)
+	mustExec(t, s.db, `UPDATE busy_send_launches SET provider='codex' WHERE instance_id=?`, relayID)
+
 }
 
 // endRelayRowCodex is find-missing's move to ended of relayID as a Codex row
@@ -340,7 +344,7 @@ func TestCloseWritesNothingUnlessItsWriteApplies(t *testing.T) {
 			if stale {
 				sp.Snapshot.RowVersion--
 			}
-			res, _, err := s.MoveToPending(id, sp.Snapshot, trailMoveStart, trailResumeToken, "/tmp/trail-sock", "", LaunchOwner{})
+			res, _, err := s.MoveToPendingWithExit(id, sp.Snapshot, trailMoveStart, trailResumeToken, "/tmp/trail-sock", "", LaunchOwner{}, BusySendDefaultsChoice{}, busyExitIfAny(t, s, id))
 			return result{applied: res == CondApplied, cond: res, err: err}
 		}
 	}
@@ -530,6 +534,11 @@ func TestClosedRequestHoldsNothingAfterResume(t *testing.T) {
 						endRelayRowUnclosed(t, path)
 					} else {
 						c.close(t, s)
+					}
+					if mustGetSpawn(t, s, relayID).Agent == AgentCodex {
+						// Test-only future covering writer: this historical Codex
+						// fixture retains the Claude-sized delivery envelope.
+						busyLaunchAuthor(t, AgentCodex, v21ClaudeCapabilities())
 					}
 					resumeRelayRow(t, s)
 					if got := openTokens(t, s, relayID); len(got) != 0 {

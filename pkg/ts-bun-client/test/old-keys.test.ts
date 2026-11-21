@@ -42,6 +42,7 @@ const idVerbs: [verb: string, call: Call][] = [
   ["resume", (c, p) => c.resume(p as never)],
   ["pause", (c, p) => c.pause(p as never)],
   ["send-keys", (c, p) => c.sendKeys(p as never)],
+  ["force-delivery", (c, p) => c.forceDelivery(p as never)],
   ["read-pane", (c, p) => c.readPane(p as never)],
   ["decide", (c, p) => c.decide(p as never)],
 ];

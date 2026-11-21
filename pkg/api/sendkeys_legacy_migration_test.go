@@ -1,7 +1,10 @@
 package api_test
 
 // b.w21: the real v6-to-current migration carries a decided permission
-// request into a resumed launch; plain send-keys must remain usable.
+// request into a resumed launch; send-keys must remain usable. The migrated
+// row is Claude's, so busy send covers it (SR-9.1): its send is a Message,
+// held and typed by no one, and the carried request must not hold the new
+// Launch's delivery.
 
 import (
 	"context"
@@ -15,8 +18,40 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// legacyRecoveryRaw runs f on a raw connection to the store at path.
+func legacyRecoveryRaw(t *testing.T, path string, f func(*sql.DB)) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	f(db)
+}
+
+// legacyRecoveryRead is id's permission request token as s reads it.
+func legacyRecoveryRead(t *testing.T, s *store.Store, id, token string) store.PermissionRow {
+	t.Helper()
+	pr, err := s.GetPermissionRequest(id, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pr
+}
+
+// legacyRecoveryAssertVerdict fails unless after keeps before's verdict.
+func legacyRecoveryAssertVerdict(t *testing.T, before, after store.PermissionRow) {
+	t.Helper()
+	if after.Decision != before.Decision || after.DecisionReason != before.DecisionReason || !after.DecidedAt.Equal(before.DecidedAt) ||
+		!after.DeliveredAt.Equal(before.DeliveredAt) || after.PaneAnswer != before.PaneAnswer {
+		t.Errorf("legacy verdict changed: before %+v, after %+v", before, after)
+	}
+}
 
 func TestLegacyRecoveryMigratedV6Store(t *testing.T) {
 	t.Parallel()
@@ -126,28 +161,44 @@ func TestLegacyRecoveryMigratedV6Store(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if sp.BusySend != store.BusySendCovered {
+		t.Fatalf("migrated claude row coverage = %s; want covered", sp.BusySend)
+	}
 	li := r.Spawn.Identity
 	li.Token = newToken()
-	res, version, err := migrated.MoveToPending(r.ID, sp.Snapshot, e.clock.Now().UnixMilli(), li.Token, r.Socket, "", store.LaunchOwner{})
+	res, version, err := migrated.MoveToPendingWithExit(r.ID, sp.Snapshot, e.clock.Now().UnixMilli(), li.Token, r.Socket, "", store.LaunchOwner{},
+		store.BusySendDefaultsChoice{}, exitEvidenceFor(t, migrated, r.ID))
 	if err != nil || res != store.CondApplied {
 		t.Fatalf("resume migrated spawn = %v, %v", res, err)
 	}
 	if res, err := migrated.RecordLaunchIdentity(r.ID, version, li.Token, li); err != nil || res != store.CondApplied {
 		t.Fatalf("record resumed launch = %v, %v", res, err)
 	}
-	r.Token, r.Spawn.Identity = li.Token, li
 	if err := e.rec.SetLabel(r.Socket, r.Session.ID, li.PaneID, li.Token, r.ID, r.StoreID); err != nil {
 		t.Fatal(err)
 	}
+	c, _ := e.client(t)
 	for _, state := range []string{store.StatePending, store.StateWaiting} {
 		if state == store.StateWaiting {
 			if applied := apitest.ApplyAgentHook(t, path, r.ID, "SessionStart", "sess-"+newToken()); !applied.Applied {
 				t.Fatalf("migrated resumed SessionStart = %+v; want applied", applied)
 			}
 		}
-		r.Spawn.State = state
 		e.rec.Reset()
-		legacyRecoveryAssertTyped(t, e, r, legacyRecoverySend(t, e, r, e.clock.Now(), ""))
+		sent, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "continue"})
+		if err != nil || sent.Delivery == nil || sent.Delivery.Class != "held" {
+			t.Fatalf("%s send = %+v, %v; want a held Message", state, sent, err)
+		}
+		if n := len(e.rec.SocketCallsOf(tmux.CallSendText)) + len(e.rec.SocketCallsOf(tmux.CallSendEnter)) +
+			len(e.rec.SocketCallsOf(tmux.CallSendKey)); n != 0 {
+			t.Errorf("%s send typed %d times; want none", state, n)
+		}
+		// The carried decided request, proven gone by the migration, holds no
+		// delivery to the new Launch.
+		facts, err := migrated.ReadBusySendRouteFacts(context.Background(), r.ID, store.HookGate{})
+		if err != nil || facts.PermissionHold {
+			t.Errorf("%s route facts = %+v, %v; want no permission hold", state, facts, err)
+		}
 		legacyRecoveryAssertVerdict(t, before, legacyRecoveryRead(t, migrated, r.ID, token))
 	}
 }

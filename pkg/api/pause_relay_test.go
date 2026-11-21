@@ -27,7 +27,7 @@ import (
 func TestPauseHeldWhileSubagentRequestUnproven(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
-	for _, ag := range paAgents {
+	for _, ag := range paInputAgents {
 		for _, en := range ptrEntries {
 			t.Run(ag.label(en.name), func(t *testing.T) {
 				t.Parallel()
@@ -148,15 +148,16 @@ func TestPauseHeldByPreV7RequestOnIdleRow(t *testing.T) {
 func newPreV7IdlePAEnv(t *testing.T, token string) *paEnv {
 	t.Helper()
 	e := newKillEnv(t)
+	e.rowAgent = store.AgentCodex // a covered Claude row's pause is keyless
 	r := seedRelayRow(t, e, token)
 	if ok, err := e.st.DecidePermissionRequest(r.ID, token, "allow", "", store.WriterProcessDecide); err != nil || !ok {
 		t.Fatalf("decide = %v, %v", ok, err)
 	}
-	if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "Stop", ""); !a.Applied {
+	if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "Stop", "", apitest.HookAgent(store.AgentCodex)); !a.Applied {
 		t.Fatalf("the agent's Stop not applied: %s", a.Reason)
 	}
 	pauAssertState(t, e, r.ID, store.StateWaiting)
-	return &paEnv{killEnv: e, r: r, now: time.Now().UTC().Truncate(time.Millisecond), self: paSender, sks: e.store}
+	return &paEnv{killEnv: e, r: r, now: time.Now().UTC().Truncate(time.Millisecond), self: paSender, sks: e.store, agent: store.AgentCodex}
 }
 
 // TestPauseRelayRefusalsAsPlainSendKeys (b.zdz; b.146 rule 7 and step 2c): on
@@ -179,7 +180,7 @@ func TestPauseRelayRefusalsAsPlainSendKeys(t *testing.T) {
 		{"A fallen back, B's relay hook alive", []r7Step{r7OtherAlive}, api.ErrSendKeysWhileRelayed, false},
 		{"A fallen back", nil, api.ErrRelayFallenBack, false},
 	}
-	for _, ag := range paAgents {
+	for _, ag := range paInputAgents {
 		for _, en := range ptrEntries {
 			for _, tc := range cases {
 				t.Run(ag.label(en.name+"/"+tc.name), func(t *testing.T) {
@@ -227,7 +228,7 @@ func TestPauseRelayRefusalsAsPlainSendKeys(t *testing.T) {
 func TestPauseRelayFallenBackRecordsHookGone(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
-	p := newSubagentPAEnv(t)
+	p := newCodexSubagentPAEnv(t) // a covered Claude row's pause is keyless
 	p.mainAgentStop(t)
 	if pr := p.request(t, tok); !pr.HookGoneAt.IsZero() {
 		t.Fatalf("A's hook_gone_at = %v before pause; want none", pr.HookGoneAt)
@@ -251,12 +252,15 @@ func TestPauseRelayFallenBackRecordsHookGone(t *testing.T) {
 // TestPauseNeverHeldNoRequest (b.zdz; step 2c's NeverHeldNoRequest for
 // pause): a waiting relay-on row with no permission request, or whose every
 // request is proven gone, pauses as before: C-u, /exit and Enter, then the
-// wait sees the row end.
+// wait sees the row end. The rows are Codex's (busy send covers Claude, whose
+// pause is keyless), so the proof is the main agent's turn end: a Codex
+// request has no tool_use_id for a PostToolUse.
 func TestPauseNeverHeldNoRequest(t *testing.T) {
 	t.Parallel()
 	t.Run("no request", func(t *testing.T) {
 		t.Parallel()
 		e := newKillEnv(t)
+		e.rowAgent = store.AgentCodex
 		r := e.seedRow(t, killRowSpec{RelayOn: true})
 		e.endAfterEnter(t, r)
 
@@ -267,14 +271,12 @@ func TestPauseNeverHeldNoRequest(t *testing.T) {
 		e.assertExitDelivered(t, r.Socket, r.Spawn.Identity.PaneID)
 		pauAssertState(t, e, r.ID, store.StateEnded)
 	})
-	toolRanA := func(t *testing.T, p *paEnv) { p.prove(t, toolRan(paToolUseID)) }
 	for _, tc := range []struct {
 		name  string
 		env   func(*testing.T) *paEnv
 		steps []r7Step
 	}{
-		{"a subagent's acked request, proven by its tool's PostToolUse", newSubagentPAEnv, []r7Step{r7Acked, toolRanA}},
-		{"the main agent's acked request, proven by its Stop", newPAEnv, []r7Step{r7Acked}},
+		{"the main agent's acked request, proven by its Interrupt", newCodexPAEnv, []r7Step{r7Acked}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -325,6 +327,7 @@ func TestPauseRelayGuardScope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex
 			r := e.seedRow(t, tc.spec)
 			if tc.delivers {
 				storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{storefix.TestRequestTokenA})

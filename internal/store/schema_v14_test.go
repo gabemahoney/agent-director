@@ -76,17 +76,17 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 				!reflect.DeepEqual(requests, readQuotedRows(t, path, "permission_requests", "pre", "request_id", requestCols)) {
 				t.Fatal("migration changed existing lifecycle, identity, hold, answer, proof or timing data")
 			}
-			after := dbDump(t, path)
+			after, kept := dbDump(t, path), dumpBeforeV21(t, path)
 			if prefix == len(v14ColumnSpecs) {
 				// New input tables are checked by fresh-schema convergence above.
 				for key, want := range before {
-					if !reflect.DeepEqual(want, after[key]) {
+					if !reflect.DeepEqual(want, kept[key]) {
 						t.Fatalf("migration replaced retained %s", key)
 					}
 				}
 			}
 			for _, table := range []string{"session_history", "store_meta", "cursor_runtimes", "subagents", "subagent_launches"} {
-				if !reflect.DeepEqual(before["rows "+table], after["rows "+table]) {
+				if !reflect.DeepEqual(before["rows "+table], kept["rows "+table]) {
 					t.Errorf("changed %s", table)
 				}
 			}

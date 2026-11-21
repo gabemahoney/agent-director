@@ -402,7 +402,7 @@ export class ErrSystemInstallDisappeared extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (61 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (69 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -479,7 +479,35 @@ export class ErrSubmissionUnconfirmed extends AgentDirectorError {}
  * of the Spawn may still answer its request; nothing was sent.
  */
 export class ErrSendKeysWhileRelayed extends AgentDirectorError {}
-/** Mirrors ErrSpawnNotPausable (package: api) */
+/**
+ * Mirrors ErrCantSend (package: api): a busy-send refusal; nothing was stored, sent or typed.
+ * `errDetails` is a `CantSendDetails`: reason `agent_not_covered` means busy send does not cover
+ * the Launch the option applies to (sendKeys: the row's current Launch, as recorded; resume: the
+ * resumed Launch; spawn, reuse and an agent-named template: the resolved agent's new Launch), and
+ * the same call without busy-send options can succeed (`retry_with` `new_send`).
+ */
+export class ErrCantSend extends AgentDirectorError {}
+/**
+ * Mirrors ErrSendAcceptedForceFailed (package: api): the Message was accepted or its pair
+ * repeated, but its separate force step failed. `errDetails` is a
+ * `SendAcceptedForceFailedDetails` holding the accepted Result. Do not send the Message as new;
+ * any force stored before the failure keeps its recovery.
+ */
+export class ErrSendAcceptedForceFailed extends AgentDirectorError {}
+/**
+ * Mirrors ErrSpawnNotPausable (package: api). With `only_if_waiting` false (the default), the row
+ * is not waiting, or, for a Covered Agent paused keylessly, its resumable shutdown was not
+ * established: `errDetails` is a `NotPausableDetails` with its cause and `signal_sent`
+ * (`exit_uncertain` is a sent signal whose exit was not verified, never success). With
+ * `only_if_waiting: true` on a row whose current Launch is recorded `not_covered`, in any
+ * state, `errDetails` is a `NotPausableDetails` with cause `agent_not_covered` and nothing is
+ * ended; on a Launch recorded `covered` it refuses `not_waiting` (with `observed_state`) or
+ * `turn_pending`, changing nothing. A pause claim standing on the Launch answers a pause,
+ * signalling nothing: `pause_in_progress`, `pause_uncertain`, or the earlier pause's recorded
+ * outcome replayed (`exit_uncertain` with `signal_sent` true; a failure's cause, or
+ * `pause_uncertain`, with `signal_sent` omitted); `PauseParams.only_if_waiting` has the
+ * exceptions.
+ */
 export class ErrSpawnNotPausable extends AgentDirectorError {}
 /**
  * Exit keys were sent but ended was not observed before the pause deadline.
@@ -501,7 +529,9 @@ export class ErrTemplateExists extends AgentDirectorError {}
 export class ErrTemplateAgentMissing extends AgentDirectorError {}
 /** Mirrors ErrProbeUnsupported (package: probe) */
 export class ErrProbeUnsupported extends AgentDirectorError {}
-/** Mirrors ErrSpawnNotResumable (package: api) */
+/** Mirrors ErrSpawnNotResumable (package: api). `NotResumableDetails` cause
+ * `covering_version_unavailable` names the recorded provider: install a version
+ * that covers it and retry resume. Nothing was changed or launched. */
 export class ErrSpawnNotResumable extends AgentDirectorError {}
 /** Mirrors ErrNoSessionId (package: api) */
 export class ErrNoSessionId extends AgentDirectorError {}
@@ -660,6 +690,8 @@ const ERROR_TABLE = {
   // api package
   ErrSpawnNotInteractive,
   ErrSubmissionUnconfirmed,
+  ErrCantSend,
+  ErrSendAcceptedForceFailed,
   ErrSendKeysWhileRelayed,
   ErrSpawnNotPausable,
   ErrPauseTimeout,

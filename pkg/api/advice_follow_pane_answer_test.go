@@ -96,13 +96,14 @@ func TestAdviceFollow_E10_ClaimTooSoonRetryAtNotBefore(t *testing.T) {
 // any retry" (b.146 rules 7, 8, 13). A pane answer and record-pane-answer over
 // a pane that changed since it was read are ErrPaneChanged, nothing sent or
 // recorded; read-pane again, and the retry with its pane_sha256 is accepted.
+// On a Codex row: a covered Claude row takes no pane answer keys.
 func TestAdviceFollow_E11_PaneChangedReadPaneAgain(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
 	for _, verb := range []string{"send-keys", "record-pane-answer"} {
 		t.Run(verb, func(t *testing.T) {
 			t.Parallel()
-			p := newPAEnv(t)
+			p := newCodexPAEnv(t)
 			p.paGoneLongAgo(t, tok)
 			call := func(hash string) error {
 				if verb == "send-keys" {
@@ -145,12 +146,13 @@ func TestAdviceFollow_E11_PaneChangedReadPaneAgain(t *testing.T) {
 // (b.146 rule 8). A pane answer whose key was sent but whose sent write failed
 // leaves pane_answer intent, released; read-pane, then record-pane-answer
 // with its pane_sha256 closes the request. Plain send-keys is then
-// ErrDialogMaybeOpen (the record is no proof, b.146 step 2c) until the tool's
-// PostToolUse proves the request gone, and types again.
+// ErrDialogMaybeOpen (the record is no proof, b.146 step 2c) until the main
+// agent's turn end (a Codex row's Interrupt) proves the request gone, and
+// types again. On a Codex row: a covered Claude row takes no pane answer keys.
 func TestAdviceFollow_E12_PaneAnswerNotRecordedRecordPaneAnswer(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
-	p := newPAEnv(t)
+	p := newCodexPAEnv(t)
 	p.sks = &paDyingStore{killStore: p.store, sentErr: errors.New("disk I/O error")}
 
 	err := p.sendKeys(p.answer(tok, "allow", "1"))
@@ -170,26 +172,26 @@ func TestAdviceFollow_E12_PaneAnswerNotRecordedRecordPaneAnswer(t *testing.T) {
 		t.Fatalf("record-pane-answer: %v; want the request closed", err)
 	}
 	assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
-	p.prove(t, toolRan(paToolUseID))
+	p.prove(t, turnEnd())
 	if err := p.sendKeys(p.plain("next")); err != nil {
-		t.Errorf("plain send-keys once the tool's PostToolUse proved it gone: %v; want it typed", err)
+		t.Errorf("plain send-keys once the main agent's turn end proved it gone: %v; want it typed", err)
 	}
 }
 
-// TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill: E13 pause's "ErrDialogMaybeOpen: answer dialog,
-// send-keys `/exit` with expect_pane_sha256, or kill" (b.zdz), on a waiting row whose background subagent's acked
+// TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill: E13 pause's "ErrDialogMaybeOpen: answer it,
+// send-keys `/exit`+expect_pane_sha256, or kill" (b.zdz), on a waiting row whose background subagent's acked
 // request stays unproven. The dialog answered with the pane's hash, read with read-pane (pause still held), then /exit
-// with the hash of a fresh read ends the agent and pause is then a no-op; or kill sends its kill. Neither types through
-// pause.
+// with the hash of a fresh read ends the agent, and pause then ends the row with no tmux call (a Codex row's end
+// check); or kill sends its kill. Neither types through pause. On a Codex row: a covered Claude row's pause is keyless.
 func TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill(t *testing.T) {
 	t.Parallel()
-	adviceAssertManifest(t, "pause", "", "ErrDialogMaybeOpen: answer dialog, "+
-		"send-keys `/exit` with expect_pane_sha256, or kill")
+	adviceAssertManifest(t, "pause", "", "ErrDialogMaybeOpen: answer it, "+
+		"send-keys `/exit`+expect_pane_sha256, or kill")
 	tok := storefix.TestRequestTokenA
 	for _, way := range []string{"send-keys /exit with the pane's hash", "kill"} {
 		t.Run(way, func(t *testing.T) {
 			t.Parallel()
-			p := newSubagentPAEnv(t)
+			p := newCodexSubagentPAEnv(t)
 			r7Acked(t, p)
 			p.mainAgentStop(t)
 			first := p.pauseRun(t, false)
@@ -228,7 +230,7 @@ func TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill(t *testing.T) {
 				t.Fatalf("request A = %+v; want it unproven, the pane's hash the only way past the hold", pr)
 			}
 			p.rec.Reset()
-			p.endAfterEnter(t, p.r)
+			p.codexExitsAfterEnter(t, p.r, nil)
 
 			if err := p.sendKeys(api.SendKeysParams{InstanceID: p.r.ID, Text: exitText, ExpectPaneSHA256: hash}); err != nil {
 				t.Fatalf("send-keys /exit with the pane's hash: %v; want it typed", err)
@@ -236,10 +238,10 @@ func TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill(t *testing.T) {
 
 			assertTextSent(t, p.rec, p.r.Socket, p.r.Spawn.Identity.PaneID, exitText)
 			assertEnterSent(t, p.rec, p.r.Socket, p.r.Spawn.Identity.PaneID)
-			pauAssertState(t, p.killEnv, p.r.ID, store.StateEnded)
 			if run := p.pauseRun(t, false); run.err != nil || len(run.calls) != 0 {
-				t.Errorf("pause once the agent ended = %v, calls %v; want the no-op success", run.err, run.calls)
+				t.Errorf("pause once the agent exited = %v, calls %v; want the row ended, no tmux call", run.err, run.calls)
 			}
+			pauAssertState(t, p.killEnv, p.r.ID, store.StateEnded)
 		})
 	}
 }
@@ -247,10 +249,11 @@ func TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill(t *testing.T) {
 // TestAdviceFollow_E6_PauseWhileRelayedDecidedRequestRetryLater: E6 from pause (b.zdz), "... is recorded and its relay
 // hook may still be delivering it; retry later", on a waiting row whose main agent's request A was acked and proven
 // gone by its Stop while A's relay hook still runs: retried alike while it runs, then pause types /exit and the row ends.
+// On a Codex row (its turn end the Interrupt): a covered Claude row's pause is keyless.
 func TestAdviceFollow_E6_PauseWhileRelayedDecidedRequestRetryLater(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
-	p := newPAEnv(t)
+	p := newCodexPAEnv(t)
 	r7Acked(t, p)
 	r7HookAlive(t, p)
 	p.mainAgentStop(t)
@@ -269,7 +272,7 @@ func TestAdviceFollow_E6_PauseWhileRelayedDecidedRequestRetryLater(t *testing.T)
 	}
 	p.pc.Set(relayEnvHook.PID, procfix.Gone())
 	p.rec.Reset()
-	p.endAfterEnter(t, p.r)
+	p.codexExitsAfterEnter(t, p.r, nil)
 	if run := p.pauseRun(t, false); run.err != nil {
 		t.Fatalf("pause retried once the relay hook exited: %v; want /exit delivered and the row ended", run.err)
 	}

@@ -170,6 +170,16 @@
     "description": ""
   },
   {
+    "name": "ErrCantSend",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrSendAcceptedForceFailed",
+    "package": "api",
+    "description": ""
+  },
+  {
     "name": "ErrListInvalidLabel",
     "package": "api",
     "description": ""
@@ -326,6 +336,11 @@
   },
   {
     "name": "ErrJournalMigrationRefused",
+    "package": "adminapi",
+    "description": ""
+  },
+  {
+    "name": "ErrVersionInstallRefused",
     "package": "adminapi",
     "description": ""
   },

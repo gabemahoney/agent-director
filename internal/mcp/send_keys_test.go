@@ -10,14 +10,18 @@ import (
 
 // TestSendKeysMCPEmptyText (b.9o4): the send_keys tool takes text "" (the
 // Enter-only send) on a live row and, with allow_pending, a pending row: one
-// Enter to the agent's pane, nothing typed.
+// Enter to the agent's pane, nothing typed. The row is a pane-only Droid
+// agent's: busy send doesn't cover it, so its raw input stays (a Claude row's
+// empty text is refused).
 func TestSendKeysMCPEmptyText(t *testing.T) {
 	for _, tc := range []struct{ name, state, args string }{
 		{"live row", store.StateWaiting, `{"instance_id":"` + killMCPID + `","text":""}`},
 		{"pending row with allow_pending", store.StatePending, `{"instance_id":"` + killMCPID + `","text":"","allow_pending":true}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t, tc.state, seedOurs)
+			e := newEnv(t)
+			e.seed(t, killMCPID, tc.state, apitest.WithAgent("droid"))
+			seedOurs(t, e.rec, e.storePath)
 
 			toolResult(t, callTool(t, e.d, "send_keys", tc.args))
 

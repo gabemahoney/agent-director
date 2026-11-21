@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"io"
@@ -247,7 +248,13 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //     socket, the one old-row lookup with the new-name pre-check on the same
 //     listing, proceed or the refusal.
 //  2. Its ad.provenance.disagree records, on a refusal as on proceed.
-//  3. A new launch token (spawn.NewLaunchToken); a failure is ErrInternal,
+//  3. For a covered published conversation, old-issuer exclusion
+//     (busySendExitFor): every owned process of its Launches checked gone by
+//     identity, else ErrInstanceIdCollision (reuseExitError) with nothing
+//     written; a row removed meanwhile is the lost race (reuseLostRaceError).
+//     The evidence goes to the reset (Spawn.BusySendExit), which
+//     validates and applies it in its own transaction. Then a new launch
+//     token (spawn.NewLaunchToken); a failure is ErrInternal,
 //     with nothing written. A Droid launch next checks its required Guard
 //     (spawn.ResolveDroidGuard), even for a pre-feature row, then any Rule Set
 //     (spawn.ResolveDroidRules). ErrLaunchGuardRefused and
@@ -288,34 +295,35 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //     archived_session_id null when nothing was archived, lookup_outcome the
 //     decision's verdict token, source ad_spawn), fail-open, before any
 //     restore.
-//  9. The outcome, through the code resume shares (finishedLaunch.outcome,
-//     reuseDeps.launchOnto): a labelled session gets the identity write with
-//     the reset's version and the new token (a failed write logs one WARN
-//     line and does not fail the call) and a lost reply none, both returning
-//     the id and pre_trust; a timeout, or a non-zero-exit unparseable reply,
-//     is ErrTmuxUnresponsive saying the row was reset and stays pending, with
-//     no restore and no identity write; "duplicate session" makes one
-//     re-lookup of the requested name against the examined launch identity,
-//     restores the row and returns the holder's classified error, then
-//     writes the re-lookup's disagree reasons not already written and one
-//     ad.launch.name_held (launch reuse); every other failure (tmux
-//     unavailable: ErrTmuxNotAvailable; a session that could not be
-//     labelled, any other launch failure: ErrTmuxSessionCreate) restores the
-//     row and returns its launch error. The restore (RestoreAfterFailedReuse
-//     with the reset's version, the examined raw life and a failure time from
-//     the Client clock) is attempted exactly once on those paths; its result
+//  9. The outcome, through reuseDeps.launchOnto. finishedLaunch.outcome owns
+//     the shared resume/reuse mapping, including identity and publication
+//     writes, preserved success despite publication uncertainty and owner
+//     release. finishedLaunch.heldName owns the
+//     duplicate-session re-lookup and outcome. On paths requiring restoration,
+//     RestoreAfterFailedReuse uses the reset's version, the examined raw life
+//     and a failure time from the Client clock. It is attempted exactly once;
+//     its result
 //     (restored, left as it is because the row changed or was removed after
 //     this spawn reset it, or, on a store error, still pending with one WARN
 //     line) is the launch error's row sentence, and ad.spawn.reuse_restored
 //     records it. The launch error is returned whatever the restore did.
-//     Every path that ends with no identity write applied and no restore
-//     applied ends the launch's hold (finishedLaunch's release, b.kdf).
 //
 // Success with no dropped arguments does not say whether a reset happened
 // (SR-10.7); nonempty DroppedArgs identifies a finished-agent switch.
 func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (SpawnResult, error) {
 	id := r.InstanceID
 	socket := ex.pre.Socket
+
+	exit, refusal, err := busySendExitFor(d.rs, d.pc, id)
+	if errors.Is(err, store.ErrSpawnNotFound) {
+		return SpawnResult{}, reuseLostRaceError(id)
+	}
+	if err != nil {
+		return SpawnResult{}, reuseChangeError(id, err)
+	}
+	if refusal != nil {
+		return SpawnResult{}, reuseExitError(id, refusal.describe(), refusal.clears())
+	}
 
 	token, err := spawn.NewLaunchToken()
 	if err != nil {
@@ -347,10 +355,14 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	fresh.LaunchStartedAtMillis = now.UnixMilli()
 	fresh.Identity = LaunchIdentity{Token: token, Socket: socket}
 	fresh.LaunchOwner = spawn.CurrentLaunchOwner(d.pc)
+	fresh.BusySendExit = exit
 	res, archived, resetVersion, err := d.rs.ResetForReuse(id, ex.row.Snapshot, ex.row.Agent, fresh)
 	if err != nil {
 		if len(c.Files) > 0 {
 			spawn.ReclaimLaunchFiles(d.storeID, token, d.lg)
+		}
+		if errors.Is(err, store.ErrBusySendExitNotEstablished) {
+			return SpawnResult{}, reuseExitError(id, "the processes it owns changed after this spawn checked them", "")
 		}
 		return SpawnResult{}, reuseChangeError(id, err)
 	}
@@ -456,6 +468,7 @@ func (d reuseDeps) launchOnto(ex reuseExamined, resetVersion int64, owner Launch
 		lg:       d.lg,
 		who:      d.who,
 		identity: d.rs,
+		busySend: busySendWriter(d.rs),
 		release:  ownerReleaser(d.rs, owner),
 		restoreWrite: func() (CondResult, error) {
 			return d.rs.RestoreAfterFailedReuse(row.InstanceID, resetVersion, ex.row.Life, d.now())

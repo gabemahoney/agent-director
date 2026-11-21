@@ -191,7 +191,9 @@ func TestCheckShRunFails(t *testing.T) {
 	spawnOut := `{"error":"stub spawn stdout"}`
 	spawnErr := "stub agent-director: spawn fails " + strings.Repeat("x", 420) + "\nstub agent-director: spawn stderr tail"
 	// With STUB_STATE set, the rows work instead, except that each row's
-	// first status and first read-pane fail, so its polls recover.
+	// first status and first read-pane fail, so its polls recover. A claude
+	// row's send-keys is a Held Message, never typed, as busy send makes it;
+	// a codex row's text reaches its pane.
 	writeFile(t, home, ".config/agent-director/bin/agent-director", `#!/bin/bash
 [ "$1" = version ] && { printf '%s\n' '`+fmt.Sprintf(versionJSON, kitCommit)+`'; exit 0; }
 [ "$1" = spawn ] && printf '%s\n' "$@" >"$SPAWN_LOG.$3"
@@ -201,10 +203,11 @@ if [ -z "$STUB_STATE" ]; then
 fi
 verb=$1
 shift
-id=$(cat "$STUB_STATE/last" 2>/dev/null) text="" records=""
+id=$(cat "$STUB_STATE/last" 2>/dev/null) text="" records="" agent=""
 while [ $# -gt 0 ]; do
 	case $1 in
 	--instance-id) id=$2; shift ;;
+	--agent) agent=$2; shift ;;
 	--text) text=$2; shift ;;
 	--extra-env) case $2 in AD_CODEX_RECORD_DIR=*) records=${2#*=} ;; esac; shift ;;
 	esac
@@ -216,6 +219,7 @@ first() { [ ! -e "$STUB_STATE/$1-$id" ] && touch "$STUB_STATE/$1-$id"; }
 case $verb in
 spawn)
 	echo "$id" >"$STUB_STATE/last"
+	echo "$agent" >"$STUB_STATE/agent-$id"
 	rm -f "$STUB_STATE/killed-$id"
 	[ -z "$records" ] || { mkdir -p "$records/$id" && echo 1 >"$records/$id/pid"; }
 	printf '{"instance_id":"%s"}\n' "$id" ;;
@@ -224,10 +228,15 @@ status)
 	printf '{"state":"%s"}\n' "$state" ;;
 get) printf '{"instance_id":"%s","state":"%s"}\n' "$id" "$state" ;;
 list) printf '{"spawns":[{"instance_id":"%s","state":"%s"}]}\n' "$id" "$state" ;;
-send-keys) printf '%s' "$text" >"$STUB_STATE/pane-$id" ;;
+send-keys)
+	if [ "$(cat "$STUB_STATE/agent-$id")" = claude ]; then
+		printf '{"class":"held","final":false,"reason":"readiness_unknown"}\n'
+	else
+		printf '%s' "$text" >"$STUB_STATE/pane-$id"
+	fi ;;
 read-pane)
 	first read-pane && { echo "stub read-pane stdout"; echo "stub read-pane stderr" >&2; exit 4; }
-	jq -cn --arg p "$(cat "$STUB_STATE/pane-$id")" '{pane: $p}' ;;
+	jq -cn --arg p "$(cat "$STUB_STATE/pane-$id" 2>/dev/null)" '{pane: $p}' ;;
 kill) touch "$STUB_STATE/killed-$id" ;;
 find-missing) ;;
 *) echo "stub agent-director: $verb fails" >&2; exit 1 ;;

@@ -67,7 +67,7 @@
   it, even with `--no-hooks`.
 - With `--from-release`: `curl` and `sleep`. With `--sha256` and
   `--admin-sha256`: either `sha256sum` or `shasum`.
-- On macOS, an upgrade of an existing store reads the user's processes with
+- On macOS, an exempt upgrade of an existing store reads the user's processes with
   the system `/usr/sbin/lsof` and access-control entries with `/bin/ls`: run
   the install as the agents' user, not as root, and grant the terminal access
   if macOS asks. [Upgrade refusal
@@ -84,11 +84,12 @@ required for release installs. `git`, `ps`, `lsof`, `pgrep`, `getent`, `dscl`,
 the macOS upgrade tools above. Scheduling
 keeps its [cron/systemd fallback and warnings](#schedule-the-sweeps).
 
-Native confirmed ordinary text delivery has narrower requirements: Linux, the exact
-agent versions above and a fresh supported launch. See
+For agents busy send does not cover, native confirmed ordinary text delivery
+requires Linux, exactly Codex 0.159.2 and a fresh supported launch. See
 [Ordinary text submission](caller-contract.md#ordinary-text-submission).
-Other launches retain literal text delivery without exact transcript confirmation,
-as described in that contract.
+Other uncovered launches use fallback input without exact transcript confirmation,
+as described in that contract. Covered Claude sends use
+[busy send](caller-contract.md#covered-sends).
 
 ## Install from a release
 
@@ -109,22 +110,26 @@ It downloads the binaries from that release,
 sets up `~/.config/agent-director/` (and `~/.config` itself, mode `0700`, if
 it is missing), symlinks `agent-director` (see `--symlink-dir`),
 installs `agent-director-admin` at `~/.config/agent-director/admin/` (never on PATH),
-migrates `state.db` and installs the SessionStart/SessionEnd help hooks (with
-Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
+installs the SessionStart/SessionEnd help hooks (with Claude Code installed;
+see [Claude Code and Codex](#claude-code-and-codex)). The
+[upgrade branch](#upgrade) determines whether it migrates a store or publishes
+files only. The permanent entries and retained binaries are described in the
+[install layout](architecture.md#on-disk-shape).
 
 `install.sh` flags:
 
-- `--from-release [tag]`: download from GitHub Releases (latest, or a tag of
-  this release or later). A tag of an earlier release is refused: pass a tag
-  of this release or later, or install the earlier release with that
-  release's own `install.sh`, fetched from its tag, provided it
-  [supports this host](#requirements). To verify, pass both
+- `--from-release [tag]`: download from GitHub Releases (latest, or a tag).
+  Use a layout-aware installer and a matching runtime/admin pair on a
+  versioned install; see [Upgrade](#upgrade). To verify, pass both
   `--sha256 <hex>` and `--admin-sha256 <hex>`, or neither.
 - `--binary <path>`, `--admin-binary <path>`: install from explicit binaries
   of the same build.
-- `--check-holders`: strictly read-only process inventory for native-input cutover
-  holders in the current layout, then exit without installing. Use the candidate
-  source and journal flags described under [Upgrade](#upgrade).
+- `--check-holders`: on an exempt install, strictly read-only process inventory
+  for native-input cutover holders, then exit without installing. On a later
+  install it exits 0 without inspecting the store or holders, publishing,
+  repairing entries or changing ancillary files; the summary says the check
+  is unnecessary and the schema was not inspected. Use the candidate source
+  and journal flags described under [Upgrade](#upgrade).
 - `--register-mcp`: register the stdio MCP server with Claude Code (Claude Code
   only; a Codex folder's entry is made by hand, see [Set up agent-director in a
   Codex folder](settings.md#set-up-agent-director-in-a-codex-folder)). It runs
@@ -138,8 +143,8 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
   [Upgrade](#upgrade) for the old entries it prints) and do not set
   `inject_help_hook` in `config.toml` (see
   [settings](settings.md#defaultsinject_help_hook-config)), which is also what
-  enables Codex help entries and Cursor session guidance. It does not skip the [rename
-  migration](#upgrade).
+  enables Codex help entries and Cursor session guidance. On an exempt install,
+  it does not skip the [rename migration](#upgrade).
 - `--schedule`: schedule recovery (`sweep` when supported) and separate
   `expire` cleanup for the user running the script, who must be the agents'
   user. Off by default. See
@@ -155,12 +160,16 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
 - `--journal-legacy-root <dir>`: include an additional absolute legacy input
   root (repeat for each); see
   [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal).
+  All journal flags are unused on a later install: its summary says no journal
+  backup was made and the schema was not inspected.
 - `--symlink-dir <dir>`: PATH symlink dir (default `~/.local/bin`, if on PATH).
+  The canonical `bin/` and destinations inside `current/` or `versions/`,
+  including physical aliases, are skipped with a summary line.
 - `--no-symlink`: create no PATH symlink.
-- `--keep-prior`: keep each overwritten binary as `<target>.prior`. Restoring
-  binaries alone requires an unchanged directory and schema. The upgrade that
-  moves the directory makes no snapshot (see
-  [Upgrade](#upgrade)).
+- `--keep-prior`: on the exempt path, keep each overwritten binary as
+  `<target>.prior`; the directory-moving upgrade makes no snapshot. On a later
+  install it is unused: versions are retained automatically, without new
+  `.prior` copies. Use [compatible rollback](operator-actions.md#rolling-back-a-versioned-install).
 
 ## Claude Code and Codex
 
@@ -284,8 +293,9 @@ bash skills/install-agent-director/install.sh --schedule
 ```
 
 Without the flag, an install or upgrade preserves existing schedule commands,
-cadence and timer enablement. With it, the installer replaces its own entries
-using the template cadence. Choose the defaults or set your own cadence in
+cadence and timer enablement. With it, the installer installs or repairs missing
+or changed managed entries using the template cadence; already-correct entries
+stay unchanged. Choose the defaults or set your own cadence in
 [Maintenance](maintenance.md#schedule-them-by-hand).
 
 What it installs, how to do it by hand and the same-environment rule are in
@@ -313,6 +323,61 @@ valid aliases on a supporting binary; an upgrade needs no schedule rewrite.
 An agent upgrading an install follows the
 [upgrade skill](../skills/upgrade-agent-director/SKILL.md) step by step.
 
+### Choose the upgrade path
+
+Classify by files before inspecting a store or stopping an agent. Any
+`install-contract.json`, `install-initialization.json`, `current`, `versions`,
+`publications` or `install.lock` under `~/.config/agent-director`, or a
+canonical runtime/admin entry linked into its `current` or `versions` tree,
+selects the **later, file-only path**. Dangling links and partial layouts count.
+Missing or corrupt `current`, or regular files an old installer put over the
+entries, do not authorize a store-opening fallback while evidence remains.
+
+**Later installs:** use a layout-aware installer and candidate runtime/admin
+from the same build. Installation stages and validates immutable files, then
+publishes them. Sends and every AD CLI call remain available throughout;
+agents, callers and `serve` processes need no stop, restart or resume.
+Installation, validation, recovery and rollback never open, read, lock,
+checkpoint, rewrite or convert the runtime database or its sidecars.
+The summary says `schema : not inspected (file-only upgrade)`: success makes
+no schema-health claim, whatever a custom, missing or old `db_path` names.
+
+Correct PATH links, help hooks, MCP registrations and schedule references to
+the permanent entries remain unchanged. Identical hook/config content and
+schedule files are not rewritten; unchanged systemd units are not reloaded or
+restarted. With `--schedule`, disabled/inactive unchanged timers can still be
+enabled/started. Without it, existing cadence and enablement are preserved.
+Run the chosen install command with the original flags. Verify without a store
+probe:
+
+```sh
+~/.config/agent-director/bin/agent-director version
+readlink ~/.config/agent-director/current
+readlink ~/.config/agent-director/bin/agent-director
+readlink ~/.config/agent-director/admin/agent-director-admin
+```
+
+The selected version must match the candidate, `current` must name its retained
+version directory, and the entries must name `../current/agent-director` and
+`../current/agent-director-admin`. For validated retained-version inspection,
+rollback, refusal or uncertain output, follow
+[versioned-install recovery](operator-actions.md#recovering-a-versioned-install).
+Never use an older release's installer to overwrite this layout. A candidate
+without the version commands is refused here with exit 3.
+
+**No layout evidence:** the installation is **exempt** and follows the procedure
+below, including its maintenance authorization and every-agent restart.
+After store setup and verification complete, a capable candidate establishes
+the permanent layout. If publication then fails, keep the original exempt
+context and follow the [publication continuation](../skills/upgrade-agent-director/SKILL.md#publication-failure-after-an-exempt-install)
+before completing its verification and restart obligations.
+A candidate predating the version commands can still install on this
+path, leaving no layout; the summary says the next current-release install is
+exempt again. Claimed but unusable version-command support is exit 3 on either
+path. Capability is checked from the commands, not release strings.
+
+### Exempt installation
+
 You can upgrade directly to this release from any earlier agent-director
 release starting at 0.3.0; no intermediate release is needed. This installer
 cannot upgrade `claude-director` 0.1.0–0.2.3 in `~/.claude-director`: it would make a fresh
@@ -323,6 +388,11 @@ journal cutover, once, and needs the journal flags listed above; a fresh
 install or a store at schema v16 or later needs none. Follow the
 [maintenance-window procedure](operator-actions.md#upgrading-the-native-input-journal)
 for check timing, the complete recovery set and writer exclusion.
+
+An upgrade of a store below schema v21 also brings it to v21; the installer
+authorizes this itself. Every agent agent-director manages must then be
+resumed or restarted (see **After the upgrade** below). A store already at
+v21 opens with no migration.
 
 Check holders with the candidate release and the same journal flags planned
 for installation:
@@ -458,6 +528,8 @@ agent selection to the caller.
 - Resume each agent stopped for the upgrade, parents first, with
   `AGENT_DIRECTOR_INSTANCE_ID=<its recorded parent>` set for each child's
   command only; follow [step 6 of the upgrade skill](../skills/upgrade-agent-director/SKILL.md#6-resume-the-agents).
+  Every agent must restart for the exempt install; also relaunch any still
+  running from before it (`kill` or `pause`, then `resume`).
 - Cursor gateway refusal reporting requires both the caller and the running
   gateway to be agent-director 0.17.2 or later. Relaunch Cursor rows (`kill` or
   `pause`, then `resume`) to run the installed gateway; follow
@@ -475,9 +547,10 @@ agent selection to the caller.
   other `CLAUDE_CONFIG_DIR` folders, [Codex MCP and help
   entries](settings.md#set-up-agent-director-in-a-codex-folder), and scripts or
   test setups that pass the old binary's path.
-- An earlier release is installed with its own `install.sh`, fetched from its
-  tag, provided it [supports this host](#requirements); this release's
-  `install.sh` refuses an earlier release's binaries (exit 3).
+- Once the permanent layout is established, use
+  [compatible rollback](operator-actions.md#rolling-back-a-versioned-install)
+  to select an earlier retained version. To return past the exempt schema
+  conversion, use the separate [stopped-writer teardown and restore](operator-actions.md#returning-across-the-exempt-conversion).
 
 For upgrade refusals, incomplete cutovers or partial restores, see
 [refusal reasons](operator-actions.md#upgrade-refusal-reasons),
@@ -506,7 +579,13 @@ skills/install-agent-director/uninstall.sh --purge   # remove everything
 
 It works on `~/.config/agent-director`, or on the old directory (see
 [Upgrade](#upgrade)) for an install that was never moved. It removes the
-binaries, the PATH link, the help hooks in `~/.claude/settings.json` (those of
+binaries, all retained versions, publication history, `current`, the contract,
+initialization evidence and installation lock, including partial or dangling
+forms. This is explicit teardown, separate from seamless upgrade or rollback;
+it does not stop agents or migrate a store. Without `--purge`, runtime data
+(DB and sidecars, transcripts and templates), config and configured `db_path`
+are retained under the existing rules; unrelated files remain. It also removes
+the PATH link, the help hooks in `~/.claude/settings.json` (those of
 an install from before the move included) and the `inject_help_hook` setting,
 and keeps the directory unless `--purge`. Like the install, it names old copies
 of `settings.json` (see [Upgrade](#upgrade)). It leaves the MCP and help entries
