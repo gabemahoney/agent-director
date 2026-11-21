@@ -131,8 +131,9 @@ var pausePollInterval = 200 * time.Millisecond
 // without spinning real wall-clock time. Production uses time.Sleep.
 var pauseSleep = time.Sleep
 
-// Pause politely shuts down a live Spawn by clearing the input line of the
-// agent's own pane of the row's current launch (one C-u on a Claude row: it
+// Pause politely shuts down a live Spawn. Covered rows and busy uncovered
+// Codex rows use an identity-checked SIGTERM. Waiting uncovered rows clear the
+// input line of the agent's own pane of the row's current launch (one C-u on a Claude row: it
 // clears a one-line leftover, not a multi-line input; codexLineClearPresses
 // C-u in one call on a Codex row, which clears a draft of up to 64 lines), by
 // pane id, then typing `/exit` and Enter, and waiting up to timeoutSeconds for
@@ -175,7 +176,17 @@ var pauseSleep = time.Sleep
 //     deadline is owned_process_running, and one that can no longer be judged
 //     agent_process_unverifiable. Verified shutdown records ended with
 //     session_id retained. Nothing is typed and Held Messages stay Held.
-//   - A Codex row in a live state (pending included) whose agent process is
+//   - Uncovered Codex in working, ask_user or check_permission: an identity-
+//     checked SIGTERM to its recorded agent process, before the end-report
+//     check and relay guard, with no keys, input session, claims or tmux call.
+//     Its verified exit records ended with session_id kept, without needing a
+//     SessionEnd report. A same-launch process-based missing mark after the
+//     signal is corrected to ended; a row already ended/missing is a no-op.
+//     Every phase shares timeoutSeconds from the first read. Refusals use
+//     ErrSpawnNotPausable and NotPausableDetails (cause, signal_sent):
+//     agent_process_unverifiable, signal_unsupported, signal_uncertain,
+//     exit_uncertain, launch_changed or budget_exhausted; never ErrPauseTimeout.
+//   - A remaining Codex row in a live state (pending included) whose agent process is
 //     already gone and which holds an end report (the SessionEnd of its
 //     agent) is moved to ended before any of the rules below, with no tmux
 //     call, no relay guard, no unusable-name check and nothing sent: the same
@@ -189,9 +200,9 @@ var pauseSleep = time.Sleep
 //     (which makes no process read) go on to the rules below as before.
 //   - State ended or missing: no-op success, with no tmux call; the desired
 //     post-condition is already met.
-//   - State pending, working, ask_user or check_permission:
-//     ErrSpawnNotPausable, with no tmux call. `/exit` is never typed in these
-//     states, where the slash would be read as input text.
+//   - State pending, or working, ask_user or check_permission on other
+//     uncovered agents: ErrSpawnNotPausable, with no tmux call. `/exit` is
+//     never typed in these states, where the slash would be read as input text.
 //   - State waiting: the relay guard (below); then a recorded name that is
 //     unusable (SR-3.2) is ErrInternal, with no tmux call and no wait;
 //     otherwise the row's socket (SR-3.3; a resolution refusal is
@@ -466,9 +477,9 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent boo
 			return false, err
 		}
 	}
-	// The call's one budget starts before its first read (readRow): a covered
-	// row's keyless pause carries the rest of it. An uncovered pause ignores
-	// it: the budget bounds only the first read's wait for the connection, and
+	// The call's one budget starts before its first read (readRow): covered
+	// keyless and busy Codex signal pause carry the rest of it. A keys pause
+	// ignores it: the budget bounds only the first read's wait for the connection, and
 	// a wait it cuts short falls back to GetSpawn; its wait after its keys
 	// keeps its own full timeout.
 	b, cancel := r.newKeylessBudget()
@@ -495,6 +506,13 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent boo
 	// any tmux call: nothing is typed and no input session is opened.
 	if row.BusySend == store.BusySendCovered {
 		return false, r.keyless(b, row, false)
+	}
+
+	if row.Agent == store.AgentCodex && row.BusySend == store.BusySendNotCovered {
+		switch row.State {
+		case store.StateWorking, store.StateCheckPermission, store.StateAskUser:
+			return false, r.signalPause(b, row)
+		}
 	}
 
 	// The Codex end check comes first (SR-7.3, MC-4): before the state rules,
@@ -679,7 +697,12 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 	}
 }
 
-// Pause politely shuts down a waiting Spawn by sending C-u (which deletes the
+// Pause politely shuts down a Spawn. Busy uncovered Codex uses an identity-
+// checked SIGTERM and verifies exit within the timeout, recording ended with
+// session_id kept without a SessionEnd report. It bypasses the relay guard,
+// input sessions and tmux. Refusals are ErrSpawnNotPausable with
+// NotPausableDetails (cause, signal_sent), as for covered keyless pause.
+// Waiting uncovered pause sends C-u (which deletes the
 // agent's input from the cursor back to the start of its line, clearing a
 // one-line leftover such as the `/exit` a failed pause left typed), `/exit`
 // and Enter to the agent's own pane of the row's current launch, by pane id,
@@ -716,8 +739,8 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // plain Pause signals only while no claim stands. Pause is one-shot — no
 // incremental progress callback; ctx cancellation short-circuits the poll.
 //
-// Pause types what a plain send-keys without ExpectPaneSHA256 types, so on a
-// relayed Spawn it is held as one: it is refused, typing nothing (no C-u
+// Waiting uncovered Pause types what a plain send-keys without ExpectPaneSHA256
+// types, so on a relayed Spawn it is held as one: it is refused, typing nothing (no C-u
 // either) and with no wait, whenever such a send-keys would be
 // (ErrSendKeysWhileRelayed, ErrRelayFallenBack or ErrDialogMaybeOpen, in that
 // order and with the same err_details). It takes no pane hash, so it has no
@@ -750,8 +773,9 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //   - [ErrAgentCapabilityUnsupported]: the row's agent is pane-only and
 //     cannot be paused; nothing is changed or sent.
 //   - [ErrSpawnNotPausable]: with OnlyIfWaiting false, the row's state is
-//     not waiting; with OnlyIfWaiting true, the row's current Launch is
-//     recorded not_covered, in any state, with err_details
+//     not waiting and has no signal-pause path, or its signal shutdown
+//     cannot be verified (NotPausableDetails); with OnlyIfWaiting true, the
+//     row's current Launch is recorded not_covered, in any state, with err_details
 //     ([NotPausableDetails]) cause agent_not_covered, and nothing ended. A
 //     Covered Agent's err_details carry its cause: keyless pause's, the
 //     refusals not_waiting (with observed_state) and turn_pending, a standing

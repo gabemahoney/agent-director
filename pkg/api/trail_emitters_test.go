@@ -297,6 +297,7 @@ func TestObserveIdleScreenUnderCancelledContext(t *testing.T) {
 
 // TestPauseCodexEndTickBounded (b.x9o): a committed Codex end returns while
 // reporting is blocked; its accepted recovery tick survives caller cancellation.
+// Waiting Codex retains this end-report path; busy Codex is keyless (b.y7g).
 func TestPauseCodexEndTickBounded(t *testing.T) {
 	// Serial: it holds the process-wide trail singleton's mutex.
 	for _, cancelled := range []bool{false, true} {
@@ -309,7 +310,7 @@ func TestPauseCodexEndTickBounded(t *testing.T) {
 			for i := range attempts {
 				t.Run(fmt.Sprintf("sample=%d", i), func(t *testing.T) {
 					e := newKillEnv(t)
-					r := e.seedRow(t, codexSpec(store.StateWorking, agentGone, true))
+					r := e.seedRow(t, codexSpec(store.StateWaiting, agentGone, true))
 					mark := trailMark(t)
 					release := holdTrail(t)
 					baseline := trail.Default().Status()
@@ -353,7 +354,7 @@ func TestPauseCodexEndTickBounded(t *testing.T) {
 					if s := trail.Default().Status(); s.Pending != 0 || s.Failed != baseline.Failed || s.Rejected != baseline.Rejected {
 						t.Errorf("drained audit status = %+v", s)
 					}
-					assertMoveRecords(t, mark, r.ID, moveWant{source: "ad_recovery", prior: store.StateWorking, now: store.StateEnded,
+					assertMoveRecords(t, mark, r.ID, moveWant{source: "ad_recovery", prior: store.StateWaiting, now: store.StateEnded,
 						denyReason: store.DecisionReasonEnded, reason: "proc_absent"})
 				})
 			}
@@ -382,7 +383,7 @@ func TestPauseCodexTerminalReportingBounded(t *testing.T) {
 					spec.RelayOn = true
 					r := e.seedRow(t, spec)
 					// Enter a real display episode, then let the hook retain it while
-					// moving the raw state into check_permission.
+					// moving the raw state into waiting (the unchanged end-report path).
 					for _, at := range []time.Time{e.clock.Now(), e.clock.Now().Add(time.Minute)} {
 						row, err := e.st.GetSpawn(r.ID)
 						if err != nil {
@@ -393,13 +394,13 @@ func TestPauseCodexTerminalReportingBounded(t *testing.T) {
 							t.Fatalf("display setup: %+v, %v", out, err)
 						}
 					}
-					if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "PermissionRequest", r.Spawn.SessionID, apitest.HookAgent(store.AgentCodex)); !a.Applied {
-						t.Fatalf("permission hook: %+v", a)
+					if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "Stop", r.Spawn.SessionID, apitest.HookAgent(store.AgentCodex)); !a.Applied {
+						t.Fatalf("Stop hook: %+v", a)
 					}
 					tokens := pcxSeedRequests(t, e, r.ID, 1)
 					e.codexExits(t, r, nil)
 					before, err := e.st.GetSpawn(r.ID)
-					if err != nil || before.EndReportedAtMillis <= 0 || before.State != store.StateCheckPermission || before.CommittedDisplay().State != store.StateIdleScreen {
+					if err != nil || before.EndReportedAtMillis <= 0 || before.State != store.StateWaiting || before.CommittedDisplay().State != store.StateIdleScreen {
 						t.Fatalf("end report must retain the live display: %+v, %v", before, err)
 					}
 					if pr, err := e.st.GetPermissionRequest(r.ID, tokens[0]); err != nil || pr.Closed() || pr.Decision != "" {

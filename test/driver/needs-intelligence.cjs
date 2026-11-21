@@ -5,7 +5,8 @@
 // relay on and on Cursor with it off: public reads report check_permission
 // with no displayed_state, list --state check_permission lists the row, a
 // read still establishes and persists the request's fallback clock, and the
-// report-only command guards still refuse.
+// send-keys/decide guards still refuse. Busy Codex pause ends its owned process
+// keylessly (b.y7g); Cursor pause still refuses.
 //
 // Every store write goes through /opt/driver/sql.sh. The v14 ownership and
 // clock columns have no public writer, so they are seeded with sql.sh
@@ -27,7 +28,7 @@
 // timestamp, so every passing run prints the same line. Exit 77 with
 // availability:unavailable means the binary lacks the schema (never a pass).
 const assert = require('node:assert/strict');
-const {spawnSync} = require('node:child_process');
+const {spawn, spawnSync} = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -117,10 +118,20 @@ const OLD = Date.parse('2020-01-01T00:00:00.000Z');
 const OWNER = '1111111111111111';
 const EPOCH = 7;
 
-// Read observations check the actual owner, so keep this fixture process live.
-const ownerStart = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf8').split(')').at(-1).trim().split(/\s+/)[19];
-function seed(id, agent, relay = 'on') {
- sql(`INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch,pid,proc_starttime) VALUES(${q(id)},'check_permission','check_permission',0,'/tmp',${q(agent)},${q(relay)},${q('ts-' + id)},${q(OWNER)},${EPOCH},${process.pid},${q(ownerStart)})`);
+function processIdentity(pid) {
+ try {
+  const fields = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(')').at(-1).trim().split(/\s+/);
+  return {pid, start: fields[19], state: fields[0]};
+ } catch (error) {
+  if (error.code === 'ENOENT') return null;
+  throw error;
+ }
+}
+// Reads check a live owner. Only the Codex pause guard needs a disposable one:
+// b.y7g's identity-checked SIGTERM must never target this driver itself.
+function seed(id, agent, relay = 'on', owner = processIdentity(process.pid)) {
+ assert.ok(owner?.start, `${id}: no live owner identity`);
+ sql(`INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch,pid,proc_starttime) VALUES(${q(id)},'check_permission','check_permission',0,'/tmp',${q(agent)},${q(relay)},${q('ts-' + id)},${q(OWNER)},${EPOCH},${owner.pid},${q(owner.start)})`);
 }
 // A request owned by the spawn's current launch and interval, its confirm_by
 // at in milliseconds, long past; stored, the fallback clock is at too, else
@@ -206,31 +217,52 @@ if (mode === 'public') {
  const facts = [];
  for (const agent of ['codex', 'cursor']) {
   const id = 'guard-' + agent;
-  seed(id, agent);
-  request(id, OLD, true);
-  check('status', read('status', id), id, agent);
-  const commands = {
-   'send-keys': ['--instance-id', id, '--text', 'next'],
-   decide: ['--instance-id', id, '--request-token', A, '--decision', 'allow', '--max-wait-ms', '0'],
-   pause: ['--instance-id', id],
-  };
-  for (const [verb, args] of Object.entries(commands)) {
-   // decide --max-wait-ms 0 cannot wait for a store lock, so load can make it
-   // refuse ErrStoreBusy, recording nothing; the other verbs wait up to the
-   // store's busy timeout.
-   const result = verb === 'decide' ? callUnlessBusy(verb, ...args) : call(verb, ...args);
-   assert.notEqual(result.status, 0, `${agent}/${verb} unexpectedly permitted: ${result.stdout}`);
-   assert.ok(result.envelope, `${agent}/${verb}: no error envelope on stderr: ${result.stderr}`);
-   assert.equal(result.envelope.err_name, expected[verb], `${agent}/${verb}: ${result.stderr}`);
-   observed[verb].push(result.envelope.err_name);
+  const child = agent === 'codex' ? spawn('/bin/sleep', ['300'], {stdio: 'ignore'}) : null;
+  const owner = processIdentity(child ? child.pid : process.pid);
+  try {
+   seed(id, agent, 'on', owner);
+   request(id, OLD, true);
+   check('status', read('status', id), id, agent);
+   const commands = {
+    'send-keys': ['--instance-id', id, '--text', 'next'],
+    decide: ['--instance-id', id, '--request-token', A, '--decision', 'allow', '--max-wait-ms', '0'],
+   };
+   if (agent === 'cursor') commands.pause = ['--instance-id', id];
+   for (const [verb, args] of Object.entries(commands)) {
+    // decide --max-wait-ms 0 cannot wait for a store lock, so load can make it
+    // refuse ErrStoreBusy, recording nothing; the other verbs wait up to the
+    // store's busy timeout.
+    const result = verb === 'decide' ? callUnlessBusy(verb, ...args) : call(verb, ...args);
+    assert.notEqual(result.status, 0, `${agent}/${verb} unexpectedly permitted: ${result.stdout}`);
+    assert.ok(result.envelope, `${agent}/${verb}: no error envelope on stderr: ${result.stderr}`);
+    assert.equal(result.envelope.err_name, expected[verb], `${agent}/${verb}: ${result.stderr}`);
+    observed[verb].push(result.envelope.err_name);
+   }
+   // The refusals recorded nothing: no verdict, no proof, no pane answer.
+   const fact = sql(`SELECT COALESCE(decision,'')||'|'||COALESCE(proven_gone_at,'')||'|'||pane_answer FROM permission_requests WHERE instance_id=${q(id)}`, true);
+   assert.equal(fact, '||none', `${agent}: refused commands must leave the request untouched`);
+   facts.push(fact);
+   check('status', read('status', id), id, agent);
+   assert.equal(rawState(id), 'check_permission', `${agent}: raw state must stay check_permission`);
+   checkTrail(id);
+   if (child) {
+    const result = call('pause', '--instance-id', id);
+    assert.equal(result.status, 0, `codex/pause: ${result.stderr}`);
+    assert.deepEqual(result.data, {}, 'codex/pause result');
+    const after = processIdentity(child.pid);
+    // A synchronous CLI call delays Node's child reaping. Z/X are exited,
+    // exactly as the product's process probe judges them; no sleep is evidence.
+    assert.ok(!after || after.start !== owner.start || ['Z', 'X'].includes(after.state), 'codex/pause left its owned child alive');
+    assert.equal(rawState(id), 'ended', 'codex/pause must commit ended before any recovering read');
+    observed.pause.push('ended');
+    checkTrail(id);
+   }
+  } finally {
+   if (child && owner) {
+    const remaining = processIdentity(child.pid);
+    if (remaining?.start === owner.start && !['Z', 'X'].includes(remaining.state)) child.kill('SIGKILL');
+   }
   }
-  // The refusals recorded nothing: no verdict, no proof, no pane answer.
-  const fact = sql(`SELECT COALESCE(decision,'')||'|'||COALESCE(proven_gone_at,'')||'|'||pane_answer FROM permission_requests WHERE instance_id=${q(id)}`, true);
-  assert.equal(fact, '||none', `${agent}: refused commands must leave the request untouched`);
-  facts.push(fact);
-  check('status', read('status', id), id, agent);
-  assert.equal(rawState(id), 'check_permission', `${agent}: raw state must stay check_permission`);
-  checkTrail(id);
  }
  const errors = Object.fromEntries(Object.entries(observed).map(([verb, names]) => [verb, [...new Set(names)].join('/')]));
  console.log(JSON.stringify({case: mode, errors, facts: [...new Set(facts)].join('/'), shown: 'check_permission', records: 0}));

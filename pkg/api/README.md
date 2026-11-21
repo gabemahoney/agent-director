@@ -580,7 +580,9 @@ snapshot and reports unsupported coverage explicitly.
 in any live state. It preserves Held Messages for resume and returns
 `ErrSpawnNotPausable` with `NotPausableDetails` on refusal; see
 [keyless pause](../../docs/caller-contract.md#keyless-pause-of-a-covered-agent).
-For uncovered agents it types exit only while waiting and can return
+For busy uncovered Codex it uses [keyless signal pause](../../docs/caller-contract.md#keyless-pause-of-busy-uncovered-codex),
+with the same `NotPausableDetails` on shutdown refusal.
+For waiting uncovered agents it types exit and can return
 `ErrPauseTimeout` (see [Errors](#errors)). A finished row is a no-op, unless
 a [pause claim](../../docs/caller-contract.md#standing-pause-claims) still
 stands or `OnlyIfWaiting` is refused below.
@@ -687,7 +689,7 @@ Delegated `resume` preserves known `errors.Is` identity; its details remain raw
 omitted). Decode those details instead of assuming the local concrete type;
 see [Covering-version resume](../../docs/architecture.md#covering-version-resume).
 
-For uncovered agents, `ErrPauseTimeout` matches with `errors.Is`; `api.ErrDetails(err)`
+For waiting uncovered agents, `ErrPauseTimeout` matches with `errors.Is`; `api.ErrDetails(err)`
 returns an `api.PauseTimeoutDetails` value after exit keys were sent but
 `ended` was not observed. Its fields are `InspectionRequired`, `ExitKeysSent`,
 `ExitConfirmed` and `RowState`, with the shared meanings and recovery in

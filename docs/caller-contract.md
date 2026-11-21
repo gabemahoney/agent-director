@@ -48,8 +48,9 @@ error:
   outcome: follow [When the reply is uncertain](#covered-sends).
 - `ErrPauseTimeout`: inspect before further input; never retry `pause`
   automatically. Follow [When pause cannot confirm exit](#when-pause-cannot-confirm-exit).
-  A Covered Agent's `pause` refuses with `ErrSpawnNotPausable` instead: act on
-  its [`cause`](#keyless-pause-of-a-covered-agent).
+  Covered and [busy uncovered Codex](#keyless-pause-of-busy-uncovered-codex)
+  shutdown refusals use `ErrSpawnNotPausable` instead: act on
+  the [`cause`](#keyless-pause-of-a-covered-agent).
 - `resume`, or a supported `spawn --reuse-finished` refused as "still stopping" or "still
   starting": wait and retry. Refused with "this row's own id", or
   `ErrTmuxSessionConflict` "this id's own abandoned launch": surface the named
@@ -1241,7 +1242,7 @@ previous turn's state (`waiting` if it ended) until its own `Stop` or
 Interrupt; no read ends it.
 
 That move proves none of the turn's permission requests gone. On a relay-on
-row that had a request in that turn, a plain `send-keys` and `pause` can
+row that had a request in that turn, a plain `send-keys` and waiting `pause` can
 then be refused with `ErrDialogMaybeOpen`: have a person or an LLM read the
 pane and send with that read's `pane_sha256` as `--expect-pane-sha256` (to
 stop the agent, send `/exit` that way), as in
@@ -1579,7 +1580,7 @@ with `outcome: "not_started"`, `keys_sent: false` and
 or its delivery journal cannot be read or saved. That call attempted no input;
 re-issue it after the stated condition clears. If another request still owns
 the writer, let it settle first; a persistent journal refusal needs an operator.
-For `pause`, the same ownership or journal failures return `ErrInternal`
+For waiting uncovered `pause`, the same ownership or journal failures return `ErrInternal`
 before any input is attempted. If its ownership recheck fails after it clears
 the input line, `pause` returns `ErrInternal` with only that clear sent: no
 `/exit` and no Enter, so the agent is not pausing. Check `get`'s `state`
@@ -1593,7 +1594,7 @@ native `outcome`. Check hook-derived `get` or `status` without resending text
 or Enter. If submission remains unknown, use
 [Unresolved ordinary input](operator-actions.md#unresolved-ordinary-input).
 
-Manual input, including `pause`, changes the native composer contract and prevents
+Manual input, including waiting uncovered `pause`, changes the native composer contract and prevents
 further new native delivery on that launch. A pane without native capability
 retains its fallback input path after manual input. A state, permission or pane refusal
 from `pause` does not change that contract. Manual input does not clear an
@@ -2052,7 +2053,7 @@ end report.
 
 ## When pause cannot confirm exit
 
-For a Claude, Codex or Cursor agent that busy send does not cover,
+For a waiting Claude, Codex or Cursor agent that busy send does not cover,
 `ErrPauseTimeout` means `/exit` and Enter
 were sent, but the row was not observed to reach `ended` within
 `pause.timeout_seconds`. Its `err_details` object contains:
@@ -2079,6 +2080,33 @@ Observe the resulting row state before relaunching; a timeout does not
 authorize `resume`. A Codex agent that exits after inspection follows
 [When a Codex agent exits](#when-a-codex-agent-exits).
 
+### Keyless pause of busy uncovered Codex
+
+Plain `pause` on uncovered Codex in `working`, `check_permission` or
+`ask_user` sends SIGTERM to its recorded agent process, checked by pid and
+start time. It sends no keys and needs no relay guard, even with an open
+permission request. Once the agent is verified gone, it records `ended`,
+keeps `session_id` and proves requests `agent_gone`. It needs no SessionEnd
+report; Codex sends none on SIGTERM. If recovery marks the same launch
+`missing` from that process exit during the pause, completion still records
+`ended`. A row already `ended` or `missing` when pause starts is a no-op.
+
+Signal and exit checks use the same [platform limits and refusal
+facts](#keyless-pause-of-a-covered-agent) as covered keyless pause:
+`ErrSpawnNotPausable` with `cause` and `signal_sent`, using
+`agent_process_unverifiable`, `signal_unsupported`, `signal_uncertain`,
+`exit_uncertain`, `launch_changed` or `budget_exhausted`. It never returns
+`ErrPauseTimeout`. The one `pause.timeout_seconds` budget starts before the
+first row read and bounds all remaining shutdown work, with the initial-read
+caveat below. Success permits `resume`; a refusal requires the action for its
+cause. This path checks the agent's exit, without covered delivery or pause
+claims.
+
+Waiting Codex still uses `/exit` under the relay guard. Pending remains
+ineligible, except for the [end-report check](#when-a-codex-agent-exits).
+`only_if_waiting: true` still refuses uncovered rows with `agent_not_covered`.
+Uncovered Claude, Cursor, pane-only and covered rows keep their own rules.
+
 ### Keyless pause of a Covered Agent
 
 `pause` on a Covered Agent types nothing, and neither waits for nor sends its
@@ -2096,11 +2124,11 @@ row already `missing` for another cause stays `missing`. It never returns
 refusal can return.
 
 If the initial read outlasts the budget while the store is occupied, `pause`
-waits until it can read the row. A covered row then refuses with
+waits until it can read the row. A covered or busy uncovered Codex row then refuses with
 `ErrSpawnNotPausable`, `cause: budget_exhausted` and `signal_sent: false`,
 with nothing signalled or written. This refusal can arrive after
 `pause.timeout_seconds`. Caller cancellation at this point is the bare
-context error. Uncovered pause is unchanged.
+context error. Waiting uncovered pause keeps its full post-input wait.
 
 A shutdown refusal returns `ErrSpawnNotPausable` with `err_details` `cause` and
 `signal_sent`, whether this call sent the SIGTERM (absent when that is not
@@ -2232,15 +2260,17 @@ state reads can make the same guarded move through
 
 `pause` on a Codex row ends it itself:
 
-- Its agent exits after the `/exit` and `pause` returns success with the row
+- A busy uncovered row uses [keyless pause](#keyless-pause-of-busy-uncovered-codex),
+  including when its agent already exited without an end report.
+- A waiting agent exits after the `/exit` and `pause` returns success with the row
   `ended`.
-- A live row whose agent already exited with an end report, in any live state,
+- A remaining live row whose agent already exited with an end report, pending included,
   returns success having sent nothing, and the row is `ended`.
-- A gone agent with no end report, or one that cannot be judged, gets
-  `ErrTmuxSendKeys` for a waiting row's keys, or `ErrPauseTimeout`.
+- On the waiting keys path, a gone agent with no end report, or one that
+  cannot be judged, gets `ErrTmuxSendKeys` or `ErrPauseTimeout`.
   [Shared recovery](#bounded-recovery-on-state-reads) then settles the row.
 
-If a live Codex row has a draft exceeding 64 lines, `pause` submits the
+If a waiting Codex row has a draft exceeding 64 lines, `pause` submits the
 rest of the draft and the `/exit` to the agent as a prompt, the row goes
 `working`, and `pause` returns `ErrPauseTimeout`. Follow the
 [inspection procedure](#when-pause-cannot-confirm-exit) before further input.
@@ -2404,7 +2434,9 @@ authority and lifetime rules. For Claude pane answers use
 [direct tmux and outside-answer recording](permissions.md#answering-at-the-pane);
 for stopping or reconnecting use [keyless pause](#keyless-pause-of-a-covered-agent)
 and [resume](#launch-end-resume-and-reuse). The `send-keys` key, hash,
-relay-refusal and typed-pause rules below apply only to uncovered agents.
+relay-refusal rules below apply only to uncovered agents; typed-pause rules
+apply to waiting uncovered rows. Busy uncovered Codex instead uses
+[keyless pause](#keyless-pause-of-busy-uncovered-codex).
 
 For Cursor, use the same request token, decision and delivery fields.
 `hook_alive` is null and no per-request hook process is claimed; the fixed
@@ -2654,6 +2686,8 @@ the send gets `ErrPaneChanged`. Wait for the turn end (`waiting` or its
 `turn_end` proof), then send. A `waiting` state recovered after an error
 does not prove requests gone; see
 [A Codex turn that ends in an error](#a-codex-turn-that-ends-in-an-error).
+To stop a busy Codex agent without waiting for its turn, use
+[keyless pause](#keyless-pause-of-busy-uncovered-codex).
 
 A matching hash does not close every race: the pane can change between
 capture and key, a key already in flight can land on a dialog that appears
@@ -2709,7 +2743,7 @@ a claim only from 2 s past `confirm_by` (`ErrClaimTooSoon` before). Other reques
 hold input. Claude and Codex turn-end proof does not release their relay
 or fallback holds.
 
-An uncovered agent's `pause` is held like a plain `send-keys` without `--expect-pane-sha256`
+A waiting uncovered agent's `pause` is held like a plain `send-keys` without `--expect-pane-sha256`
 (`ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`)
 and types nothing; it takes no pane hash. To stop a held agent, see
 [Answer a request at the pane](usage.md#answer-a-request-at-the-pane), or

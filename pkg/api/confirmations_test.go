@@ -551,30 +551,41 @@ func TestTerminalMovesNeverReportAlive(t *testing.T) {
 		return at
 	}
 
-	t.Run("pause's Codex end, real store", func(t *testing.T) {
-		t.Parallel()
-		e := newKillEnv(t)
-		r := e.seedRow(t, codexSpec(store.StateWorking, agentAlive, true))
-		alive := probe(t, e, r)
-		e.pc.Set(r.AgentPID, procfix.Gone())
-		e.clock.Advance(time.Minute)
-		end := e.clock.Now()
-		if _, err := api.Pause(context.Background(), e.st, e.rec, api.PauseEnv{
-			Relay: api.RelayView{Procs: e.pc, Now: func() time.Time { return end }, Window: sendKeysWindow()}}, pauseTimeoutSeconds, pauseParams(r)); err != nil {
-			t.Fatalf("Pause: %v", err)
+	// b.y7g: signal pause records process exit even through the legacy fixture.
+	for _, legacy := range []bool{false, true} {
+		name := "pause's Codex end, real store"
+		if legacy {
+			name = "pause's Codex signal end, legacy fixture"
 		}
-		if !end.After(alive) {
-			t.Fatal("the end is not after the alive record; the check would be vacuous")
-		}
-		for _, view := range []api.RelayView{{}, {Procs: e.pc, Now: func() time.Time { return end.Add(time.Minute) }}} {
-			assertProcess(t, readMain(t, e.st, view, r.ID), store.StateEnded, store.ProcessExited, exited(end))
-		}
-	})
-
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newKillEnv(t)
+			r := e.seedRow(t, codexSpec(store.StateWorking, agentAlive, true))
+			alive := probe(t, e, r)
+			e.pc.Set(r.AgentPID, procfix.Gone())
+			e.clock.Advance(time.Minute)
+			end := e.clock.Now()
+			var st api.PauseStore = e.st
+			if legacy {
+				st = e.store
+			}
+			if _, err := api.Pause(context.Background(), st, e.rec, api.PauseEnv{
+				Relay: api.RelayView{Procs: e.pc, Now: func() time.Time { return end }, Window: sendKeysWindow()}}, pauseTimeoutSeconds, pauseParams(r)); err != nil {
+				t.Fatalf("Pause: %v", err)
+			}
+			if !end.After(alive) {
+				t.Fatal("the end is not after the alive record; the check would be vacuous")
+			}
+			for _, view := range []api.RelayView{{}, {Procs: e.pc, Now: func() time.Time { return end.Add(time.Minute) }}} {
+				assertProcess(t, readMain(t, e.st, view, r.ID), store.StateEnded, store.ProcessExited, exited(end))
+			}
+		})
+	}
+	// b.y7g: waiting Codex retains the legacy end check and its unknown record.
 	t.Run("pause's Codex end, legacy writer", func(t *testing.T) {
 		t.Parallel()
 		e := newKillEnv(t)
-		r := e.seedRow(t, codexSpec(store.StateWorking, agentAlive, true))
+		r := e.seedRow(t, codexSpec(store.StateWaiting, agentAlive, true))
 		probe(t, e, r)
 		e.pc.Set(r.AgentPID, procfix.Gone())
 		if _, err := e.pause(pauseParams(r)); err != nil {

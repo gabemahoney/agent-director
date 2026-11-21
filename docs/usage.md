@@ -904,7 +904,10 @@ and latest-session resume. Fresh reuse and switches follow the
 
 For covered Claude, `pause` is keyless in any live state; see
 [keyless pause](caller-contract.md#keyless-pause-of-a-covered-agent).
-On uncovered agents, `pause` asks a `waiting` agent to exit. Both keep the row.
+On uncovered Codex in `working`, `check_permission` or `ask_user`, plain
+`pause` sends an identity-checked SIGTERM and keeps the session for `resume`; see
+[busy Codex pause](caller-contract.md#keyless-pause-of-busy-uncovered-codex).
+On uncovered `waiting` agents, `pause` asks the agent to exit. All keep the row.
 `resume` relaunches
 it under the same id with the last agent's latest reported session, so the
 conversation carries on if that agent can reopen it. `resume` accepts no
@@ -979,11 +982,11 @@ agent-director pause --instance-id "$id" --only-if-waiting &&
 
 An error is never permission to resume: act on its
 [cause](caller-contract.md#keyless-pause-of-a-covered-agent). For other
-agents, use `pause` without `--only-if-waiting` and run `resume` once `get`
-shows `ended` or `missing`; on a timeout, follow the
+agents, use `pause` without `--only-if-waiting` and run `resume` after it
+succeeds; on a timeout, follow the
 [pause timeout procedure](caller-contract.md#when-pause-cannot-confirm-exit).
 
-On a Codex row `pause` clears a draft of up to 64 lines before it types
+On a waiting Codex row `pause` clears a draft of up to 64 lines before it types
 `/exit`, and ends the row itself once the agent exits (see the
 [caller contract](caller-contract.md#when-a-codex-agent-exits), which also
 covers drafts exceeding that limit).

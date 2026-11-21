@@ -192,9 +192,10 @@ for `resume`, agent-director still refers to the previous session.
 
 ### How a Codex row ends
 
-A Codex spawn reaches `ended` only after an end report and confirmation that
-its agent process exited. `status`, `get`, `get-many`, `list`, `sweep` or
-`pause` can confirm it. `/exit` alone does not immediately change the reported
+For recovery, a Codex spawn reaches `ended` after an end report and confirmation
+that its agent process exited. `status`, `get`, `get-many`, `list`, `sweep` or
+`pause` can confirm it. [Busy Codex pause](caller-contract.md#keyless-pause-of-busy-uncovered-codex)
+records a verified deliberate exit without an end report. `/exit` alone does not immediately change the reported
 state. See [When a Codex agent exits](caller-contract.md#when-a-codex-agent-exits)
 for caller handling.
 
