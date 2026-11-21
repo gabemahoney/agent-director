@@ -290,6 +290,7 @@ defines refusal handling.
 
 `decision` is the recorded verdict, not proof of receipt or execution.
 Read it together with `delivery`, `pane_answer` and the proof fields.
+A request can have `decision` `allow` with `delivery` `fallen_back`.
 
 | Field | Meaning |
 |---|---|
@@ -298,13 +299,13 @@ Read it together with `delivery`, `pane_answer` and the proof fields.
 | `requested_at` | When the request was recorded. |
 | `decision`, `decided_at` | The recorded verdict and its time; null until recorded. An outside `unknown` claim has a null decision. |
 | `decision_reason` | Verdict annotation, described below. |
-| `delivery` | `delivered`: durable relay acknowledgement before output, not proof of receipt, execution or dialog closure. `not_confirmed`: no acknowledgement yet. `fallen_back`: no acknowledgement and the relay is gone or its settlement bound passed; completed pane answers also read this way. It does not say whether a native prompt waits. |
-| `confirm_by` | Fixed settlement deadline: Claude/Codex hook end plus two seconds, or Cursor decision deadline plus four seconds. `not_confirmed` never lasts past it. |
+| `delivery` | `delivered`: durable relay acknowledgement before output, not proof of receipt, execution or dialog closure. `not_confirmed`: no acknowledgement yet. `fallen_back`: no acknowledgement and fallback established as below; completed pane answers also read this way. It does not say whether a native prompt waits. |
+| `confirm_by` | Fixed fallback cutoff when hook liveness is unknown: Claude/Codex hook start plus its configured relay timeout plus two seconds; Cursor decision deadline plus four seconds. |
 | `hook_alive` | Whether the per-request relay hook runs: true, false, or null when unknown. Always null for Cursor. |
 | `hook_gone_at` | When a reader first found fallback; null until recorded. |
 | `attempted_decision`, `attempted_at` | A verdict refused with `ErrRelayFallenBack` and its time. These are history, not an answer. |
 | `tool_use_id` | Cursor's `toolCallId`; null for Claude and Codex. |
-| `pane_answer` | `none`: no recorded pane answer; `intent`: started, key delivery unknown; `sent`: key sent or native Cursor choice recorded; `outside`: answer recorded with `record-pane-answer`; `tool_ran`: validated Cursor execution. The last three close the request, but only execution proof establishes the matching dialog gone. |
+| `pane_answer` | `none`: no pane answer recorded through agent-director; `intent`: started, key delivery unknown; `sent`: key sent or native Cursor choice recorded; `outside`: answer recorded with `record-pane-answer`; `tool_ran`: validated Cursor execution. The last three close the request, but only execution proof establishes the matching dialog gone. |
 | `pane_as` | The pane answer's claimed verdict, `allow`, `deny` or `unknown`; null if none. |
 | `proven_gone_at`, `proven_gone_how` | When and how agent evidence proved the dialog gone: `tool_ran`, `turn_end` or `agent_gone`; null until proven. See [The dialog hold](#the-dialog-hold). |
 | `unproven_since` | When a request stopped awaiting an answer without proof of dialog closure. Null while it awaits an answer or after proof. |
@@ -317,6 +318,14 @@ existing verdict or non-null reason; failed MCP proof leaves both unchanged.
 Treat unknown reasons as opaque annotations, not writer identities.
 
 These delivery rules apply to requests with a recorded settle instant.
+Without an acknowledgement or completed pane answer, Claude/Codex delivery
+depends on the relay hook:
+
+- Observed alive (`hook_alive` true): `not_confirmed`, even past `confirm_by`.
+- Observed gone (`hook_alive` false): `fallen_back`, even before `confirm_by`.
+- Uncheckable (`hook_alive` null): `not_confirmed` before `confirm_by`, then
+  `fallen_back`. Cursor has no per-request hook and uses this time cutoff.
+
 [Requests with no recorded settle instant](#requests-with-no-recorded-settle-instant)
 use time-derived delivery.
 
@@ -494,7 +503,8 @@ agent-director record-pane-answer --request-token <T> \
 Use `--as allow` or `--as deny` only if you saw the answer. Pass the same
 `--n-lines` as the inspected read. This records `pane_answer` `outside`
 and `decision_reason` `pane_outside`; it neither authorizes Cursor approval
-nor proves the dialog gone. Timing and refusal handling belong in the
+nor proves the dialog gone. `--as` is an unchecked caller claim; a later
+`PostToolUse` does not correct it. Timing and refusal handling belong in the
 [caller contract](caller-contract.md#permission-relay).
 
 For plain input, `send-keys --text` appends Enter; `--no-enter` omits it,

@@ -5076,6 +5076,8 @@ can still get one killed before its write, and the row settles through a
 later hook or a [shared active check](#shared-active-checks) (except when
 both the turn's `Stop` and the idle-prompt Notification are lost). `decide`
 without `max_wait_ms` waits up to the busy timeout per write, as before.
+Caller recovery limits are in the
+[caller contract](caller-contract.md#lost-end-of-turn-reports).
 
 **Must use:** code that opens the configured store passes
 `EffectiveBusyTimeoutMs` (see the `internal/config` row of the package
@@ -16028,6 +16030,11 @@ the hook never prints an answer whose `delivered_at` has not committed.
 request is recorded goes through `silent`; only a failure before the
 request is recorded prints the fail-closed deny.
 
+The parent can still crash between the final `parentCheck` and stdout;
+neither that check nor the durable ack proves receipt. Caller handling of
+this race and the other relay residuals is in the
+[permission relay contract](caller-contract.md#permission-relay).
+
 ### The liveness verdict (rule 14)
 
 `relayJudge.hook` (`pkg/api/relay_delivery.go`) judges a request's relay
@@ -16078,8 +16085,10 @@ shared recovery's mark, the ended transition or resume's move) is derived by
 the same rules, so each value keeps its meaning and never goes back. For
 a request with a settle instant, `delivered` retains an ack committed before
 closure; closing a request cannot permit a later ack,
-`not_confirmed` lasts while that hook may still run, and `fallen_back`
-starts once it is gone or past `confirm_by`. Pre-v7 rows retain the
+`not_confirmed` lasts while that hook is observed alive, even past `confirm_by`;
+when uncheckable, the hook uses the time cutoff above. The
+[delivery contract](permissions.md#delivery) defines the caller-visible branches.
+Pre-v7 rows retain the
 [time-derived delivery rules](#requests-recorded-before-v7), even when closed. A
 closed request is omitted from the `permission_requests` lists of `get` and `list`;
 `get-permission` reads it by its token. For `get.unproven_requests`, see
@@ -17828,8 +17837,8 @@ being sent → `ErrPaneAnswerInProgress`; too soon by `claimNotBefore` →
 from `hook_gone_at` (now when the write failed), or, when the hook is
 judged by time (`hookJudgedByTime`: recorded before v7, or its process
 cannot be checked) and `confirm_by` is not later than `hook_gone_at`, from
-`confirm_by`, since such a hook is gone by `confirm_by` at the latest
-whenever a reader first found it so. Both refusals for such a hook name
+`confirm_by`, the fallback cutoff when liveness cannot be checked.
+Both refusals for such a hook name
 the same `not_before` and read the same, so a retry before it gets the
 same answer and a retry at it is not refused as too soon; `hook_gone_at`
 keeps its meaning and is not moved. Claude Code draws the dialog only

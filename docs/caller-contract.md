@@ -2460,7 +2460,8 @@ For Claude and Codex, a relay hook that fails before recording an identifiable
 request denies it. One that cannot read the event or dies before recording,
 or a binary that cannot run, gives no relay answer and leaves the agent's
 native prompt. For an uncovered agent, a prompt with no recorded request holds no input,
-so a plain `send-keys` can answer it. For Claude, inspect and use direct tmux.
+so a plain `send-keys` with Enter can answer that dialog yes. The dialog hold
+cannot cover a request never recorded. For Claude, inspect and use direct tmux.
 Claude shows its native dialog while the relay hook runs; that dialog is not evidence that the hook died.
 
 A request identified as a Claude or Codex subagent's remains eligible for
@@ -2494,8 +2495,9 @@ supplies neither ACP approval authority nor proof.
   read `delivery`. Pass `decide` a `--max-wait-ms` of at most your deadline
   minus 1 s (see [Intercept permission prompts](usage.md#intercept-permission-prompts)).
 - After `decide` returns `delivery` `not_confirmed`, poll `get-permission`
-  until `delivery` reads `delivered` or `fallen_back`, which it does by
-  `confirm_by`.
+  for `delivered` or `fallen_back`, subject to your own deadline. Follow the
+  [delivery rules](permissions.md#delivery); `confirm_by` alone does not
+  establish fallback or permission to answer.
 - `get`, `get-many`, `list` and `get-permission` never wait for the store's write lock.
 - With a [settle time](configuration.md#settle-time-state) set, `status`,
   `get`, `get-many` and `list` show the settled state with no lateness marker;
@@ -2671,11 +2673,28 @@ hooks show the request's dialog gone. Follow the request's proof and delivery
 fields. Apart from a Cursor turn's end (below), completing or interrupting the
 main turn does not release a child or unknown-origin request, even when its
 child id is null. See [The dialog hold](permissions.md#the-dialog-hold).
-Nothing is sent. Keep the keys and retry later. When the pane is stable,
-have a person or an LLM read it and, having looked, send with that read's
-`pane_sha256`: a matching hash passes the API's dialog hold, and a changed pane
-is `ErrPaneChanged`. Every other refusal still applies. On Cursor the gateway
-can still refuse the prompt with `gateway_refused`; follow
+Nothing is sent. Keep the keys and retry later, or use inspected input below.
+
+### Inspected input past a dialog hold
+
+On an uncovered row, have a person or an LLM inspect a normal `read-pane`
+and choose the input for that exact screen. Send with its `pane_sha256` as
+`--expect-pane-sha256`, without `--request-token`. To answer a dialog whose
+request already reads delivered or answered, send only the key just chosen:
+
+```sh
+agent-director read-pane --instance-id <id>
+agent-director send-keys --instance-id <id> --key <key> --expect-pane-sha256 <H>
+```
+
+Use the same `--n-lines` for both calls. A matching hash passes only the
+dialog hold; a changed pane is `ErrPaneChanged`. Every other refusal,
+including live-relay and unanswered fallback guards, still applies.
+For an eligible fallen-back request, use the
+[token-specific pane answer](permissions.md#answering-at-the-pane) instead;
+token-specific answers refuse delivered or already answered requests.
+Covered Claude keeps its verified direct-tmux procedure at that same link.
+On Cursor the gateway can still refuse the prompt with `gateway_refused`; follow
 [Cursor input outcomes](#cursor-input-outcomes). Never pass
 `--expect-pane-sha256` from an automatic flow.
 
@@ -2693,12 +2712,32 @@ does not prove requests gone; see
 To stop a busy Codex agent without waiting for its turn, use
 [keyless pause](#keyless-pause-of-busy-uncovered-codex).
 
-A matching hash does not close every race: the pane can change between
-capture and key, a key already in flight can land on a dialog that appears
-after the check, identical Claude or Codex dialogs cannot be told apart, and
-a native dialog drawn more than 2 s after its hook ends can appear after
-`record-pane-answer`. The affected request stays unproven and holds plain
-input until someone looks again.
+A matching hash does not close every race. A key already in flight can land
+on a dialog that appears after the last check; Enter can answer it yes.
+Inspect the pane before choosing keys, but no hash check prevents this lag.
+
+A relay hook can acknowledge a verdict and die before output. A pane key can
+land on an identical Claude or Codex dialog belonging to another request,
+or a dialog can appear more than 2 s after its hook ends, after
+`record-pane-answer`. Records can then read `delivered` or closed while a
+dialog still waits. The affected request stays unproven and holds plain
+input; use [inspected input past the hold](#inspected-input-past-a-dialog-hold).
+Without someone looking, the dialog can wait indefinitely.
+
+A Claude or Codex agent can crash just before its leftover relay hook outputs
+an answer, leaving a recorded acknowledgement without agent receipt. Treat
+it as uncertain delivery; never replay it blindly.
+
+### Lost end-of-turn reports
+
+If Claude's `Stop` and idle-prompt Notification are both lost, the row can
+stay `working` while idle, and permission holds can keep input waiting until
+someone inspects the pane. Use
+[inspected input](#inspected-input-past-a-dialog-hold) for an uncovered row,
+or [keyless pause](#keyless-pause-of-a-covered-agent) for covered Claude.
+[Shared recovery checks](#bounded-recovery-on-state-reads) do not reconstruct
+lost hooks or supply missing dialog proof. Relay delivery is derived when a
+request is read; it does not wait for a sweep.
 
 A hook that ends a turn proves gone only the requests recorded before the
 whole second it started. This holds for a main-turn end (Claude's `Stop` or
