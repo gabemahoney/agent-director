@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/layout"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 func TestStagedExemptLayoutAfterSettlement(t *testing.T) {
@@ -195,6 +197,61 @@ func TestStagedLaterInstallNeverTouchesStore(t *testing.T) {
 	}
 }
 
+// b.ett: run the real publication engine through install.sh, not a canned refusal.
+func TestStagedCoreMismatchIdentities(t *testing.T) {
+	h := newMoveHome(t)
+	repo, err := filepath.Abs("../..")
+	stagedMust(t, err)
+	original := filepath.Join(repo, "internal/store/busy_send_schema.go")
+	data, err := os.ReadFile(original)
+	stagedMust(t, err)
+	if strings.Count(string(data), "busy-send-core-v1:") != 1 {
+		t.Fatal("core variant replacement no longer unique")
+	}
+	changed := filepath.Join(h.Root, "core.go")
+	h.Write(changed, strings.Replace(string(data), "busy-send-core-v1:", "busy-send-core-test:", 1), 0600)
+	overlay, err := json.Marshal(map[string]any{"Replace": map[string]string{original: changed}})
+	stagedMust(t, err)
+	overlayPath := filepath.Join(h.Root, "overlay.json")
+	h.Write(overlayPath, string(overlay), 0600)
+	flags := fmt.Sprintf("-X %s.Version=%s-anchor -X %s.Commit=%s", moveVersPkg, moveVersion, moveVersPkg, moveCommit)
+	runtime, err := moveBuildBinary(repo, filepath.Join(h.Root, "agent-director"), flags, "./cmd/agent-director", "-overlay", overlayPath)
+	stagedMust(t, err)
+	admin, err := moveBuildBinary(repo, filepath.Join(h.Root, "agent-director-admin"), flags, "./cmd/agent-director-admin", "-overlay", overlayPath)
+	stagedMust(t, err)
+	if r := h.Run(admin, "--home", h.Home, "publish-version", "--binary", runtime); r.Code != 0 {
+		t.Fatalf("anchor publication: %+v", r)
+	}
+	r := h.Install()
+	if r.Code != 5 || r.Last() != "install.sh: err_name=ErrVersionInstallRefused" {
+		t.Fatalf("publication mapping: %+v", r)
+	}
+	lines := preflightEnvelopes(t, r, "ErrVersionInstallRefused")
+	if len(lines) != 1 {
+		t.Fatalf("publication envelopes: %v", lines)
+	}
+	var envelope struct {
+		Details map[string]json.RawMessage `json:"details"`
+	}
+	stagedMust(t, json.Unmarshal([]byte(lines[0]), &envelope))
+	var reason string
+	stagedMust(t, json.Unmarshal(envelope.Details["reason"], &reason))
+	if reason != "core_mismatch" {
+		t.Fatalf("reason = %q", reason)
+	}
+	core, digest := store.BusySendCoreContractIdentity()
+	for key, version := range map[string]string{"anchored_core": "busy-send-core-test:", "candidate_core": core} {
+		want := map[string]string{"core_version": version, "core_declarations_sha256": digest}
+		var got map[string]string
+		if raw, ok := envelope.Details[key]; ok {
+			stagedMust(t, json.Unmarshal(raw, &got))
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("relayed details.%s = %v, want %v", key, got, want)
+		}
+	}
+}
+
 func TestStagedPublicationOutcomes(t *testing.T) {
 	for _, reason := range []string{"lock_busy", "core_mismatch", "coverage_regression", "version_conflict", "layout_invalid", "io_failure", "empty", "malformed", "unexpected-stdout"} {
 		t.Run(reason, func(t *testing.T) {
@@ -204,7 +261,12 @@ func TestStagedPublicationOutcomes(t *testing.T) {
 			before := stagedSnapshot(t, h, append(paths, moveNewRel+"/versions", moveNewRel+"/publications", moveNewRel+"/current", moveNewRel+"/install-contract.json", moveNewRel+"/install-initialization.json", moveNewRel+"/install.lock")...)
 			f := newOutcomeFixture(t, h, "publish-version")
 			f.Choose("canned")
-			envelope := fmt.Sprintf(`{"err_name":"ErrVersionInstallRefused","err_description":"chosen refusal","details":{"reason":%q,"retryable":%v,"publication_state":"not_published","durable":false,"recovered_version":"earlier","extension":{"kept":true}}}`, reason, reason == "lock_busy" || reason == "io_failure")
+			identities := ""
+			if reason == "core_mismatch" {
+				// b.ett: install.sh must relay both identities verbatim, including extra details.
+				identities = `,"anchored_core":{"core_version":"anchor","core_declarations_sha256":"` + strings.Repeat("a", 64) + `"},"candidate_core":{"core_version":"candidate","core_declarations_sha256":"` + strings.Repeat("b", 64) + `"}`
+			}
+			envelope := fmt.Sprintf(`{"err_name":"ErrVersionInstallRefused","err_description":"chosen refusal","details":{"reason":%q,"retryable":%v,"publication_state":"not_published","durable":false,"recovered_version":"earlier","extension":{"kept":true}%s}}`, reason, reason == "lock_busy" || reason == "io_failure", identities)
 			body := "printf '%s' " + moveQuote(envelope) + " >&2; exit 1\n" // no terminating LF, relayed exactly
 			unknown := reason == "empty" || reason == "malformed" || reason == "unexpected-stdout"
 			if reason == "empty" {

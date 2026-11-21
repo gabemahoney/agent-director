@@ -133,7 +133,11 @@ func (r VersionRecord) validate(id string) error {
 
 func compatible(f Facts, anchor Contract, floor []string) error {
 	if contractFor(f) != anchor {
-		return problem{"core_mismatch", "candidate does not match the permanent core contract"}
+		return coreMismatch{
+			problem:   problem{"core_mismatch", "candidate does not match the permanent core contract"},
+			anchored:  CoreIdentity{anchor.CoreVersion, anchor.CoreDeclarationsSHA256},
+			candidate: CoreIdentity{f.CoreVersion, f.CoreDeclarationsSHA256},
+		}
 	}
 	for _, agent := range floor {
 		if !slices.Contains(f.CoveredAgents, agent) {
@@ -147,6 +151,19 @@ type problem struct{ reason, message string }
 
 func (p problem) Error() string    { return p.message }
 func invalid(message string) error { return problem{"layout_invalid", message} }
+
+// CoreIdentity names the permanent contract independently of a build's stamp.
+type CoreIdentity struct {
+	CoreVersion            string `json:"core_version"`
+	CoreDeclarationsSHA256 string `json:"core_declarations_sha256"`
+}
+
+type coreMismatch struct {
+	problem
+	anchored, candidate CoreIdentity
+}
+
+func (m coreMismatch) Unwrap() error { return m.problem }
 
 // Result describes the requested publication separately from any earlier
 // publication recovered on this invocation. Durable concerns the requested
@@ -166,7 +183,9 @@ type Refusal struct {
 	Reason    string `json:"reason"`
 	Retryable bool   `json:"retryable"`
 	Result
-	cause error
+	AnchoredCore  *CoreIdentity `json:"anchored_core,omitempty"`
+	CandidateCore *CoreIdentity `json:"candidate_core,omitempty"`
+	cause         error
 }
 
 func (r *Refusal) Error() string {

@@ -129,7 +129,13 @@ func refusal(err error, result Result) *Refusal {
 	if errors.As(err, &p) {
 		reason = p.reason
 	}
-	return &Refusal{Reason: reason, Retryable: reason == "lock_busy" || reason == "io_failure", Result: result, cause: err}
+	r := &Refusal{Reason: reason, Retryable: reason == "lock_busy" || reason == "io_failure", Result: result, cause: err}
+	var mismatch coreMismatch
+	if errors.As(err, &mismatch) {
+		r.AnchoredCore = &mismatch.anchored
+		r.CandidateCore = &mismatch.candidate
+	}
+	return r
 }
 
 // ReadRefusal adapts a lock-free read failure, where no requested mutation has

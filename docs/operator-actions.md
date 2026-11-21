@@ -1543,7 +1543,7 @@ does not prove both permanent entries are initialized.
 | `details.reason` | Action |
 | --- | --- |
 | `lock_busy` | Immediate retryable contention. Retry after the other administrator finishes; never remove `install.lock`. |
-| `core_mismatch` | Choose a candidate or retained target with the anchored core identity. |
+| `core_mismatch` | Compare `details.anchored_core` with `details.candidate_core` (each has `core_version` and `core_declarations_sha256`). Choose a candidate or retained target matching both anchored fields. |
 | `coverage_regression` | Choose a target covering every previously published agent. |
 | `version_conflict` | Obtain a matching pair or a distinct correct stamp; never overwrite a retained generation. |
 | `layout_invalid` | Preserve evidence and seek operator repair; never reset the anchor. |

@@ -5886,7 +5886,10 @@ hidden or CLI-only flag, and none of them can run these operator actions.
   root is `layout.Dir` of the effective HOME, independent of configured store.
   Publication failures use `writeVersionInstallError` (must use), with
   `ErrVersionInstallRefused` and `details.reason` plus publication facts,
-  distinct from the journal commit envelope. See the generated reference.
+  distinct from the journal commit envelope. For `core_mismatch`, it also carries
+  `details.anchored_core` and `details.candidate_core`, each with `core_version`
+  and `core_declarations_sha256`, captured at the failed compatibility check;
+  other reasons omit them. See the generated reference.
   Creation applies to the row-repair Clients only; migration and snapshot require an existing
   source (`--check-only` opens none). It prints JSON on stdout, or an
   `{err_name, err_description}` envelope on stderr with exit 1. Every
