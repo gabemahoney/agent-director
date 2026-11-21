@@ -151,7 +151,7 @@ func TestCursorRotationPromptFailurePreservesFailureStreak(t *testing.T) {
 		t.Fatalf("rotation did not publish in the same runtime connection: before=%+v after=%+v err=%v", before, after, err)
 	}
 	c.keys(t, "failure after rotation\r")
-	if err := c.awaitFailure(t, 3*time.Second); err.Error() != cursorPromptFailureReason {
+	if err := c.awaitFailure(t, testWaitBudget(3*time.Second)); err.Error() != cursorPromptFailureReason {
 		t.Fatalf("second consecutive failure returned %v", err)
 	}
 	cursorFailureView(t, c, store.StateMissing, cursorPromptFailureReason)

@@ -212,7 +212,7 @@ func TestCursorCorrelatedOperationFailureSanitized(t *testing.T) {
 		c := beginCursorLoad(t, cursorfix.Scenario{LoadSupport: true}, "never dispatch", terminalLoop, func(e *requestEnv) {
 			e.exec(t, `UPDATE spawns SET session_id='changed-before-load' WHERE instance_id=?`, e.binding.InstanceID)
 		})
-		if err := c.awaitFailure(t, 3*time.Second); err.Error() != "Cursor latest conversation changed" {
+		if err := c.awaitFailure(t, testWaitBudget(3*time.Second)); err.Error() != "Cursor latest conversation changed" {
 			t.Fatalf("unexpected pre-registration failure: %v", err)
 		}
 		cursorFailureView(t, c, store.StatePending, nil)
@@ -233,7 +233,7 @@ func TestCursorMalformedPromptErrorStaysFatal(t *testing.T) {
 	} {
 		t.Run(payload, func(t *testing.T) {
 			c := beginCursorSessionWithOptions(t, Options{InitialPrompt: "malformed rejection"}, cursorfix.Scenario{PromptReply: json.RawMessage(`{"error":` + payload + `}`)}, openTranscript, terminalLoop)
-			err := c.awaitFailure(t, 3*time.Second)
+			err := c.awaitFailure(t, testWaitBudget(3*time.Second))
 			want := "Cursor ACP session/prompt failed: malformed error response"
 			if err.Error() != want {
 				t.Fatalf("malformed error returned %q; want %q", err, want)
@@ -422,7 +422,7 @@ func TestCursorPromptFailureWithDeadRuntimeStaysFatal(t *testing.T) {
 	}
 	awaitProcessGone(t, binding.RuntimePID)
 	barrier.unblock()
-	err = c.awaitFailure(t, 5*time.Second)
+	err = c.awaitFailure(t, testWaitBudget(5*time.Second))
 	cursorFailureView(t, c, store.StateMissing, err.Error())
 	if bytes.Contains(c.pane.bytes(), []byte("Cursor turn failed:")) || len(c.prompts(t)) != 1 {
 		t.Fatalf("dead runtime recovered/replayed: %s", c.pane.bytes())
