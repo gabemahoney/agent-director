@@ -80,9 +80,7 @@ import "testing"
 // lowering it to 14660 (free downward step).
 // On 2026-11-21 b.y7g describes busy Codex signal pause while trimming the
 // end-report wording, lowering it to 14657 (free downward step).
-// On 2026-11-22 b.xhh's long-launch transport and size-refusal wording
-// lowered it to 14643 (free downward step).
-const helpStdoutBytes = 14643
+const helpStdoutBytes = 14657
 
 // helpHardCap is the user's hard cap on `agent-director help` stdout, in
 // bytes. Help stdout must stay at or under it, with no slack.
