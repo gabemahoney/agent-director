@@ -63,6 +63,8 @@ type killStore struct {
 	endedErr   error // failEndedMove's error
 	// beforeEnded, set by a test, runs once just before the next move to ended is attempted.
 	beforeEnded func()
+	// afterEnded runs once after a successful move to ended returns from the store.
+	afterEnded func()
 	// afterInputLaunchRead interleaves one real write after the first journal read.
 	afterInputLaunchRead func()
 }

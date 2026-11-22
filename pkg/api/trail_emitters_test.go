@@ -316,12 +316,11 @@ func TestPauseCodexEndTickBounded(t *testing.T) {
 					baseline := trail.Default().Status()
 					ctx, cancel := context.WithCancel(context.Background())
 					defer cancel()
-					var cancelledAt time.Time
+					var reportingAt time.Time
 					if cancelled {
-						e.store.beforeEnded = func() {
-							cancelledAt = time.Now()
-							cancel()
-						}
+						e.store.beforeEnded = cancel
+						// b.ivp: bound reporting after the store returns, excluding SQLite work.
+						e.store.afterEnded = func() { reportingAt = time.Now() }
 					}
 					type outcome struct {
 						err error
@@ -338,8 +337,11 @@ func TestPauseCodexEndTickBounded(t *testing.T) {
 							t.Fatalf("Pause: %v; want the row ended", got.err)
 						}
 						if cancelled {
-							took := got.at.Sub(cancelledAt)
-							t.Logf("API tick returned %v after cancellation at end-write entry", took)
+							if reportingAt.IsZero() {
+								t.Fatal("successful end-store hook did not run")
+							}
+							took := got.at.Sub(reportingAt)
+							t.Logf("API tick returned %v after cancellation and end-store return", took)
 							fastest = min(fastest, took)
 						}
 					case <-time.After(time.Second):

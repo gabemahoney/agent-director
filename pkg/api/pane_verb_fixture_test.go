@@ -955,7 +955,13 @@ func (w *killStore) MarkEndedIfSameLife(id string, examined api.RowSnapshot) (st
 	if w.endedErr != nil {
 		return "", 0, w.endedErr
 	}
-	return w.st.MarkEndedIfSameLife(id, examined)
+	prior, res, err := w.st.MarkEndedIfSameLife(id, examined)
+	if err == nil && res == api.CondApplied && w.afterEnded != nil {
+		hook := w.afterEnded
+		w.afterEnded = nil
+		hook()
+	}
+	return prior, res, err
 }
 
 // MarkSignalPauseEndedWithin delegates busy uncovered Codex's deliberate end.
