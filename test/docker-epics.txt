@@ -47,3 +47,4 @@ idle-screen
 droid-lane
 busy-send-uncovered
 busy-send-claude-wait-turn
+long-launch

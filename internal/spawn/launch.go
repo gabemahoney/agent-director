@@ -57,7 +57,9 @@ func launchAgentError(agent string) error {
 //     the agent's argv (the synthesized --settings of a claude agent; for a
 //     codex agent the per-launch settings on its command line and the pre-trust
 //     outcome the argv was built for), the parent id and the row's request
-//     fields. A composition failure writes nothing.
+//     fields. Checks the composed exec size and NUL representation, including
+//     Cursor's store path, before files, pre-trust or the insert. A composition
+//     or preflight failure writes nothing; the API maps preflight to ErrInvalidFlags.
 //  3. Pre-trusts the cwd through RunPreTrust with step 2's row extra env, off
 //     when NoPreTrust: for a claude agent PreTrust, waiting for a held lock
 //     on .claude.json for at most cfg's effective
@@ -140,6 +142,14 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 	if err != nil {
 		return "", "", err
 	}
+	req := c.Create
+	req.Socket, req.Token, req.StoreID = socket, token, s.StoreID()
+	if r.Agent == store.AgentCursor {
+		req.Env["AGENT_DIRECTOR_CURSOR_STORE_PATH"] = s.Path()
+	}
+	if err := CheckCreateSize(req, t); err != nil {
+		return "", "", err
+	}
 	if err := PrepareLaunchFiles(c, s.StoreID(), token, lg); err != nil {
 		return "", "", err
 	}
@@ -160,13 +170,6 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 		return "", "", err
 	}
 
-	req := c.Create
-	if r.Agent == store.AgentCursor {
-		req.Env["AGENT_DIRECTOR_CURSOR_STORE_PATH"] = s.Path()
-	}
-	req.Socket = socket
-	req.Token = token
-	req.StoreID = s.StoreID()
 	req.Input = s
 	out := CreateAndLabel(t, req)
 	recorded := false

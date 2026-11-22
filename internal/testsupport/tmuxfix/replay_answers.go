@@ -415,6 +415,12 @@ func CreateReplies() []Entry {
 	return []Entry{
 		{Name: "create/reply", Source: "rn4-tmux-check R2a; F1's reply values", Stdout: reply,
 			Want: only(0, tmux.CallCreate), Create: RecordedCreate},
+		// b.xhh: raw argv probes, scheduler j20261122083722-f61f18,
+		// artifacts/long-launch-repro-run.log sections E on tmux 3.2a/3.3a.
+		{Name: "create/command-too-long", Source: "b.xhh reproduction, tmux 3.2a and 3.3a: packed command > 16380 bytes",
+			Stderr: "command too long\n", Exit: 1, FirstLine: "command too long", Want: only(tmux.FailUnrecognized, tmux.CallCreate)},
+		{Name: "create/failed-to-send-command", Source: "b.xhh reproduction, tmux 3.2a and 3.3a: 16364 < packed command <= 16380 bytes",
+			Stderr: "failed to send command\n", Exit: 1, FirstLine: "failed to send command", Want: only(tmux.FailUnrecognized, tmux.CallCreate)},
 		{Name: "create/reply-then-label-failed", Source: "rn4-tmux-check F1, G7 (SR-2.1)", Stdout: reply,
 			Stderr: "no such session: =n1\n", Exit: 1, ChainOnly: true,
 			Want: only(tmux.FailLabel, tmux.CallCreate), Create: RecordedCreate},

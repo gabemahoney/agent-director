@@ -329,7 +329,10 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 //     one, or an empty or non-UTF-8 delivery_request_id (SR-1.3);
 //     runSpawn returns it (wrapped) when an
 //     explicit instance id contains an ASCII control character (0x00-0x1f or
-//     0x7f) (SR-9.1); ReadPane for a negative NLines and List for a negative
+//     0x7f) (SR-9.1), or a composed fresh/reused launch fails its size,
+//     NUL or runtime-budget preflight, before launch files, pre-trust or row
+//     writes (saved resume uses ErrTmuxSessionCreate instead);
+//     ReadPane for a negative NLines and List for a negative
 //     Limit, before anything is read (b.c4n); decide for a negative
 //     max_wait_ms (DecideParams.MaxWaitMs, b.146 decision 9 B), which the CLI
 //     refuses first; send-keys for a pane answer without as, key or
