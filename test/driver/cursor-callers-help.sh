@@ -476,6 +476,7 @@ ch_fresh() {
  check continuation.exact-one pc_prompts_is 1
  ch_finish "$surface" "$2"
 }
+ch_peer_waiting() { [[ $(/opt/driver/sql.sh "$1" "SELECT state FROM spawns WHERE instance_id='$2';") == waiting ]]; }
 ch_isolation() {
  pc_start
  check guidance.primary wait_until ch_exchange "$case_dir/mcp.jsonl" "$id"
@@ -502,6 +503,8 @@ ch_isolation() {
  if [[ $ch_peer_server =~ ^[1-9][0-9]*$ ]]; then cat "/proc/$ch_peer_server/stat" >> "$case_dir/peer-startup.log" || true; fi
  ch_peer_binding
  check guidance.peer wait_until ch_exchange "$case_dir/peer-mcp.jsonl" "$peer_id"
+ # b.med: the MCP exchange can finish before SessionStart publishes waiting.
+ check peer.waiting wait_until ch_peer_waiting "$peer_store" "$peer_id"
  [[ $ch_peer_server =~ ^[1-9][0-9]*$ ]]
  ch_peer_gateway=$(/opt/driver/sql.sh "$peer_store" "SELECT pane_pid FROM spawns WHERE instance_id='$peer_id';")
  ch_peer_runtime=$(/opt/driver/sql.sh "$peer_store" "SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='$peer_id';")
