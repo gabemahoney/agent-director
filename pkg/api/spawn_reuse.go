@@ -342,6 +342,15 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	if err != nil {
 		return SpawnResult{}, err
 	}
+	req := c.Create
+	req.Socket, req.Token, req.StoreID = socket, token, d.storeID
+	if r.Agent == store.AgentCursor {
+		// Include the caller's per-call store override in preflight too.
+		req.Env["AGENT_DIRECTOR_CURSOR_STORE_PATH"] = d.storePath
+	}
+	if err := spawn.CheckCreateSize(req, d.t); err != nil {
+		return SpawnResult{}, fmt.Errorf("%w: %w", ErrInvalidFlags, err)
+	}
 	if err := spawn.PrepareLaunchFiles(c, d.storeID, token, d.lg); err != nil {
 		return SpawnResult{}, err
 	}
@@ -373,14 +382,6 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 		return SpawnResult{}, reuseLostRaceError(id)
 	}
 
-	req := c.Create
-	if r.Agent == store.AgentCursor {
-		// Match fresh launches, including the caller's per-call store override.
-		req.Env["AGENT_DIRECTOR_CURSOR_STORE_PATH"] = d.storePath
-	}
-	req.Socket = socket
-	req.Token = token
-	req.StoreID = d.storeID
 	req.Input, _ = d.rs.(inputdelivery.Persistence)
 	out := spawn.CreateAndLabel(d.t, req)
 	emitReused(id, ex, archived, r.DroppedArgs)

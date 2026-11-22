@@ -22,6 +22,16 @@
 // does not understand. The commands run in order against the socket's
 // table, and the first that fails ends the invocation with its exit status,
 // as in tmux.
+// b.xhh: before table access or injection consumption, the command list's
+// packed size P (sum of len(arg)+1 after global options) is refused as tmux
+// 3.2a/3.3a does: P > 16380 prints "command too long"; 16364 < P <= 16380
+// prints "failed to send command" (exit 1, replay catalogue).
+// The exact bootstrap start-server ; source-file - reads stdin without a
+// line-length cap and decodes only quoteConfigArg's single-quote/octal grammar.
+// It runs the decoded create/labels through the same handlers and CallCreate
+// injections. It neither executes agents nor models the kernel's exec limits.
+// Unsupported configuration exits 2 before changing a table. Stdin is never
+// logged or retained; the log still holds only the actual bootstrap argv.
 // Answers go to standard output, replies to standard error (Appendix E.10).
 // The fake expands the formats the client sends (#{session_id},
 // #{session_created}, #{pid}, #{start_time}, #{session_name}, #{@ad_owner},

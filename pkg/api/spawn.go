@@ -170,6 +170,10 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 		}
 	}
 	id, preTrust, err := spawn.Launch(s, t, pc, r, idCheck == spawn.IDMinted, cfg, now, lg)
+	var preflight *spawn.LaunchPreflightError
+	if errors.As(err, &preflight) {
+		return SpawnResult{}, fmt.Errorf("%w: %w", ErrInvalidFlags, err)
+	}
 	var held *spawn.HeldNameError
 	if errors.As(err, &held) {
 		err := spawnHeldName(s, t, pc, now, lg, held)
@@ -366,7 +370,10 @@ func hasControlChar(id string) bool {
 //     raw malformed key text. Nothing is written or launched.
 //   - ErrInvalidFlags: InstanceID contains an ASCII control character,
 //     IdleScreenTimeoutSeconds is negative or above 9223372036, or SendMode
-//     is neither wait_turn nor steer_turn; nothing is written or launched.
+//     is neither wait_turn nor steer_turn; or the composed launch's argv/env
+//     exceeds the exec-size preflight budget or contains NUL. Refused before
+//     pre-trust, launch files, the insert or reuse reset; no row is inserted or
+//     changed and nothing is launched.
 //   - ErrCantSend: SendMode, ConfirmedDelivery or ConfirmFromTranscripts is
 //     set, by the call or its template, and busy send does not cover the
 //     resolved agent: reason agent_not_covered; or SendMode is one the
@@ -411,6 +418,8 @@ func hasControlChar(id string) bool {
 //     the restore did). A name found held is never this error. Also returned
 //     if a pane-only agent's private launch-file preparation fails before the row insert
 //     or reuse reset and tmux creation; no row is changed or agent launched.
+//     A size failure caused by additions after preflight is caught before the
+//     tmux invocation but follows the post-mutation create-failure contract.
 //   - ErrTmuxUnresponsive: the session-creating call timed out or gave a
 //     reply that does not parse with a non-zero exit: the session may have
 //     been created and the row stays pending; do not retry until get shows

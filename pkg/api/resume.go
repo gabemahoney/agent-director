@@ -736,7 +736,9 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     the environment, settings and argv (spawn.ComposeRelaunch, for the row's
 //     agent), filtering stored session selectors and Claude print mode plus
 //     orphaned cloud controls and dropping the saved prompt, all before the
-//     move, so a failure writes nothing.
+//     move, so a failure writes nothing. Checks the composed exec size and NUL
+//     representation, including Cursor's store path, before pre-trust or the
+//     move: a refusal is ErrTmuxSessionCreate with the saved row unchanged.
 //  5. Pre-trust (spawn.RunPreTrust, SR-8.1 step 4, SR-22.6): after every check
 //     above that can refuse without a write and immediately before the move,
 //     for the row's cwd and extra env, off when the row records the opt-out of
@@ -841,6 +843,9 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 			return ResumeResult{}, fmt.Errorf("resume: Cursor store path unavailable")
 		}
 		req.Env["AGENT_DIRECTOR_CURSOR_STORE_PATH"] = path
+	}
+	if err := spawn.CheckCreateSize(req, d.t); err != nil {
+		return ResumeResult{}, fmt.Errorf("%w: %w", tmux.ErrTmuxSessionCreate, err)
 	}
 
 	// A failure never fails the launch; the outcome goes into the result.
@@ -1080,8 +1085,10 @@ func launchInProgressError(row Spawn) error {
 // transcript lookup, tmux call or write: tmux would start the agent in
 // another directory (bug b.vit).
 //
-// Before it creates the session, Resume moves the row to pending in one
-// conditional write, keeping its session id and history and writing the
+// Before pre-trust or a row change, an exec-size or NUL preflight refusal
+// returns ErrTmuxSessionCreate without changing the row. Otherwise, before
+// creating the session, Resume moves the row to pending in one conditional
+// write, keeping its session id and history and writing the
 // parent id (the caller's AGENT_DIRECTOR_INSTANCE_ID). The row stays pending
 // until the agent reports in (its SessionStart hook), then becomes
 // waiting. If the launch fails other than by timing out, Resume restores the

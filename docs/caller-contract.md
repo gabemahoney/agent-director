@@ -803,6 +803,9 @@ error (`ErrStoreBusy` when a bounded read runs out of time), never `unknown`.
 
 ### Launch end, resume and reuse
 
+For launch limits and preflight recovery, see
+[Launch size and representation](#launch-size-and-representation).
+
 If this process lacks a covered conversation's provider, `resume` transparently
 delegates the whole call to the newest compatible retained installed version
 that covers it, independently of the published version or rollback. Results
@@ -1662,9 +1665,9 @@ of the old conversation, which cannot be resumed through agent-director
 afterwards. Same-agent reuse keeps inspectable history and records; a switch
 starts a new life, including when switching back.
 
-Reuse of any agent uses the same launch outcome rules. A determinate create
-or label failure attempts a conditional restore; this includes a label failure
-whose newly created session was ended or may still be running.
+After a resume moves the row to pending or a reuse resets it, a determinate
+create or label failure attempts a conditional restore; this includes a label
+failure whose newly created session was ended or may still be running.
 `ErrTmuxNotAvailable` or `ErrTmuxSessionCreate` reports the launch failure and
 whether the row was restored. `ErrTmuxSessionConflict` reports ownership or
 pane conflicts; a duplicate-name re-lookup can instead return
@@ -2279,6 +2282,51 @@ rest of the draft and the `/exit` to the agent as a prompt, the row goes
 `working`, and `pause` returns `ErrPauseTimeout`. Follow the
 [inspection procedure](#when-pause-cannot-confirm-exit) before further input.
 
+## Launch size and representation
+
+Long launches pass through tmux's stdin transport when needed. The 8192-byte
+transport threshold is not a limit on arguments, prompts or templates.
+After template resolution and launch composition, preflight checks both the
+tmux client invocation and the pane command:
+
+- Each argument and full `KEY=VALUE` environment entry is limited to 131072
+  bytes including its terminating NUL (at most 131071 bytes of content).
+  Embedded NUL bytes are unrepresentable and refused regardless of length.
+- Each total includes strings, NUL terminators, argv/environment pointers,
+  an executable-path copy and a conservative 32768-byte reserve. A total at
+  or above the runtime budget refuses. Linux uses
+  `max(128 KiB, min(6 MiB, soft RLIMIT_STACK/4))`; Darwin uses `kern.argmax`.
+  An unavailable budget, including on other platforms, also refuses.
+
+The client uses agent-director's filtered ambient environment. The pane
+estimate merges explicit, synthesized and forwarded entries over that
+environment as a proxy for the tmux server's. A warm server's different
+environment or stack limit is not predicted. Native preparation can add
+arguments or environment after preflight; an entry near the cap may then
+fail the repeated check at the create boundary.
+
+Early refusal returns `ErrInvalidFlags` for spawn or reuse and
+`ErrTmuxSessionCreate` for resume. No launch files, trust entry or row are
+written or changed. Size diagnostics name the component, its byte count and
+limit, never its value; NUL diagnostics identify representability separately.
+`make-template` does not apply this runtime check; its saved values are
+checked at launch.
+
+For spawn or reuse, correct the input or ambient/runtime condition before
+retrying. For resume, retry only after a correctable ambient environment or
+runtime-budget condition changes. A refusal intrinsic to a saved argument or
+explicit environment entry cannot be repaired by changing ambient values or
+the stack limit; resume cannot replace those saved inputs. Keep the saved row
+and history intact. If a fresh conversation is acceptable, spawn a new
+instance with corrected inputs; otherwise surface the inability to resume.
+Cursor fresh launches must also follow the
+[fresh-instance recovery restrictions](#cursor-operation-boundaries).
+
+A late refusal occurs before the tmux create invocation but follows ordinary
+launch-failure handling: a new spawn's row stays `pending`; reuse and resume
+attempt their conditional restoration. Follow the error's reported outcome.
+These checks add no configuration setting or caller-supplied budget.
+
 ## Spawn and template input refusals
 
 Each of these is refused before anything is written: no row, session, trust
@@ -2327,6 +2375,8 @@ repair that selection; follow the [fresh-instance boundary](#cursor-operation-bo
   `confirm_from_transcripts` for an agent busy send does not cover
   (`agent_not_covered`), or a `send_mode` the agent does not offer
   (`steer_unsupported`); see [Agent Defaults](#agent-defaults).
+- `ErrInvalidFlags`: the composed spawn or reuse fails
+  [launch-size or representation preflight](#launch-size-and-representation).
 - `ErrReservedEnvKey`: the merged template and call `extra_env` sets `HOME`
   (any value), an `AGENT_DIRECTOR_*` key, or a malformed name (empty, or
   containing `=` or NUL); `make-template` checks its own `extra_env` the

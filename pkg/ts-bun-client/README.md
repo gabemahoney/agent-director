@@ -747,7 +747,7 @@ and [Settings](../../docs/settings.md). Request handling is in
 | Error | Meaning |
 |---|---|
 | `ErrTmuxNotAvailable` | tmux or its socket is unavailable |
-| `ErrTmuxSessionCreate` | The session could not be created or labelled |
+| `ErrTmuxSessionCreate` | Resume preflight refused, or the session could not be created or labelled; see [Launch size and representation](../../docs/caller-contract.md#launch-size-and-representation). |
 | `ErrTmuxUnresponsive` | tmux did not answer usably or a launch is still starting/stopping |
 | `ErrTmuxSessionConflict` | Session or pane ownership conflicts |
 | `ErrTmuxKillFailed` | Exit could not be confirmed |

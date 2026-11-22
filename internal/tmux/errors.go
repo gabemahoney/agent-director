@@ -65,7 +65,11 @@ var ErrTmuxNotAvailable = errors.New("tmux: not available")
 // it on. The wrapped call failure appears in the unwrapped chain so callers
 // building error envelopes can include it. Spawn and resume also return it
 // for a created session that could not be labelled, which was then ended or
-// could not be (SR-1.2, SR-3.5).
+// could not be (SR-1.2, SR-3.5). Resume also returns it for an exec-size or NUL
+// refusal in its preflight, before pre-trust and the move to pending, leaving
+// the saved row unchanged. Spawn/reuse preflight uses ErrInvalidFlags instead.
+// A final defensive size check after native preparation fails before invoking
+// tmux, under the ordinary create-failure contract after the row mutation.
 var ErrTmuxSessionCreate = errors.New("tmux: new-session failed")
 
 // ErrTmuxUnresponsive is class UNAVAILABLE (like 503) and transient: tmux did

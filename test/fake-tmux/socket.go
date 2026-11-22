@@ -2,13 +2,16 @@ package main
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
@@ -29,7 +32,30 @@ func socketMain(args []string) int {
 		return exitBadArgv
 	}
 	socket := args[1]
+	// b.xhh: tmux rejects the packed command before contacting its server.
+	packed := 0
+	for _, arg := range args[2:] {
+		packed += len(arg) + 1
+	}
+	if packed > 16364 {
+		entry := "create/failed-to-send-command"
+		if packed > 16380 {
+			entry = "create/command-too-long"
+		}
+		e := tmuxfix.Find(tmuxfix.CreateReplies(), entry)
+		return write(output{stdout: e.Stdout, stderr: e.Stderr, exit: e.Exit})
+	}
 	cmds := splitCommands(args[2:])
+	if slices.Equal(args[2:], []string{"start-server", ";", "source-file", "-"}) {
+		input, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return exitBadArgv
+		}
+		cmds, err = configCommands(string(input))
+		if err != nil {
+			return exitBadArgv
+		}
+	}
 	for _, c := range cmds {
 		if len(c) == 0 {
 			return exitBadArgv

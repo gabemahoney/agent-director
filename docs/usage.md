@@ -894,6 +894,8 @@ agent-director spawn --template dev --label run=$(date +%s)
 
 The template names its agent, so that `spawn` needs no `--agent`.
 `--overwrite` replaces an existing template atomically.
+Template values receive the same [launch-size checks](caller-contract.md#launch-size-and-representation)
+as per-call arguments and environment when the agent launches.
 
 ## Pause and resume
 
