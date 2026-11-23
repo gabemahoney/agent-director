@@ -148,6 +148,12 @@ display and transcript checks; late exact input proof remains eligible.
 Pending grace and a live launch owner protect an unfinished launch, except
 from [exact Cursor gateway loss](#cursor-operation-boundaries).
 
+Proof reconciliation defers to input writers. Reads without pending proof
+take no input lock; a busy proof check defers until a later read and does not
+fail the enclosing read. A `pause` or `send-keys` waits briefly for a proof
+read already in progress; see [input admission](#manual-input-ownership)
+for the bounds and refusal details.
+
 Work is bounded per call (per ID for [`get-many`](#reading-many-agents)),
 and writes recheck the sampled identity. A stale sample, unavailable provider or unconfirmed commit is not
 successful recovery; a successful read does not prove every check ran or
@@ -1466,6 +1472,8 @@ operations below.
 State, permission-relay and dialog guards run before capability selection or
 stored-request observation. `ended` and `missing` rows are always refused
 with `ErrSpawnNotInteractive`, including retries of existing requests.
+Ordinary sends share the [input-admission rules](#manual-input-ownership)
+with manual sends and waiting uncovered `pause`.
 
 For a supported native attempt, an Enter without an exact matching transcript
 record returns `ErrSubmissionUnconfirmed`, `outcome: "submission_unconfirmed"`.
@@ -1581,15 +1589,31 @@ operations; a Covered Agent's send refuses them as
 [malformed](#covered-sends). On success they return an empty
 object and make no transcript-confirmation claim. Cursor sends with Enter also
 check for [gateway refusal](#cursor-input-outcomes). They serialize with ordinary
-delivery. Manual `send-keys` can return `ErrSubmissionUnconfirmed`
-with `outcome: "not_started"`, `keys_sent: false` and
-`enter_may_have_been_sent: false` when exclusive input ownership is unavailable
-or its delivery journal cannot be read or saved. That call attempted no input;
-re-issue it after the stated condition clears. If another request still owns
-the writer, let it settle first; a persistent journal refusal needs an operator.
-For waiting uncovered `pause`, the same ownership or journal failures return `ErrInternal`
-before any input is attempted. If its ownership recheck fails after it clears
-the input line, `pause` returns `ErrInternal` with only that clear sent: no
+delivery.
+
+Input admission gives writers priority over proof reads: a writer allows up to
+100 ms to gain admission, then up to 2 s for a proof read already in
+progress to finish. Later proof reads defer, so repeated reads cannot
+overtake an admitted writer. A second writer still refuses if the first
+retains ownership through the admission allowance. Caller cancellation caps
+both waits. These are admission bounds, not whole-command or filesystem-stall
+deadlines; an overlong proof read can still exhaust the wait.
+
+On an input-admission or journal-open failure, `send-keys` returns
+`ErrSubmissionUnconfirmed`; waiting uncovered `pause` returns `ErrInternal`.
+Both report `outcome: "not_started"`, `phase: "pre_input"`, zero
+`bytes_attempted`, false `keys_sent`, `enter_may_have_been_sent` and
+`submission_confirmed`, and the last captured `row_state`. Their `reason`
+and description retain the admission, lock-wait or storage/open cause;
+filesystem errors retain the operation and cause without private paths.
+Advice text is a hint, not a machine-readable cause code.
+
+Manual `send-keys` also returns `ErrSubmissionUnconfirmed`/`not_started`
+when its journal cannot be read or saved before input. Re-issue a no-input
+call after its stated condition clears; let another writer settle first.
+A persistent journal refusal needs an operator. A `pause` journal read/save
+failure returns `ErrInternal` without input. If its ownership recheck fails after it clears
+the input line, it returns `ErrInternal` with only that clear sent: no
 `/exit` and no Enter, so the agent is not pausing. Check `get`'s `state`
 before calling `pause` again. State, relay and recorded-name guards run
 before it acquires input ownership.

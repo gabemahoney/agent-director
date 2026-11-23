@@ -5702,6 +5702,9 @@ The checker reuses the following adapters and guarded stores:
   COMMIT cannot hold a connection needed by response assembly. It never invokes
   a delivery backend. Finished rows admit this adapter only; their liveness,
   turn, permission, display and transcript adapters are inapplicable.
+  Input-admission contention defers this pass with a `native_proof` outcome
+  of `busy`, not `unreadable` or committed recovery; it does not fail the read.
+  See [Ordinary input delivery](#ordinary-input-delivery) for the lock protocol.
 
 `activeCheckSample` and `activeCheckOutcome` retain examined identities,
 evidence and actual attempted/committed/stale/busy/unconfirmed outcomes within
@@ -12304,19 +12307,31 @@ is `Terminal capabilities:`. The SQLite launch record retains agent/version, cre
 token, instance, safe status, `KeymapPinned` and Claude's exact transcript path. These are pinned diagnostic observations, not documented ready
 acknowledgements; missing or changed markers fail closed.
 
-One request holds a nonblocking OS writer lock across validation, delivery
+One request holds an OS writer lock across validation, delivery
 and observation, for every row with a launch token, whether or not a launch
-record exists (the path then comes from the store id and token). The lock is `<launch-dir>.lock`, shared by automatic and
-manual `send-keys`, permission pane answers and `pause`. Lock release after
-a crash never clears its durable attempt. Writers outside agent-director
-are excluded by the protocol's caller precondition, not by this lock.
+record exists (the path then comes from the store id and token). The lock is
+`<launch-dir>.lock`, shared by automatic and manual `send-keys`, permission
+pane answers, `pause` and proof saves. Writers first take
+`<launch-dir>.intent.lock` exclusively and keep it through their input-lock
+wait and session. Gate admission allows 100 ms, then input-lock acquisition
+allows 2 s for an existing proof pass to drain. Both retry every 5 ms and
+honour caller cancellation. Later proof readers cannot overtake an admitted
+writer; a second writer is refused if the gate stays busy. These bounds do
+not promise cancellation of arbitrary kernel filesystem stalls.
+`Native.Locks`/`LockPolicy` supplies per-adapter duration, clock and wait seams;
+nil selects these defaults. Lock release after a crash never clears its durable
+attempt. Writers outside agent-director are excluded by the protocol's caller
+precondition, not by this lock.
 The default API backend uses `Native.OpenExisting` over the store: only a
 committed absence of a launch record is a capability miss. A missing evidence
 directory is not absence of operational state. Unreadable or corrupt records
 fail closed, retaining unresolved ownership rather than allowing fallback. Explicit injected backends use their `Open` contract.
-Failure to acquire the lock or read/save manual intent returns
-`ErrSubmissionUnconfirmed` with `not_started` for `send-keys`, or `ErrInternal`
-for `pause`, before that call attempts input.
+**Must reuse:** `inputOpenError` maps input-admission/journal-open failures to
+`send-keys`' `ErrSubmissionUnconfirmed` or `pause`'s `ErrInternal`, with the
+same zero-input `SubmissionUnconfirmedDetails`. `inputOpenCause` retains
+operation/cause text while stripping filenames from wrapped/joined filesystem
+errors, without wrapping another catalogued sentinel. Later manual-intent
+read/save failures keep their existing classifications.
 
 Delivery validates normalized text (CR stripped, LF preserved), UTF-8,
 ordinary framing and the 1 MiB limit. It repeatedly checks current launch
@@ -12418,17 +12433,30 @@ provider receipt, and imported unknown confirmation times stay unknown.
 
 The private `~/.config/agent-director/input/<store_id>/<launch_token>/`
 directory (0700) retains provider diagnostics; transcripts remain provider
-evidence. Its adjacent 0600 lock synchronizes automatic/manual/pause writers
-and carries no operational authority. Imported launches keep their original
-evidence directory and lock inode. Legacy JSON is read only by the importer,
-never by runtime delivery. There is no automatic evidence cleanup.
+evidence. The adjacent `.lock` and `.intent.lock` files (0600) synchronize
+access without operational authority. Imported launches keep their original
+evidence directory and lock inode.
+The gate's `.lock` suffix preserves migration's synchronization-file treatment.
+Preparation and legacy import retain their existing original-lock protocol:
+an unpublished or unused launch has no proof to reconcile, and import runs
+under administrator-maintained quiescence. Legacy JSON is read only by the
+importer, never by runtime delivery. There is no automatic evidence cleanup.
 
 **Must use for proof-only observation:** `pkg/api.ReconcileInputProof(ctx,
 InputProofStore, captured Spawn)` performs one pass through the same adapter,
 with a one-second SQL/caller admission ceiling, no sleeps, input capability,
 new request or replay. It returns exact identity, launch revision, retained
-attempt/proof and capability confirmation. Existing submitted proof is returned
-unchanged. It cannot bind an unused capability or retarget the current owner.
+attempt/proof and capability confirmation. `Native.Observe` reads and validates
+the SQLite launch/attempt snapshot without opening lock files. No native launch,
+no attempt, no Enter intent or an already submitted attempt returns from this
+fast path. Otherwise the reader tries shared intent nonblocking, then tries
+the original input lock once before releasing shared intent. Busy admission
+or input ownership returns `inputdelivery.ErrBusy` without scanning or saving
+proof. After input-lock acquisition it reloads before Confirm/Save; Codex
+metadata saves inside Confirm remain serialized too. Busy gate admission
+does not establish that the holder is an input writer.
+Existing submitted proof is returned unchanged. The pass cannot bind an unused
+capability or retarget the current owner.
 Shared public read/sweep integration must reuse this seam; it is not implemented
 by this private pass. Its deadline does not promise cancellation of arbitrary
 kernel filesystem stalls.
@@ -14375,6 +14403,7 @@ agent-director with one script.
 │                                    migration rewrote it; its mode)
 ├── input/<store_id>/              (private native input evidence)
 │   ├── <launch_token>.lock        (mode 0600; writer ownership)
+│   ├── <launch_token>.intent.lock (mode 0600; input admission)
 │   └── <launch_token>/            (mode 0700; provider diagnostics/logs;
 │                                    retired JSON may remain as evidence)
 ├── config.toml                    (operator-owned; a hooks-on install

@@ -144,12 +144,11 @@ native ordinary input, use a fresh supported launch with an empty composer;
 records or provider evidence to bypass an unresolved attempt. A released lock,
 timeout or uncertain database commit does not prove that input was not delivered.
 
-A manual `send-keys` can also return `ErrSubmissionUnconfirmed`
-with `outcome: "not_started"` when it cannot own the input writer or read or
-save its journal. `pause` returns `ErrInternal` for these failures. That call
-sent nothing. Let any active writer finish, then
-re-issue the call. For a persistent refusal, check access to the configured
-database and private [delivery evidence directory](settings.md#ordinary-delivery-launch-settings)
+A persistent input-ownership or journal refusal needs an access check; the
+[caller contract](caller-contract.md#manual-input-ownership) describes
+`send-keys`' `ErrSubmissionUnconfirmed`/`not_started` and `pause`'s
+`ErrInternal`, their cause details and when to re-issue a call. Check access to
+the configured database and private [delivery evidence directory](settings.md#ordinary-delivery-launch-settings)
 as the agents' user. Preserve both; never clear either to force input.
 
 ## A finished row's own old session

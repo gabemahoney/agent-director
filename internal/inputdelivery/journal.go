@@ -35,11 +35,13 @@ type Native struct {
 	Store   Persistence
 	Context context.Context
 	Guard   Guard
+	Locks   *LockPolicy
 }
 
 type nativeSession struct {
 	dir      string
 	lock     *os.File
+	intent   *os.File
 	manifest manifest
 	store    Persistence
 	ctx      context.Context
@@ -94,21 +96,13 @@ func (n Native) Open(id Identity) (Session, error) {
 		dir = l.EvidenceDir
 	}
 	if err = os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("prepare input parent directory: %w", inputFileError(err))
 	}
-	path := dir + ".lock"
-	if info, e := os.Lstat(path); e == nil && !info.Mode().IsRegular() || e != nil && !os.IsNotExist(e) {
-		return nil, ErrInvalidState
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	f, intent, err := n.openLocks(acquireCtx, dir)
 	if err != nil {
 		return nil, err
 	}
-	if err = inputjournal.LockWriter(f); err != nil {
-		f.Close()
-		return nil, err
-	}
-	s := &nativeSession{dir: dir, lock: f, store: n.Store, base: ctx, ctx: acquireCtx, guard: n.Guard}
+	s := &nativeSession{dir: dir, lock: f, intent: intent, store: n.Store, base: ctx, ctx: acquireCtx, guard: n.Guard}
 	s.guard.Identity = id
 	// Read again after admission. A waited lock never grants an older snapshot.
 	s.launch, err = n.Store.ReadInputLaunch(acquireCtx, id.Token)
@@ -134,15 +128,56 @@ func (s *nativeSession) Close() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	if s.lock == nil {
-		return nil
+	var err error
+	if s.lock != nil {
+		err = inputFileError(s.lock.Close())
+		s.lock = nil
 	}
-	err := s.lock.Close()
-	s.lock = nil
+	if s.intent != nil {
+		err = errors.Join(err, inputFileError(s.intent.Close()))
+		s.intent = nil
+	}
 	if err != nil {
 		s.failed = err
 	}
 	return err
+}
+
+// Observe reads a captured proof snapshot without opening any lock file. It
+// cannot bind capability or save evidence; confirmation still uses OpenExisting
+// with ProofOnly and reloads after obtaining the original input lock.
+func (n Native) Observe(id Identity) (*Launch, *Attempt, error) {
+	if n.Store == nil {
+		return nil, nil, fmt.Errorf("native input persistence is required")
+	}
+	ctx := n.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, err := launchDir(id.StoreID, id.Token); err != nil {
+		return nil, nil, err
+	}
+	l, err := n.Store.ReadInputLaunch(ctx, id.Token)
+	if err != nil {
+		return nil, nil, err
+	}
+	if l != nil && l.Blocker != "" {
+		return nil, nil, ErrInvalidState
+	}
+	s := &nativeSession{store: n.Store, ctx: ctx, base: ctx, guard: n.Guard, launch: l}
+	s.guard.Identity = id
+	s.guard.ProofOnly = true
+	if l != nil {
+		s.manifest = l.Capability
+	}
+	if err = s.BindIdentity(id, false); err != nil {
+		return nil, nil, err
+	}
+	a, err := s.Load()
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.launch, a, nil
 }
 
 // LimitTo shortens a phase to its original absolute deadline. Switching to a

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
@@ -106,6 +108,42 @@ func supportsInput(session inputdelivery.Session, id inputdelivery.Identity) boo
 
 func deliveryNotStarted(row Spawn, reason string) error {
 	return deliveryError(row, nil, "not_started", reason)
+}
+
+// Keep the verb's existing classification, even when persistence returned a
+// catalogued error. The underlying cause belongs in both description and facts,
+// rather than adding a second public sentinel to this pre-input refusal.
+func inputOpenError(verb string, row Spawn, cause error) error {
+	reason := "exclusive input writer or delivery journal unavailable: " + inputOpenCause(cause)
+	if verb == "send-keys" {
+		return deliveryNotStarted(row, reason)
+	}
+	return &DetailedError{Err: fmt.Errorf("pause: %s: %s; no input attempted", row.InstanceID, reason), Details: submissionDetails(row, nil, "not_started", reason)}
+}
+
+// Retain operation context and every joined cause, but never publish filenames
+// carried by filesystem errors. Render each child before its enclosing wrapper.
+func inputOpenCause(cause error) string {
+	switch e := cause.(type) {
+	case *os.PathError:
+		return e.Op + ": " + inputOpenCause(e.Err)
+	case *os.LinkError:
+		return e.Op + ": " + inputOpenCause(e.Err)
+	}
+	text := cause.Error()
+	var children []error
+	switch e := cause.(type) {
+	case interface{ Unwrap() []error }:
+		children = e.Unwrap()
+	case interface{ Unwrap() error }:
+		children = []error{e.Unwrap()}
+	}
+	for _, child := range children {
+		if child != nil {
+			text = strings.ReplaceAll(text, child.Error(), inputOpenCause(child))
+		}
+	}
+	return text
 }
 
 func submissionDetails(row Spawn, a *inputdelivery.Attempt, outcome, reason string) SubmissionUnconfirmedDetails {

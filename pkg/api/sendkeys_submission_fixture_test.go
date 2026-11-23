@@ -280,6 +280,7 @@ func sqliteGuard(row api.Spawn, storeID string) inputdelivery.Guard {
 type sqliteDeliveryBackend struct {
 	e                   *nativeSubmissionEnv
 	ctx                 context.Context
+	locks               *inputdelivery.LockPolicy
 	afterSave           func(*api.InputDeliveryAttempt) error
 	afterClose          func() error
 	limit               func(time.Time) time.Time
@@ -293,7 +294,7 @@ func (b *sqliteDeliveryBackend) Open(id api.InputDeliveryIdentity) (api.InputDel
 		return nil, err
 	}
 	g := inputdelivery.Guard{Identity: id, RowVersion: row.RowVersion, PermissionEpoch: row.PermissionEpoch, SessionID: row.SessionID, State: row.State}
-	s, err := (inputdelivery.Native{Store: b.e.store, Context: b.ctx, Guard: g}).Open(id)
+	s, err := (inputdelivery.Native{Store: b.e.store, Context: b.ctx, Guard: g, Locks: b.locks}).Open(id)
 	if err != nil {
 		return nil, err
 	}

@@ -47,7 +47,20 @@ func reconcileInputProof(ctx context.Context, s InputProofStore, row Spawn) (res
 	defer cancel()
 	g := deliveryGuard(row, s.StoreID(), false)
 	g.ProofOnly = true
-	session, err := (inputdelivery.Native{Store: s, Context: ctx, Guard: g}).OpenExisting(g.Identity)
+	native := inputdelivery.Native{Store: s, Context: ctx, Guard: g}
+	l, a, err := native.Observe(g.Identity)
+	if err != nil {
+		return result, false, err
+	}
+	if a == nil || a.Phase == "submitted" || !a.EnterAttempted {
+		result.Identity = g.Identity
+		result.Attempt = a
+		if l != nil {
+			result.LaunchRevision, result.CapabilityConfirmation = l.Revision, l.Confirmation
+		}
+		return result, false, nil
+	}
+	session, err := native.OpenExisting(g.Identity)
 	if err != nil {
 		return result, false, err
 	}
@@ -57,7 +70,7 @@ func reconcileInputProof(ctx context.Context, s InputProofStore, row Spawn) (res
 			committed = false
 		}
 	}()
-	a, err := session.Load()
+	a, err = session.Load()
 	if err != nil {
 		return result, false, err
 	}
