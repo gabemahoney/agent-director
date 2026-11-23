@@ -717,7 +717,7 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 	if row.Identity.Token != "" {
 		r.input, err = openInputDelivery(r.env.Context, r.env.Input, r.s, row, r.s.StoreID(), plan.answer || plan.key != nil || plan.hash != "" || !plan.enter || plan.text == "")
 		if err != nil {
-			return deliveryNotStarted(row, "exclusive input writer or delivery journal is unavailable")
+			return inputOpenError("send-keys", row, err)
 		}
 	}
 	if r.input != nil {

@@ -91,7 +91,8 @@ additions, Claude's version, config directory or keybindings.
 Diagnostics persist without automatic cleanup in
 `~/.config/agent-director/input/<store_id>/<launch_token>/`, under
 agent-director's `HOME`, even with a custom database or agent config path.
-The directory is private (0700); evidence files and its adjacent lock are 0600.
+The directory is private (0700). Evidence files and the adjacent
+`<launch_token>.lock` and `<launch_token>.intent.lock` files are 0600.
 Provider transcripts stay at provider paths. Prompts and retained input proof
 are private database records. For inspection and recovery, see
 [Unresolved ordinary input](operator-actions.md#unresolved-ordinary-input).

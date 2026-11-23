@@ -354,7 +354,7 @@ func activeOutcome(adapter string, applied bool, err error) activeCheckOutcome {
 		result = "unconfirmed"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		result = "cancelled"
-	case errors.Is(err, store.ErrStoreBusy):
+	case errors.Is(err, store.ErrStoreBusy), errors.Is(err, inputdelivery.ErrBusy):
 		result = "busy"
 	case errors.Is(err, store.ErrSpawnNotFound), errors.Is(err, sql.ErrNoRows):
 		result = "absent"

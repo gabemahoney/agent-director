@@ -563,7 +563,7 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent boo
 	if row.Identity.Token != "" {
 		session, err = openInputDelivery(r.ctx, env.Input, r.s, row, r.s.StoreID(), true)
 		if err != nil {
-			return false, fmt.Errorf("pause: exclusive input writer or delivery journal unavailable; no input attempted")
+			return false, inputOpenError("pause", row, err)
 		}
 		if session != nil {
 			defer func() {
