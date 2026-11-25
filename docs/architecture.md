@@ -12112,15 +12112,24 @@ other agents use `keysRun.typeText`, with Cursor's
 [gateway verdict check](#cursor-gateway-verdict) and macOS Claude's paced
 typing below. Successful fallback returns an empty `SendKeysResult`, without
 exact transcript confirmation. `confirmLegacySubmission`
-observes a pending Codex row, or the pending Claude path below, for up to 2 s
-after a successful fallback send with Enter;
+observes a pending Codex row for up to 20 s, or the pending Claude path below
+for up to 2 s, after a successful fallback send with Enter;
 only hook-derived `working`, `ask_user` or `check_permission` state satisfies
 that observation. A changed launch, finished row, read failure or timeout
 returns `ErrSubmissionUnconfirmed` with `KeysSent=true`,
 `SubmissionConfirmed=false` and `RowState`. Its JSON contains exactly
 `keys_sent`, `submission_confirmed` and `row_state`; structured attempt fields are
-absent. The two-second observation uses at most twenty 100 ms sleeps. It never
-resends text or Enter.
+absent. Observation uses at most two hundred 100 ms sleeps for Codex, twenty
+for Claude, capped by the caller's earlier context deadline or cancellation.
+A read completing at or after the deadline, or after cancellation, cannot
+confirm submission. Observation never resends text or Enter.
+
+Codex's allowance follows 953 false-unconfirmed sends measured on 2026-11-18
+through 2026-11-25: estimated Enter-to-UserPromptSubmit p50 10.7 s and p95
+16.0 s, with 16 over 20 s. The 20 s margin leaves nominal transport headroom
+under the TypeScript client's 30 s default; transport and storage waits can
+still exceed that budget. Claude retains 2 s because its observed post-Enter
+hook latency after readiness and settle was 50–89 ms.
 
 **Must use:** ordinary Claude fallback read as `pending` goes through
 `sendKeysRun.waitTerminalRaw` in `pkg/api/sendkeys_terminal.go` and the optional

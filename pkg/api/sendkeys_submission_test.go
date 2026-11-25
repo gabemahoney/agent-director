@@ -69,15 +69,15 @@ func TestSendKeysPendingSubmissionUnconfirmed(t *testing.T) {
 
 					assertSubmissionUnconfirmed(t, err, state)
 					name := "Codex"
-					wantMessage := fmt.Sprintf("ErrSubmissionUnconfirmed: send-keys: %s: tmux accepted the keys and Enter, but %s submission could not be confirmed (no turn activity was observed within 2 seconds); do not repeat the text or send another Enter automatically; check hook-derived get or status; if submission remains unknown, escalate to the caller or a human", r.ID, name)
+					wantMessage := fmt.Sprintf("ErrSubmissionUnconfirmed: send-keys: %s: tmux accepted the keys and Enter, but %s submission could not be confirmed (no turn activity was observed within 20 seconds); do not repeat the text or send another Enter automatically; check hook-derived get or status; if submission remains unknown, escalate to the caller or a human", r.ID, name)
 					if err.Error() != wantMessage {
 						t.Errorf("message = %q; want %q", err, wantMessage)
 					}
-					if e.slept != 2*time.Second {
-						t.Errorf("wait = %v; want 2s", e.slept)
+					if e.slept != 20*time.Second {
+						t.Errorf("wait = %v; want 20s", e.slept)
 					}
-					if e.s.reads != 20 {
-						t.Errorf("submission reads = %d; want 20 before the deadline", e.s.reads)
+					if e.s.reads != 200 {
+						t.Errorf("submission reads = %d; want 200 before the deadline", e.s.reads)
 					}
 					assertPendingInput(t, e, r, text)
 					if text == "" {
@@ -140,8 +140,8 @@ func TestSendKeysCodexSubmissionEvidenceLost(t *testing.T) {
 		{name: "read failed", state: store.StatePending, err: fmt.Errorf("read evidence: %w", api.ErrStoreBusy)},
 		{name: "row deleted", state: store.StatePending, err: api.ErrSpawnNotFound},
 		{name: "read failed after waiting", state: store.StateWaiting, err: api.ErrStoreBusy, failAt: 2},
-		{name: "read failed with 200ms remaining", state: store.StatePending, err: api.ErrStoreBusy, failAt: 19},
-		{name: "read failed with 100ms remaining", state: store.StatePending, err: api.ErrStoreBusy, failAt: 20},
+		{name: "read failed with 200ms remaining", state: store.StatePending, err: api.ErrStoreBusy, failAt: 199},
+		{name: "read failed with 100ms remaining", state: store.StatePending, err: api.ErrStoreBusy, failAt: 200},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -187,9 +187,9 @@ func TestSendKeysCodexSubmissionBoundedClock(t *testing.T) {
 				now := e.clock.Now()
 				e.env.Relay.Now = func() time.Time { return now }
 			} else {
-				extra := 3 * time.Second
+				extra := 21 * time.Second
 				if mode == "deadline reached during wait" {
-					extra = 2*time.Second - 100*time.Millisecond
+					extra = 20*time.Second - 100*time.Millisecond
 				}
 				e.env.Sleep = func(d time.Duration) { sleep(d); e.clock.Advance(extra) }
 				e.s.read = func(n int, row api.Spawn) (api.Spawn, error) {
@@ -201,8 +201,8 @@ func TestSendKeysCodexSubmissionBoundedClock(t *testing.T) {
 			}
 			err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
 			assertSubmissionUnconfirmed(t, err, store.StatePending)
-			if mode == "fixed clock" && (e.s.reads > 21 || e.waits > 20) {
-				t.Errorf("reads/waits = %d/%d; want bounded by 21/20", e.s.reads, e.waits)
+			if mode == "fixed clock" && (e.s.reads > 201 || e.waits > 200) {
+				t.Errorf("reads/waits = %d/%d; want bounded by 201/200", e.s.reads, e.waits)
 			}
 			if mode != "fixed clock" && (e.waits != 1 || e.s.reads != 1) {
 				t.Errorf("reads/waits = %d/%d; want 1/1, no read at or after the deadline", e.s.reads, e.waits)
@@ -216,7 +216,7 @@ func TestSendKeysCodexSubmissionRemainingReadBudget(t *testing.T) {
 	e := newSubmissionEnv(t)
 	r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
 	e.s.read = func(_ int, row api.Spawn) (api.Spawn, error) {
-		e.clock.Advance(650 * time.Millisecond)
+		e.clock.Advance(9650 * time.Millisecond)
 		return row, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -229,7 +229,7 @@ func TestSendKeysCodexSubmissionRemainingReadBudget(t *testing.T) {
 	if got := e.s.preparation; len(got) != 1 || got[0] <= 0 || got[0] > 12*time.Second || got[0] > callerRemaining {
 		t.Errorf("preparation read budgets = %v; want one positive read <= 12s and caller remaining %v", got, callerRemaining)
 	}
-	want := []time.Duration{2 * time.Second, 1250 * time.Millisecond, 500 * time.Millisecond}
+	want := []time.Duration{20 * time.Second, 10250 * time.Millisecond, 500 * time.Millisecond}
 	if !reflect.DeepEqual(e.s.waits, want) {
 		t.Errorf("submission read budgets = %v; want %v including time spent reading and sleeping", e.s.waits, want)
 	}
@@ -243,9 +243,9 @@ func TestSendKeysPendingSubmissionActivityReadDeadline(t *testing.T) {
 		readTime time.Duration
 		confirm  bool
 	}{
-		{"just before deadline", 2*time.Second - time.Nanosecond, true},
-		{"at deadline", 2 * time.Second, false},
-		{"after deadline", 2*time.Second + time.Nanosecond, false},
+		{"just before deadline", 20*time.Second - time.Nanosecond, true},
+		{"at deadline", 20 * time.Second, false},
+		{"after deadline", 20*time.Second + time.Nanosecond, false},
 	}
 	// Late hook evidence cannot turn uncertainty into success. Codex's: busy
 	// send covers Claude, whose send-keys types nothing.
@@ -293,7 +293,7 @@ func TestSendKeysCodexSubmissionConnectionContention(t *testing.T) {
 	watchdog := time.AfterFunc(5*time.Second, release)
 	t.Cleanup(func() { watchdog.Stop(); release() })
 	e.s.read = func(_ int, row api.Spawn) (api.Spawn, error) {
-		e.clock.Advance(1850 * time.Millisecond)
+		e.clock.Advance(19850 * time.Millisecond)
 		return row, nil
 	}
 	sleep := e.env.Sleep
@@ -338,7 +338,7 @@ func TestSendKeysCodexSubmissionConnectionContention(t *testing.T) {
 	if got := e.s.preparation; len(got) != 1 || got[0] <= 0 || got[0] > 12*time.Second {
 		t.Errorf("preparation read budgets = %v; want one positive read <= 12s", got)
 	}
-	if want := []time.Duration{2 * time.Second, 50 * time.Millisecond}; !reflect.DeepEqual(e.s.waits, want) {
+	if want := []time.Duration{20 * time.Second, 50 * time.Millisecond}; !reflect.DeepEqual(e.s.waits, want) {
 		t.Errorf("submission read budgets = %v; want %v", e.s.waits, want)
 	}
 	assertInputWrites(t, e.killEnv, r, skpText)
@@ -377,8 +377,8 @@ func TestSendKeysSubmissionApplicability(t *testing.T) {
 			err := e.send(p)
 			if tc.hook {
 				assertSubmissionUnconfirmed(t, err, store.StatePending)
-				if e.s.reads != 20 || e.slept != 2*time.Second {
-					t.Errorf("hook reads/sleep=%d/%v; want 20/2s", e.s.reads, e.slept)
+				if e.s.reads != 200 || e.slept != 20*time.Second {
+					t.Errorf("hook reads/sleep=%d/%v; want 200/20s", e.s.reads, e.slept)
 				}
 			} else {
 				if err != nil {
