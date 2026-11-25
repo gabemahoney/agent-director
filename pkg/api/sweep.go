@@ -56,6 +56,8 @@ func Sweep(ctx context.Context, s FindMissingStore, t FindMissingTmux, pc ProcCh
 // CLI: agent-director sweep
 //
 // Errors:
+//   - [ErrInvalidFlags]: the CLI rejected invalid flags or words left after
+//     flag parsing, or MCP argument validation failed, before the sweep ran.
 //   - ErrProbeUnsupported: never returned; catalogued for client mapping.
 //   - [ErrStoreBusy]: the zero-wait store read selecting the agents did not
 //     finish within its bound: another call of this process held the store's

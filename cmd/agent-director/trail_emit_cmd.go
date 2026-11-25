@@ -31,8 +31,9 @@ func trailEmitHandlerWith(args []string) error {
 
 // trailEmitRelayAttemptHandler implements `agent-director trail-emit relay-attempt`.
 //
-// NOT fail-open: malformed flags produce a non-zero exit, no trail line is
-// written, and the ErrInvalidFlags envelope is written to stderr.
+// NOT fail-open: malformed flags or words left after flag parsing produce a
+// non-zero exit, no trail line is written, and the ErrInvalidFlags envelope
+// is written to stderr.
 func trailEmitRelayAttemptHandler(args []string) error {
 	var (
 		token         string
@@ -52,6 +53,9 @@ func trailEmitRelayAttemptHandler(args []string) error {
 	fs.StringVar(&instanceID, "instance-id", "", "instance_id (required)")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 
 	// Required-flag guard — no emit until all flags pass.

@@ -220,3 +220,14 @@ func flagErr(fs *flag.FlagSet, err error) error {
 	}
 	return err
 }
+
+// rejectUnexpectedArgs refuses leftover words, including any later flags.
+// Flag-only handlers must call it with fs.Args() immediately after successful
+// Parse, before validation or dispatch. Spawn must also use it for words not
+// after a real -- separator.
+func rejectUnexpectedArgs(args []string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("unexpected arguments: %q", args)
+	}
+	return nil
+}

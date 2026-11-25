@@ -566,7 +566,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent_args",
 				Type:          "[]string",
-				Description:   "Pass-through argv to the agent program, one argument per array element (on the CLI, the arguments after --). Long launches use stdin transport; composed argv/env size or NUL refusals are ErrInvalidFlags before files, trust or row changes; see docs/caller-contract.md#launch-size-and-representation. Claude refuses --settings, --output-format and print (-p/--print, clusters included). Session selectors/owned values are refused except on a finished-agent switch: dropped_args reports their removal; the agent starts fresh and resumes nothing. Exact denied long tokens owned as values always refuse. For a codex agent, refused (ErrSpawnDeniedFlag): a Codex subcommand in command position, --remote, --remote-auth-token-env, -c/--config keys at, above or under hooks, tui.disable_paste_burst, features.hooks or its alias features.codex_hooks, and --disable hooks or codex_hooks; with disable_ask_user on, also --enable default_mode_request_user_input and the question-tool keys. agent-director adds no second --no-daemon, --dangerously-bypass-hook-trust (pre-trust ok) or --enable write_stdin_approval when the arguments already carry one before any --; Codex rejects a flag the arguments themselves repeat. Cursor accepts --model/-m (split or equals), --mode agent|plan|ask, --plan and one final initial prompt (use -- before a flag-like prompt). Explicit mode is configured through ACP before prompt admission; launch success alone does not confirm it. Other or malformed Cursor arguments return ErrSpawnDeniedFlag; remove the named argument and any owned value, then retry. Pane-only agents require exactly one --model ID; all other arguments and custom-model selectors are refused, and no positional task is accepted.",
+				Description:   "Pass-through argv to the agent program, one argument per array element. On the CLI, only words after -- are agent_args; a bare word before it is ErrInvalidFlags. An empty tail keeps the template args. Long launches use stdin transport; composed argv/env size or NUL refusals are ErrInvalidFlags before files, trust or row changes; see docs/caller-contract.md#launch-size-and-representation. Claude refuses --settings, --output-format and print (-p/--print, clusters included). Session selectors/owned values are refused except on a finished-agent switch: dropped_args reports their removal; the agent starts fresh and resumes nothing. Exact denied long tokens owned as values always refuse. For a codex agent, refused (ErrSpawnDeniedFlag): a Codex subcommand in command position, --remote, --remote-auth-token-env, -c/--config keys at, above or under hooks, tui.disable_paste_burst, features.hooks or its alias features.codex_hooks, and --disable hooks or codex_hooks; with disable_ask_user on, also --enable default_mode_request_user_input and the question-tool keys. agent-director adds no second --no-daemon, --dangerously-bypass-hook-trust (pre-trust ok) or --enable write_stdin_approval when the arguments already carry one before any --; Codex rejects a flag the arguments themselves repeat. Cursor accepts --model/-m (split or equals), --mode agent|plan|ask, --plan and one final initial prompt (use -- before a flag-like prompt). Explicit mode is configured through ACP before prompt admission; launch success alone does not confirm it. Other or malformed Cursor arguments return ErrSpawnDeniedFlag; remove the named argument and any owned value, then retry. Pane-only agents require exactly one --model ID; all other arguments and custom-model selectors are refused, and no positional task is accepted.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -1276,7 +1276,7 @@ var Verbs = []VerbDef{
 		HandleFree:   false,
 		Params:       []ParamDef{},
 		ResultFields: sweepResultFields,
-		ErrorNames:   []string{"ErrProbeUnsupported", "ErrStoreBusy"},
+		ErrorNames:   []string{"ErrInvalidFlags", "ErrProbeUnsupported", "ErrStoreBusy"},
 	},
 	{
 		Name:         "find-missing",
@@ -1285,7 +1285,7 @@ var Verbs = []VerbDef{
 		HandleFree:   false,
 		Params:       []ParamDef{},
 		ResultFields: sweepResultFields,
-		ErrorNames:   []string{"ErrProbeUnsupported", "ErrStoreBusy"},
+		ErrorNames:   []string{"ErrInvalidFlags", "ErrProbeUnsupported", "ErrStoreBusy"},
 	},
 	{
 		Name:        "expire",
@@ -1309,7 +1309,7 @@ var Verbs = []VerbDef{
 			{Name: "kept", Type: "int", Description: "Number of selected rows kept rather than deleted (the length of kept_ids), for example because the agent's process or a session of the agent (its own, or a leftover of an earlier launch) may still run, tmux could not be checked or answered from a different server, the run's tmux time budget (sweep_budget_seconds) was spent, the row changed after it was examined, or its recorded tmux session name cannot be used (kept on every run, before any other check, with no tmux call).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "kept_ids", Type: "[]string", Description: "Sorted IDs of the selected rows kept rather than deleted, each reported with its reason in the trail (ad.expire.kept). A row whose recorded tmux session name cannot be used (empty, a control character, or a character tmux stores differently) is kept on every run, before any other check, with no tmux call and a reason of its own; removing it is a human's decision (see docs/operator-actions.md). tmux problems and a failed delete of one row never fail the run: the row is kept. A failed read of the selected rows fails the run. A row another caller removed first is in neither list. Never null; [] when none.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
-		ErrorNames: []string{},
+		ErrorNames: []string{"ErrInvalidFlags"},
 	},
 	{
 		Name:        "make-template",
@@ -1356,7 +1356,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent_args",
 				Type:          "[]string",
-				Description:   "Bake default agent argv. Per-call agent_args (on the CLI, spawn's arguments after --) REPLACES the template's array wholesale (not concat). Cursor uses spawn's supported model/mode/initial-prompt subset; unsupported or malformed arguments return ErrSpawnDeniedFlag before writing. Pane-only agents permit only one --model ID and refuse custom-model selectors; a template may omit it for the spawn to supply.",
+				Description:   "Bake default agent argv. Per-call agent_args (on the CLI, spawn's arguments after --) REPLACES the template's array wholesale (not concat). Bare words before that separator are ErrInvalidFlags; an empty CLI tail keeps the template args. Cursor uses spawn's supported model/mode/initial-prompt subset; unsupported or malformed arguments return ErrSpawnDeniedFlag before writing. Pane-only agents permit only one --model ID and refuse custom-model selectors; a template may omit it for the spawn to supply.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -1579,7 +1579,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{},
-		ErrorNames:   []string{},
+		ErrorNames:   []string{"ErrInvalidFlags"},
 	},
 	{
 		Name:        "version",

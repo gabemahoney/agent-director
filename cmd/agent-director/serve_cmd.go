@@ -25,7 +25,8 @@ import (
 )
 
 // serveHandlerWith implements `agent-director serve --stdio`.
-// Without --stdio, prints usage. The verb is long-lived per SRD §3.3:
+// With valid arguments and --stdio unset or false, prints usage.
+// The verb is long-lived per SRD §3.3:
 // once started, the process loops until stdin EOF (the MCP client
 // has hung up) or a fatal stdio error.
 //
@@ -75,6 +76,9 @@ func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&stdioFlag, "stdio", false, "enter the stdio MCP loop")
 	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if !stdioFlag {

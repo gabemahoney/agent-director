@@ -17,6 +17,9 @@ func forceDeliveryHandlerWith(client *pkgapi.Client, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
 	if p.InstanceID == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
 	}
@@ -35,6 +38,9 @@ func getForceHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.ForceID, "force-id", "", "a force_result's force_id")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if p.ForceID == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--force-id is required")
@@ -55,6 +61,9 @@ func getDeliveryHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.DeliveryRequestID, "delivery-request-id", "", "the send's Message ID")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if p.CallerUUID == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--caller-uuid is required")
