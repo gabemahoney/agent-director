@@ -173,10 +173,10 @@ func runHook() (exit int) {
 	stdout := os.Stdout
 	relayActive := os.Getenv(hook.EnvRelayMode) == hook.RelayModeOn
 
-	// Peek the hook event name before any other I/O so the early
-	// fail-closed path can gate its envelope write on event type
-	// (b.45p). Stdin is consumed here and passed to Handle via a
-	// bytes.Reader so Handle's own ReadPayload still works.
+	// Parse once before peeking so the early fail-closed and busy-send
+	// output paths use the reporting agent's decode policy (b.45p, b.3mx).
+	// Stdin is consumed here and passed to Handle via a bytes.Reader so
+	// Handle's own ReadPayload still works, before other I/O.
 	//
 	// A stdin-read failure leaves stdinRaw empty and eventName "",
 	// which forces earlyFailClosed into silent mode — fail-open is
@@ -184,7 +184,8 @@ func runHook() (exit int) {
 	// event was. Handle's own ReadPayload will then also fail and
 	// log, exiting silently.
 	stdinRaw, _ := io.ReadAll(io.LimitReader(os.Stdin, hook.MaxPayloadBytes+1))
-	eventName := hook.PeekEventName(stdinRaw)
+	args := parseHookArgs(os.Args[2:])
+	eventName := hook.PeekEventNameForAgent(args.agent, stdinRaw)
 	if eventName == hook.EventNameFileChanged {
 		// Busy send's owned wake (SR-3.4): its stderr is the prompt it may
 		// hand the agent. Teardown's diagnostics go nowhere until the hook's
@@ -202,11 +203,10 @@ func runHook() (exit int) {
 			}
 		}()
 	}
-	contextArgs := parseHookArgs(os.Args[2:])
-	if contextArgs.contextSource != "" {
+	if args.contextSource != "" {
 		eventName = ""
 		defer func() {
-			exit = forwardContextStatusline(contextArgs.contextForward, io.MultiReader(bytes.NewReader(stdinRaw), os.Stdin))
+			exit = forwardContextStatusline(args.contextForward, io.MultiReader(bytes.NewReader(stdinRaw), os.Stdin))
 		}()
 		if int64(len(stdinRaw)) > hook.MaxPayloadBytes {
 			return hookExitCode
@@ -218,8 +218,8 @@ func runHook() (exit int) {
 	// nothing. It fails open (exit 0, one diagnostic line on stderr) and a
 	// relayed PermissionRequest still gets its deny, as for any failure
 	// before Handle.
-	if err := hookOldLayout(); err != nil {
-		if contextArgs.contextSource == "" {
+	if err := hookOldLayout(args.agent); err != nil {
+		if args.contextSource == "" {
 			hookLog(log.New(os.Stderr, "agent-director-hook ", log.LstdFlags), "hook: %v", err)
 		}
 		if relayActive && eventName == hook.EventNamePermissionRequest {
@@ -231,7 +231,7 @@ func runHook() (exit int) {
 	// Capacity observation must not add diagnostics to the original command's
 	// stderr, including when the ordinary hook logger would fall back there.
 	logger := log.New(io.Discard, "", 0)
-	if contextArgs.contextSource == "" {
+	if args.contextSource == "" {
 		logger = newHookLogger()
 	}
 	if eventName == hook.EventNameFileChanged {
@@ -278,14 +278,14 @@ func runHook() (exit int) {
 	// Cursor's owned pane carries the actual opened store path, including a
 	// per-client override. This is only routing; the direct-parent, launch
 	// and runtime gates still prove authority independently.
-	if parseHookArgs(os.Args[2:]).agent == store.AgentCursor {
+	if args.agent == store.AgentCursor {
 		if path := os.Getenv("AGENT_DIRECTOR_CURSOR_STORE_PATH"); path != "" {
 			dbPath = path
 		}
 	}
 	// With the busy timeout every verb's open uses too (b.c7f).
 	var st *store.Store
-	if parseHookArgs(os.Args[2:]).agent == store.AgentCursor {
+	if args.agent == store.AgentCursor {
 		st, err = store.OpenWithBusyTimeout(dbPath, cfg.Store.EffectiveBusyTimeoutMs())
 	} else {
 		st, err = store.OpenOrInitWithBusyTimeout(dbPath, cfg.Store.EffectiveBusyTimeoutMs())
@@ -320,7 +320,6 @@ func runHook() (exit int) {
 	// (b.146 rule 13), with the same readers and relay window the verbs judge
 	// it with; that close matches no Claude or Codex request, which carries no
 	// tool_use_id (b.wbs).
-	args := parseHookArgs(os.Args[2:])
 	hc := hook.HandleConfig{
 		Agent:                args.agent,
 		ContextSource:        args.contextSource,
@@ -510,9 +509,11 @@ func hookParentProc() hook.ParentProc {
 // when the hook is about to open the default store (the config loads and its
 // file sets no [store] db_path), no store exists there and the old directory
 // is present, nil otherwise. A config that fails to load is not judged here:
-// the hook's own load reports it. It creates nothing.
-func hookOldLayout() error {
-	if parseHookArgs(os.Args[2:]).agent == store.AgentCursor && os.Getenv("AGENT_DIRECTOR_CURSOR_STORE_PATH") != "" {
+// the hook's own load reports it. The agent is the already-parsed reporting
+// argument; a Cursor hook targeting its owned store skips this check. It
+// creates nothing.
+func hookOldLayout(agent string) error {
+	if agent == store.AgentCursor && os.Getenv("AGENT_DIRECTOR_CURSOR_STORE_PATH") != "" {
 		return nil
 	}
 	cfg, err := config.Load(configPath)

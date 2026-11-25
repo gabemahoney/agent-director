@@ -424,11 +424,11 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		return nil
 	}
 
-	// Peek the event name from the raw payload so failClosed can gate
-	// its envelope write on event type from the first post-read failure
-	// point. An empty event name (parse failure or missing field) is
-	// treated as non-PermissionRequest, which silences the envelope.
-	eventName := PeekEventName(raw)
+	// Peek using the reporting agent's decode policy so failClosed can gate
+	// its envelope from the first post-read failure point. Claude's six
+	// non-classifier fields cannot blank the name; a syntax/type failure or
+	// missing name still silences the PermissionRequest envelope.
+	eventName := PeekEventNameForAgent(hc.Agent, raw)
 
 	// failClosed emits a deny envelope ONLY when this invocation is a
 	// PermissionRequest AND relay mode is on (SRD §6.4). Non-permission

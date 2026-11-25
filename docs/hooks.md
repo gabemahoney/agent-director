@@ -35,6 +35,10 @@ An unchanged-state report refreshes `last_seen_at`. Permission requests can hold
 moves to `working`; see [PermissionRequest relay path](#permissionrequest-relay-path).
 Subagent session events do not change the main session.
 
+For Claude, a non-string value of `session_id`, `source`, `origin`,
+`turn_id`, `prompt` or `file_path` counts as missing; state and subagent
+tracking continue. This includes `null`.
+
 State reads apply the configured [settle time](configuration.md#settle-time-state).
 `ended` is visible immediately.
 

@@ -47,10 +47,11 @@ var terminalSessionEndReasons = map[string]bool{
 	"exit":              true,
 }
 
-// payload is the leniently-typed shape ClassifyEvent reads. Fields are
-// pointers / strings so missing values surface as zero values rather than
-// JSON errors — the soft-refresh-on-unknown-event behavior depends on us
-// being able to read what's there without throwing on what isn't.
+// payload is the common shape the classification tables read and the strict
+// wire shape for Codex and Cursor. Missing fields have their zero values;
+// non-string values fail decoding, except null, which leaves a string alone.
+// Claude's decoder keeps that rule for the ten SR-5.1 classifier fields and
+// treats non-string values of the other six fields as absent.
 //
 // SessionEnd carries the exit cause in one of several field names across
 // Claude Code versions (`reason`, `matcher`, `endReason`). We accept all
@@ -88,6 +89,65 @@ type payload struct {
 	// FilePath is a FileChanged hook's changed path. Only Claude's table
 	// reads it, for busy send's owned wake (handleClaudeWake).
 	FilePath string `json:"file_path"`
+}
+
+// decodePayload shares the agent's type policy between classification and
+// peeking. Invalid agent values keep the strict peek policy; ClassifyEvent
+// rejects them through ResolveAgent before decoding.
+func decodePayload(agent string, raw []byte) (payload, error) {
+	var p payload
+	if agent == "" || agent == store.AgentClaude {
+		err := decodeClaudePayload(raw, &p)
+		return p, err
+	}
+	err := json.Unmarshal(raw, &p)
+	return p, err
+}
+
+// decodeClaudePayload leaves fields outside SR-5.1's closed classifier list
+// absent when they are not strings. Keep the local wire type named payload
+// and its classifier fields directly declared: encoding/json includes the
+// type name and field path in errors, which must match the strict decoder.
+func decodeClaudePayload(raw []byte, dst *payload) error {
+	type payload struct {
+		Source           json.RawMessage `json:"source"`
+		Origin           json.RawMessage `json:"origin"`
+		HookEventName    string          `json:"hook_event_name"`
+		EventName        string          `json:"event_name"`
+		ToolName         string          `json:"tool_name"`
+		Reason           string          `json:"reason"`
+		Matcher          string          `json:"matcher"`
+		EndReason        string          `json:"endReason"`
+		TranscriptPath   string          `json:"transcript_path"`
+		AgentID          string          `json:"agent_id"`
+		NotificationType string          `json:"notification_type"`
+		ToolUseID        string          `json:"tool_use_id"`
+		SessionID        json.RawMessage `json:"session_id"`
+		TurnID           json.RawMessage `json:"turn_id"`
+		Prompt           json.RawMessage `json:"prompt"`
+		FilePath         json.RawMessage `json:"file_path"`
+	}
+	var p payload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return err
+	}
+	dst.Source = rawString(p.Source)
+	dst.Origin = rawString(p.Origin)
+	dst.HookEventName = p.HookEventName
+	dst.EventName = p.EventName
+	dst.ToolName = p.ToolName
+	dst.Reason = p.Reason
+	dst.Matcher = p.Matcher
+	dst.EndReason = p.EndReason
+	dst.TranscriptPath = p.TranscriptPath
+	dst.AgentID = p.AgentID
+	dst.NotificationType = p.NotificationType
+	dst.ToolUseID = p.ToolUseID
+	dst.SessionID = rawString(p.SessionID)
+	dst.TurnID = rawString(p.TurnID)
+	dst.Prompt = rawString(p.Prompt)
+	dst.FilePath = rawString(p.FilePath)
+	return nil
 }
 
 // sessionEndCause picks the best-available exit-cause field from a
@@ -329,19 +389,24 @@ func (r ClassifyResult) SubagentLifecycle() bool {
 	return r.AgentID != "" && (r.EventName == "SessionStart" || r.EventName == "SessionEnd")
 }
 
-// PeekEventName extracts the event name from a raw hook payload without
-// performing full classification. It is called BEFORE ResolveInstanceID
-// so that failClosed can gate its envelope write on event type from the
-// very first failure point. On any parse failure it returns "" — the
-// caller must treat that as "unknown event" and fall back to silent
-// exit (fail-open) because emitting a permission envelope without
-// knowing the event would re-introduce b.45p.
+// PeekEventName extracts the event name using Claude's decode policy.
+// Production callers with a reporting agent use PeekEventNameForAgent.
 func PeekEventName(raw []byte) string {
+	return PeekEventNameForAgent(store.AgentClaude, raw)
+}
+
+// PeekEventNameForAgent extracts the event name without applying a state
+// table. It uses Claude's type policy only for an empty agent or claude;
+// Codex, Cursor and invalid agents keep the strict decode. It runs before
+// ResolveInstanceID so failClosed can gate its envelope from the first
+// failure point. A JSON syntax or type error returns "": the caller must
+// then exit silently because an envelope for an unknown event risks b.45p.
+func PeekEventNameForAgent(agent string, raw []byte) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	var p payload
-	if err := json.Unmarshal(raw, &p); err != nil {
+	p, err := decodePayload(agent, raw)
+	if err != nil {
 		return ""
 	}
 	return p.eventName()
@@ -349,25 +414,25 @@ func PeekEventName(raw []byte) string {
 
 // ClassifyEvent applies the hook-event → state table of agent (store.AgentClaude,
 // store.AgentCodex or store.AgentCursor; "" is claude): SRD §5.2's for Claude,
-// SR-6.2's for Codex, or Cursor's gateway reports. The function never returns
-// a typed error for unknown / malformed payloads — state-tracking is fail-open,
-// so the result's SoftRefresh /
-// UnknownEvent flags carry the decision and the handler treats it as a no-op
-// write.
+// SR-6.2's for Codex, or Cursor's gateway reports. Unknown event names are
+// soft refreshes marked UnknownEvent. Claude treats non-string values of
+// the six non-classifier fields as absent; its ten classifier fields and
+// all Codex/Cursor fields retain their string decode rules, including null.
 //
-// A JSON parse failure and an agent other than claude, codex or cursor
-// (ErrInvalidAgent) are the only errors returned: the handler logs them and
-// exits 0 silently, except that a relayed PermissionRequest is denied.
+// JSON syntax/type failures and an agent other than claude, codex or cursor
+// (ErrInvalidAgent) are the only errors returned. The handler logs errors
+// and exits 0; a relay-on failure emits deny only when the agent-aware peek
+// identified PermissionRequest. A failed peek still suppresses that envelope.
 func ClassifyEvent(agent string, raw json.RawMessage) (ClassifyResult, error) {
 	agent, err := ResolveAgent(agent)
 	if err != nil {
 		return ClassifyResult{}, err
 	}
-	var p payload
 	if len(raw) == 0 {
 		return ClassifyResult{Agent: agent, SubagentCapture: agent == store.AgentClaude, SoftRefresh: true}, nil
 	}
-	if err := json.Unmarshal(raw, &p); err != nil {
+	p, err := decodePayload(agent, raw)
+	if err != nil {
 		return ClassifyResult{}, err
 	}
 	if agent == store.AgentCursor {
