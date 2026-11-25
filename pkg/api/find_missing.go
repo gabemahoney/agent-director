@@ -888,6 +888,8 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 // CLI: agent-director find-missing
 //
 // Errors:
+//   - [ErrInvalidFlags]: as for [Client.Sweep], CLI flag or leftover-word
+//     validation or MCP argument validation failed before the sweep ran.
 //   - ErrProbeUnsupported: never returned; catalogued for client mapping:
 //     the sweep reads only process start times, and a start time it
 //     cannot read leaves that row unverified.

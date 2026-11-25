@@ -126,6 +126,29 @@ To end a live row (`pending` included) and relaunch its id:
    Agent's `resume` or reuse also checks that its earlier launch can no
    longer deliver ([Launch end, resume and reuse](#launch-end-resume-and-reuse)).
 
+## CLI arguments
+
+After global flags are extracted, a flag-only CLI verb rejects every word
+left after flag parsing with exit 1 and `ErrInvalidFlags`. The description
+lists all leftover words as `unexpected arguments: [...]`, including any
+flags after the first stray word. The verb performs no action.
+`trail-emit relay-attempt` applies this rule after the sub-verb.
+
+`spawn` accepts native agent arguments only after a standalone `--` separator.
+`spawn --cwd /x prompt --template T` is refused with `ErrInvalidFlags` before
+any row or tmux action; neither `prompt` nor the later flags reach the agent.
+Use `spawn --cwd /x --template T -- prompt`. An empty tail, as in
+`spawn --cwd /x --template T --`, keeps the template's arguments.
+
+`pause --instance-id A B C` is refused in full: A is not paused. Call `pause`
+separately for each ID, with one `--instance-id` per call; the same rule
+applies to `status` and other single-ID verbs. For reading several IDs, use
+[`get-many`](#reading-many-agents).
+
+`send-keys --instance-id X "text"` is refused without sending Enter. Pass
+text with `agent-director send-keys --instance-id X --text "text"`.
+For Enter-only input on uncovered agents, see [Manual input ownership](#manual-input-ownership).
+
 ## Bounded recovery on state reads
 
 `status`, `get`, `get-many`, `list` and `sweep` share eligible recovery checks.

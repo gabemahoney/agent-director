@@ -500,8 +500,9 @@ type shape struct {
 // liveness fields (SR-8.3) and tmux_socket (SR-3.3, SR-16.1, AC-LKP-22);
 // launch_started_at (SR-22.2); pre_trust's value set (SR-22.6, AC-SPN-08,
 // AC-CAT-04); version's config_dir (SR-11.7); kill's kill_sent (SR-6.6) and expire's counts and ids (SR-12.4),
-// the only result fields of their verbs, expire with no error names. Each is
-// described. status and list carry no tmux_socket (list's spawns text does not
+// the only result fields of their verbs. expire's ErrInvalidFlags covers parameter
+// validation and the CLI leftover-word refusal (b.hb2). Each is described.
+// status and list carry no tmux_socket (list's spawns text does not
 // name it), and make-template takes no reuse param.
 func TestFieldShapes(t *testing.T) {
 	preTrust := []string{"failed", "ok", "skipped"}
@@ -579,8 +580,8 @@ func TestFieldShapes(t *testing.T) {
 	if got := names("expire"); !reflect.DeepEqual(got, []string{"count", "ids", "kept", "kept_ids"}) {
 		t.Errorf("expire result fields = %v; want count, ids, kept, kept_ids", got)
 	}
-	if got := verbOf(t, "expire").ErrorNames; len(got) != 0 {
-		t.Errorf("expire error names = %v; want none", got)
+	if got := verbOf(t, "expire").ErrorNames; !reflect.DeepEqual(got, []string{"ErrInvalidFlags"}) {
+		t.Errorf("expire error names = %v; want only ErrInvalidFlags", got)
 	}
 	// list-subagents takes the one required instance_id and returns exactly
 	// tracked and subagents, in that order.

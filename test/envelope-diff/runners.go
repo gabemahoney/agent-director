@@ -133,7 +133,7 @@ var forwardedTmuxEnv = []string{"TMUX", "TMUX_TMPDIR", faketmuxfix.EnvTables}
 
 // runCLI executes the CLI binary at binPath as a subprocess against the
 // fixture store at dbPath. args is the full verb + argument list (e.g.
-// []string{"status", "<id>"}).
+// []string{"status", "--instance-id", "<id>"}).
 //
 // Envelope reduction:
 //

@@ -45,7 +45,7 @@ var oldFlagForms = []struct {
 type oldFlagWorld struct {
 	home, fakeDir, id, token, socket string
 	before                           apitest.SpawnColumns
-	trailLines                       int
+	effects                          noActionEffects
 }
 
 // newOldFlagWorld seeds the row in state on the socket the CLI resolves, with
@@ -83,7 +83,7 @@ func newOldFlagWorld(t *testing.T, state string, pane, request bool, extra ...ap
 		faketmuxfix.Tables{}.Write(t, socket, fakeTable(ownSession(t, home, id, "")))
 	}
 	w.before = rowColumns(t, home, id)
-	w.trailLines = len(trailOrNil(t, home))
+	w.effects = observeNoActionEffects(t, home, id)
 	return w
 }
 
@@ -96,7 +96,8 @@ func (w oldFlagWorld) run(t *testing.T, argv ...string) (stdout, stderr string, 
 // assertNothingRan fails unless nothing the verb would have done happened: the
 // seeded row is unchanged and still the store's only one, no permission
 // request was decided, no template file exists, the fake tmux was never run
-// and the trail holds wantTrail more lines than before.
+// and busy-send facts are unchanged. Only decide's ErrInvalidFlags audit may
+// add the requested trail line; every earlier line is unchanged.
 func (w oldFlagWorld) assertNothingRan(t *testing.T, wantTrail int) {
 	t.Helper()
 	if after := rowColumns(t, w.home, w.id); jsonOf(t, after) != jsonOf(t, w.before) {
@@ -119,9 +120,7 @@ func (w oldFlagWorld) assertNothingRan(t *testing.T, wantTrail int) {
 		t.Errorf("templates dir: stat err = %v; want it absent", err)
 	}
 	assertInvocationKinds(t, w.home)
-	if got := len(trailOrNil(t, w.home)) - w.trailLines; got != wantTrail {
-		t.Errorf("trail grew by %d lines; want %d", got, wantTrail)
-	}
+	w.effects.assertUnchanged(t, wantTrail)
 }
 
 // oldFlagFollow returns argv with the old flag desc refuses (whatever its

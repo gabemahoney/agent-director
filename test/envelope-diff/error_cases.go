@@ -611,6 +611,23 @@ var errorCases = append(append(append(append(append(append([]errorCase{
 		},
 	},
 
+	// b.hb2 S1: invalid duration text is refused by both the CLI and this
+	// harness's string-parameter adapter before the typed Go Expire call.
+	{
+		verb:    "expire",
+		errName: "ErrInvalidFlags",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			return filepath.Dir(apitest.SeedEmptyStore(t)), nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"older_than": "nonsense"}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"expire", "--older-than", "nonsense"}
+		},
+	},
+
 	// ── find-missing / ErrProbeUnsupported ───────────────────────────────
 	// No verb returns ErrProbeUnsupported any more, but the manifest still
 	// lists it for find-missing (SR-1.7). The row must exist for

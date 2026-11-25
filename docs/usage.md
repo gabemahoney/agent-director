@@ -3,6 +3,9 @@
 Every verb prints JSON on stdout and a typed error on stderr. The full verb and
 flag list is in `cli-reference.md`.
 
+Pass inputs to flag-only verbs through named flags; see
+[CLI arguments](caller-contract.md#cli-arguments) for the refusal rule and call forms.
+
 [`get-many`](caller-contract.md#reading-many-agents) returns `get`'s full
 result for each ID, with the same fields and guarantees described here.
 

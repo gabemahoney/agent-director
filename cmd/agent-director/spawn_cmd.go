@@ -37,9 +37,9 @@ func spawnHandlerWith(client *pkgapi.Client, args []string) error {
 	return writeJSON(os.Stdout, result)
 }
 
-// parseSpawnFlags carves the argv into a SpawnParams. Stdlib `flag`
-// covers most of it; the `--` separator pulls the remainder into
-// AgentArgs verbatim.
+// parseSpawnFlags carves argv into SpawnParams. Only words after a real --
+// separator become AgentArgs; other leftover words are refused. An empty
+// post-separator tail stays omitted so template arguments remain inherited.
 func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	var p pkgapi.SpawnParams
 	var (
@@ -68,6 +68,26 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
 	if err := fs.Parse(args); err != nil {
 		return p, flagErr(fs, err)
+	}
+	// Parse consumes the separator as well as flag values. Walk only its
+	// consumed prefix to distinguish a real -- from a value such as --cwd --.
+	separated := false
+	for i, consumed := 0, len(args)-fs.NArg(); i < consumed; i++ {
+		if args[i] == "--" {
+			separated = true
+			break
+		}
+		name, _, hasValue := strings.Cut(strings.TrimLeft(args[i], "-"), "=")
+		f := fs.Lookup(name) // successful Parse established this flag exists
+		boolFlag, isBool := f.Value.(interface{ IsBoolFlag() bool })
+		if !hasValue && (!isBool || !boolFlag.IsBoolFlag()) {
+			i++ // skip the required value even when it is --
+		}
+	}
+	if !separated {
+		if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+			return p, err
+		}
 	}
 	// Distinguish "--tmux-session-name omitted" from
 	// "--tmux-session-name=" (explicit empty). Omitted falls through to
@@ -100,6 +120,9 @@ func statusHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&id, "instance-id", "", "id to inspect")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if id == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
@@ -151,6 +174,9 @@ func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	if err := fs.Parse(args); err != nil {
 		return p, flagErr(fs, err)
 	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return p, err
+	}
 	if p.InstanceID == "" {
 		return p, fmt.Errorf("--instance-id is required")
 	}
@@ -197,6 +223,9 @@ func recordPaneAnswerHandlerWith(client *pkgapi.Client, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
 	if p.RequestToken == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--request-token is required")
 	}
@@ -237,6 +266,9 @@ func parseReadPaneFlags(args []string) (pkgapi.ReadPaneParams, error) {
 	if err := fs.Parse(args); err != nil {
 		return p, flagErr(fs, err)
 	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return p, err
+	}
 	if p.InstanceID == "" {
 		return p, fmt.Errorf("--instance-id is required")
 	}
@@ -276,6 +308,9 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
 	if p.Name == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--name is required")
 	}
@@ -312,6 +347,9 @@ func listHandlerWith(client *pkgapi.Client, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
 	if stateRaw != "" {
 		for _, s := range strings.Split(stateRaw, ",") {
 			s = strings.TrimSpace(s)
@@ -343,6 +381,9 @@ func pauseHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.BoolVar(&p.OnlyIfWaiting, "only-if-waiting", false, "pause only an agent proven waiting with no turn pending; Covered Agents only, else ErrSpawnNotPausable cause agent_not_covered")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if p.InstanceID == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
@@ -409,6 +450,10 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 		cliOutcome = "ErrInvalidFlags"
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		cliOutcome = "ErrInvalidFlags"
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
 	if p.MaxWaitMs != nil && *p.MaxWaitMs < 0 {
 		cliOutcome = "ErrInvalidFlags"
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--max-wait-ms must not be negative")
@@ -446,6 +491,9 @@ func resumeHandlerWith(client *pkgapi.Client, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
 	if p.InstanceID == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
 	}
@@ -470,6 +518,9 @@ func killHandlerWith(client *pkgapi.Client, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
 	if p.InstanceID == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
 	}
@@ -488,6 +539,9 @@ func getHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&id, "instance-id", "", "id to fetch")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if id == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
@@ -518,6 +572,9 @@ func listSubagentsHandlerWith(client *pkgapi.Client, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
 	if id == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
 	}
@@ -539,6 +596,9 @@ func getPermissionHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the permission_requests row to fetch")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if p.RequestToken == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--request-token is required")
