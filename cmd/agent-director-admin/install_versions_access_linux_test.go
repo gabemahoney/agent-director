@@ -46,6 +46,34 @@ func traceVersionCommand(t *testing.T, bin, home string, args ...string) (string
 	return out, stderr, code, trace
 }
 
+// strace may split a syscall while another thread runs. Rejoin by caller tid
+// before matching; keep calls that never resume as attempted accesses.
+func versionTraceLines(trace string) []string {
+	var lines []string
+	pending := map[string]int{}
+	for _, line := range strings.Split(trace, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		tid := fields[0]
+		if strings.Contains(line, "<unfinished ...>") {
+			pending[tid] = len(lines)
+		} else if strings.Contains(line, "<... ") {
+			if j := strings.Index(line, " resumed>"); j >= 0 {
+				if index, ok := pending[tid]; ok {
+					prefix, _, _ := strings.Cut(lines[index], "<unfinished ...>")
+					lines[index] = strings.TrimRight(prefix, " ") + line[j+len(" resumed>"):]
+					delete(pending, tid)
+					continue
+				}
+			}
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
 func versionForbiddenAccess(trace string) []string {
 	var hits []string
 	// Basenames cover disposable facts-child homes and relative openat paths.
@@ -54,12 +82,12 @@ func versionForbiddenAccess(trace string) []string {
 	control := regexp.MustCompile(`\b(kill|tkill|pidfd_send_signal|connect|sendto|sendmsg)\(|\bread\((?:0|0x0)(?:<[^>]*>)?,`)
 	// Go probes pidfd support with signal 0; that sends no signal. Actual
 	// pidfd signals remain forbidden, as do kill/tkill and agent IPC attempts.
-	pidfdProbe := regexp.MustCompile(`\bpidfd_send_signal\([^,]+, 0, NULL, 0\)`)
+	pidfdProbe := regexp.MustCompile(`\bpidfd_send_signal\([^,]+, 0, NULL, 0(?:\)| <unfinished \.\.\.>$)`)
 	// Match runtime path components in any HOME, including disposable facts
 	// homes, relative paths and -yy descriptor annotations. Timestamp-only
 	// wake changes (utimensat) are file accesses too.
 	runtimePath := regexp.MustCompile(`(?:/|")(?:launch|input)(?:/|"|>)`)
-	for _, line := range strings.Split(trace, "\n") {
+	for _, line := range versionTraceLines(trace) {
 		// An argv string naming a store is not an attempted filesystem access.
 		if strings.Contains(line, "execve(") {
 			continue
@@ -69,6 +97,21 @@ func versionForbiddenAccess(trace string) []string {
 		}
 	}
 	return hits
+}
+
+func versionAccessCalibration(trace, input string) (failedOpen, wakeTouch, inputOpen bool) {
+	for _, hit := range versionForbiddenAccess(trace) {
+		if strings.Contains(hit, "openat(") && strings.Contains(hit, "state.db-wal") && strings.Contains(hit, "ENOENT") {
+			failedOpen = true
+		}
+		if strings.Contains(hit, "utimensat(") && strings.Contains(hit, store.BusySendWakeFile) {
+			wakeTouch = true
+		}
+		if strings.Contains(hit, "openat(") && strings.Contains(hit, filepath.Join(input, "missing")) && strings.Contains(hit, "ENOENT") {
+			inputOpen = true
+		}
+	}
+	return failedOpen, wakeTouch, inputOpen
 }
 
 // versionRuntimeSentinels uses BusySendWakePath's launch layout and Native's
@@ -97,18 +140,7 @@ func TestVersionAdminNoStoreAccess(t *testing.T) {
 		wake, input := versionRuntimeSentinels(t, home)
 		before := versionTree(t, wake)["."]
 		_, _, code, trace := traceVersionCommand(t, "/bin/sh", home, "-c", "cat \"$1\" >/dev/null 2>&1 || :; touch -c -m -- \"$2\" || exit 1; cat \"$3\" >/dev/null 2>&1 || :", "access-control", stateDB(home)+"-wal", wake, filepath.Join(input, "missing"))
-		failedOpen, wakeTouch, inputOpen := false, false, false
-		for _, hit := range versionForbiddenAccess(trace) {
-			if strings.Contains(hit, "openat(") && strings.Contains(hit, "state.db-wal") && strings.Contains(hit, "ENOENT") {
-				failedOpen = true
-			}
-			if strings.Contains(hit, "utimensat(") && strings.Contains(hit, store.BusySendWakeFile) {
-				wakeTouch = true
-			}
-			if strings.Contains(hit, "openat(") && strings.Contains(hit, filepath.Join(input, "missing")) && strings.Contains(hit, "ENOENT") {
-				inputOpen = true
-			}
-		}
+		failedOpen, wakeTouch, inputOpen := versionAccessCalibration(trace, input)
 		if code != 0 || !failedOpen || !wakeTouch || !inputOpen {
 			t.Fatalf("observer missed runtime access in %s: exit=%d db=%v wake=%v input=%v\n%s", home, code, failedOpen, wakeTouch, inputOpen, trace)
 		}
