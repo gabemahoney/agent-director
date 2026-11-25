@@ -511,14 +511,14 @@ const (
 	uninstallOldCopies = "uninstall.sh: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:"
 )
 
-// oldCopiesNamed returns the paths out's line naming settings.json.bak copies
-// lists after phrase, split into words as bash reads them; nil with no such
-// line. A second such line, or one not starting with phrase, fails the case.
-func oldCopiesNamed(t *testing.T, out, phrase string) []string {
+// copiesNamed finds out's line containing marker and shell-parses its paths
+// after phrase; nil with no such line. A second such line, or one not starting
+// with phrase, fails the case.
+func copiesNamed(t *testing.T, out, phrase, marker string) []string {
 	t.Helper()
 	var lines []string
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "settings.json.bak") {
+		if strings.Contains(line, marker) {
 			lines = append(lines, line)
 		}
 	}
@@ -527,7 +527,7 @@ func oldCopiesNamed(t *testing.T, out, phrase string) []string {
 	}
 	list, ok := strings.CutPrefix(lines[0], phrase)
 	if len(lines) > 1 || !ok {
-		t.Errorf("lines naming settings.json.bak = %q; want one, starting %q", lines, phrase)
+		t.Errorf("lines containing %q = %q; want one, starting %q", marker, lines, phrase)
 		return nil
 	}
 	words, err := exec.Command("bash", "-c", `eval "set -- $1" && printf '%s\0' "$@"`, "bash", list).Output()
@@ -559,7 +559,7 @@ func TestAdviceFollow_J48_UninstallDeleteNamedCopiesAndRerun(t *testing.T) {
 		writeMode(t, p, text, 0o600)
 	}
 
-	named := oldCopiesNamed(t, string(runUninstall(t, home, "")), uninstallOldCopies)
+	named := copiesNamed(t, string(runUninstall(t, home, "")), uninstallOldCopies, "settings.json.bak")
 	if !slices.Equal(named, copies) {
 		t.Fatalf("the line names %q; want %q", named, copies)
 	}
@@ -577,6 +577,44 @@ func TestAdviceFollow_J48_UninstallDeleteNamedCopiesAndRerun(t *testing.T) {
 		if got, err := os.ReadFile(p); err != nil || string(got) != text {
 			t.Errorf("%s after the re-run = %q, %v; want it as it was", p, got, err)
 		}
+	}
+}
+
+// b.mte: confirmed purge must name migration copies before removing them,
+// without printing the credential bytes they may retain.
+func TestUninstallPurgeNamesMigrationCopies(t *testing.T) {
+	h := newMoveHome(t)
+	copies := []string{
+		filepath.Join(h.New, "config.toml.pre-agent-rename.20240101-000000"),
+		filepath.Join(h.New, "templates", "tok,o'q\"$x`y`.toml.pre-agent-rename.20250101-000000"),
+	}
+	const decoy = "decoy-purge-2222-not-a-real-token"
+	for _, path := range copies {
+		h.Write(path, decoy+"\n", 0o600)
+	}
+	// Observe the actual removal boundary, forwarding every rm to the real
+	// tool. The inventory must already be printed while both copies exist.
+	const removing = "test: removing migration copies"
+	h.WrapTool("rm", fmt.Sprintf(`if [[ "$#" -eq 2 && "$1" == -rf && "$2" == %s ]]; then
+    [[ -f %s && -f %s ]] || exit 91
+    printf '%%s\n' %s
+fi`, moveQuote(h.New), moveQuote(copies[0]), moveQuote(copies[1]), moveQuote(removing)))
+	out, code := uninstallExit(t, h.Home, "", "", []string{"--purge", "--force"}, h.Tools)
+	if code != 0 {
+		t.Fatalf("confirmed purge exited %d:\n%s", code, out)
+	}
+	text := string(out)
+	if got := copiesNamed(t, text, uninstallRenameCopies, "agent-rename copies"); !slices.Equal(got, copies) {
+		t.Errorf("purge inventory names %q; want %q", got, copies)
+	}
+	if warning, removal := strings.Index(text, uninstallRenameCopies), strings.Index(text, removing); warning < 0 || removal < 0 || warning >= removal {
+		t.Error("purge did not print the inventory before removing the copies")
+	}
+	if strings.Contains(text, decoy) {
+		t.Error("purge printed a decoy credential")
+	}
+	if _, err := os.Lstat(h.New); !os.IsNotExist(err) {
+		t.Errorf("purge left its install root: %v", err)
 	}
 }
 
@@ -644,7 +682,7 @@ func TestSettingsBackupNotKept(t *testing.T) {
 						t.Errorf("after %s: %s = %q (mode %v); want it kept as it was", step, p, got, mode)
 					}
 				}
-				if got := oldCopiesNamed(t, res.Stdout+"\n"+res.Stderr, phrase); !slices.Equal(got, named) {
+				if got := copiesNamed(t, res.Stdout+"\n"+res.Stderr, phrase, "settings.json.bak"); !slices.Equal(got, named) {
 					t.Errorf("%s: the old-copies line names %q; want %q\nstdout:\n%s\nstderr:\n%s", step, got, named, res.Stdout, res.Stderr)
 				}
 				raw, _ := ownedFileBytes(t, settings)

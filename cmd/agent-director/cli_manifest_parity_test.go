@@ -9,11 +9,13 @@ package main_test
 // registers a flag (TestCLIIntFlagsAreDecimal, b.c4n).
 //
 // Every flag.FlagSet value must be a local variable defined from
-// flag.NewFlagSet with a constant name naming its verb, and used only as a
-// method receiver or as the argument of a read-only helper
-// (flagSetReaderFuncs). Anything else whose flags the scan cannot attribute to a
-// verb fails it: a FlagSet passed, stored, returned, reassigned, embedded or
-// obtained from a helper or another package; a FlagSet method value; any
+// flag.NewFlagSet with a constant name naming its verb, or from a builder
+// that returns exactly that local variable. Builders let global scanning
+// and handlers share the same declarations (b.t1b). Registrations must stay
+// on the original local variable. Sets may otherwise be used only as method
+// receivers or read-only helper arguments (flagSetReaderFuncs). Anything
+// else the scan cannot attribute fails: a FlagSet passed, stored, returned
+// outside a builder, reassigned, embedded or obtained from another package; a FlagSet method value; any
 // FlagSet method called on another receiver; flag.CommandLine and the flag
 // package's own registration functions; and an interface method with a
 // FlagSet registration method's name and signature. A file this platform's
@@ -81,7 +83,8 @@ var nonFlagParams = map[string][]string{
 // from the scan.
 var flagSetReaderFuncs = map[string]bool{
 	"main.flagErr": true,
-	"github.com/gabemahoney/agent-director/internal/oldnames.RefuseFlag": true,
+	"github.com/gabemahoney/agent-director/internal/oldnames.RefuseFlag":           true,
+	"github.com/gabemahoney/agent-director/internal/clisetup.ParseVerbGlobalFlags": true,
 }
 
 // cliFlag is one flag registration found in the CLI's sources: the flag's
@@ -330,6 +333,7 @@ func (s *cliScan) scanTyped(fset *token.FileSet, files []*ast.File, info *types.
 	bad func(n ast.Node, format string, args ...any)) {
 	// The tracked FlagSets: local variables defined from flag.NewFlagSet.
 	verbOf := map[*types.Var]string{}
+	constructed := map[*types.Var]bool{}
 	bound := map[*ast.CallExpr]bool{}
 	define := func(id *ast.Ident, rhs ast.Expr) {
 		call, ok := ast.Unparen(rhs).(*ast.CallExpr)
@@ -348,6 +352,7 @@ func (s *cliScan) scanTyped(fset *token.FileSet, files []*ast.File, info *types.
 		}
 		verb := strings.Fields(name)[0]
 		verbOf[v], s.sets[verb] = verb, true
+		constructed[v] = true
 	}
 	for _, f := range files {
 		ast.Inspect(f, func(n ast.Node) bool {
@@ -377,6 +382,72 @@ func (s *cliScan) scanTyped(fset *token.FileSet, files []*ast.File, info *types.
 			}
 		}
 		return ""
+	}
+	// Only a builder with a single result and a single return of its own
+	// directly constructed local set can give another local a known verb.
+	// Arbitrary helpers, returned parameters and dynamic sets still fail.
+	builders := map[*types.Func]string{}
+	builderReturns := map[ast.Expr]bool{}
+	for _, f := range files {
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil || fd.Recv != nil {
+				continue
+			}
+			fn, _ := info.Defs[fd.Name].(*types.Func)
+			if fn == nil {
+				continue
+			}
+			sig := fn.Type().(*types.Signature)
+			if sig.Results().Len() != 1 || !isFlagSet(sig.Results().At(0).Type()) {
+				continue
+			}
+			var returns []*ast.ReturnStmt
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if _, nested := n.(*ast.FuncLit); nested {
+					return false
+				}
+				if ret, ok := n.(*ast.ReturnStmt); ok {
+					returns = append(returns, ret)
+				}
+				return true
+			})
+			if len(returns) != 1 || len(returns[0].Results) != 1 {
+				continue
+			}
+			e := returns[0].Results[0]
+			id, ok := e.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			v, _ := info.Uses[id].(*types.Var)
+			if constructed[v] && fd.Body.Pos() < v.Pos() && v.Pos() < fd.Body.End() {
+				builders[fn] = verbOf[v]
+				builderReturns[e] = true
+			}
+		}
+	}
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			a, ok := n.(*ast.AssignStmt)
+			if !ok || a.Tok != token.DEFINE || len(a.Lhs) != len(a.Rhs) {
+				return true
+			}
+			for i, rhs := range a.Rhs {
+				call, ok := ast.Unparen(rhs).(*ast.CallExpr)
+				if !ok {
+					continue
+				}
+				verb := builders[calleeFunc(info, call.Fun)]
+				id, local := a.Lhs[i].(*ast.Ident)
+				if verb != "" && local {
+					if v, ok := info.Defs[id].(*types.Var); ok {
+						verbOf[v], bound[call] = verb, true
+					}
+				}
+			}
+			return true
+		})
 	}
 
 	receivers := map[ast.Expr]bool{}   // the X of every selector
@@ -427,6 +498,12 @@ func (s *cliScan) scanTyped(fset *token.FileSet, files []*ast.File, info *types.
 				switch {
 				case isFlagSetMethod(m):
 					methodRecvs[n.X] = true
+					if id, ok := n.X.(*ast.Ident); ok {
+						v, _ := info.Uses[id].(*types.Var)
+						if _, reg := flagRegistrars[m.Name()]; reg && !constructed[v] {
+							bad(n, "flag registrations must stay in the verb's builder")
+						}
+					}
 					s.flagSetCall(info, n, sel, call, tracked(n.X), fset.Position(n.Pos()).String(), bad)
 				case sel.Kind() == types.MethodVal && types.IsInterface(sel.Recv()):
 					_, reg := flagRegistrars[m.Name()]
@@ -446,7 +523,10 @@ func (s *cliScan) scanTyped(fset *token.FileSet, files []*ast.File, info *types.
 		if call, ok := e.(*ast.CallExpr); ok && flagFunc(info, call.Fun) == "NewFlagSet" {
 			continue // reported above when not bound
 		}
-		if methodRecvs[e] || (receivers[e] && tracked(e) != "") || readerArgs[e] {
+		if call, ok := e.(*ast.CallExpr); ok && builders[calleeFunc(info, call.Fun)] != "" && bound[call] {
+			continue
+		}
+		if methodRecvs[e] || (receivers[e] && tracked(e) != "") || readerArgs[e] || builderReturns[e] {
 			continue
 		}
 		bad(e, "the FlagSet %s is passed, stored, returned or obtained other than as a local variable defined from flag.NewFlagSet and used as a receiver; its flags cannot be attributed to a verb", types.ExprString(e))

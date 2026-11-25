@@ -131,6 +131,15 @@ To end a live row (`pending` included) and relaunch its id:
 
 ## CLI arguments
 
+The global flags `--store-path`, `--home`, `--tmux-command` and
+`--create-if-missing` accept `--flag value` or `--flag=value`. They count
+before the verb or at a flag position in the verb's grammar. A value-taking
+flag owns its next word whatever it spells; neither that word nor an inline
+`=value` is another flag. Globals stop at the first positional word, genuine
+`--`, unknown flag or malformed flag token. For `get-many`, put all globals
+before the verb ([Reading many agents](#reading-many-agents)).
+`--create-if-missing` always needs a value, exactly `true` or `false`.
+
 After global flags are extracted, a flag-only CLI verb rejects every word
 left after flag parsing with exit 1 and `ErrInvalidFlags`. The description
 lists all leftover words as `unexpected arguments: [...]`, including any
@@ -913,10 +922,9 @@ To poll many agents, use `list` for their IDs, then one `get-many`:
 agent-director get-many agent-a agent-b
 ```
 
-On the CLI, each word after `get-many` is one ID, unchanged (commas and a
-leading `-` included), except the global flags `--store-path`, `--home`,
-`--tmux-command` and `--create-if-missing`, which the CLI takes anywhere,
-with their values.
+On the CLI, every word after `get-many` is one ID, unchanged, including
+commas, a leading `-`, global-flag spellings and `--`. Put global flags
+before the verb.
 
 Each `spawns` element is exactly that ID's `get` result, with every field and
 guarantee described for `get` in this contract. IDs with no record go to

@@ -15,19 +15,38 @@ import (
 
 func TestCLIGetManyWordsAndGlobalFlags(t *testing.T) {
 	home := t.TempDir()
-	words := []string{"A", "B,C", "-h", "--", "--x"}
-	stdout, stderr, code := runCLIWithHome(t, home, append([]string{"get-many"}, words...)...)
-	if code != 0 || stderr != "" || stdout != `{"spawns":[],"not_found":["A","B,C","-h","--","--x"]}`+"\n" {
-		t.Fatalf("words: %s %s exit=%d", stdout, stderr, code)
-	}
 	selected := filepath.Join(t.TempDir(), "selected.db")
 	if _, err := apitest.SeedSpawn(selected, "A", store.StateEnded, "/tmp", "off", "", true); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr, code = runCLIWithHome(t, home, "--home", home, "get-many", "A", "--store-path", selected, "B,C")
-	var got api.GetManyResult
-	if err := json.Unmarshal([]byte(stdout), &got); err != nil || code != 0 || stderr != "" || len(got.Spawns) != 1 || got.Spawns[0].InstanceID != "A" || !reflect.DeepEqual(got.NotFound, []string{"B,C"}) {
-		t.Fatalf("selected store: %+v %s %s exit=%d err=%v", got, stdout, stderr, code, err)
+	decoy := t.TempDir()
+	// b.t1b: globals select the store only before get-many. Every later
+	// word is an id, including global names, their values and separators.
+	for _, tc := range []struct {
+		name  string
+		words []string
+	}{
+		{"control words", []string{"B,C", "-h", "--", "--x"}},
+		{"global words are ids", []string{
+			"--store-path", filepath.Join(decoy, "s.db"),
+			"--home", filepath.Join(decoy, "home"),
+			"--tmux-command", filepath.Join(decoy, "tmux"),
+			"--create-if-missing", "false",
+			"--store-path=" + filepath.Join(decoy, "equals.db"),
+			"--home=" + filepath.Join(decoy, "equals-home"),
+			"--tmux-command=" + filepath.Join(decoy, "equals-tmux"),
+			"--create-if-missing=true",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"--home", home, "--store-path", selected, "get-many", "A"}, tc.words...)
+			stdout, stderr, code := runCLIWithHome(t, home, args...)
+			assertHomeTree(t, decoy)
+			var got api.GetManyResult
+			if err := json.Unmarshal([]byte(stdout), &got); err != nil || code != 0 || stderr != "" || len(got.Spawns) != 1 || got.Spawns[0].InstanceID != "A" || !reflect.DeepEqual(got.NotFound, tc.words) {
+				t.Fatalf("selected store: %+v stdout=%q stderr=%q exit=%d err=%v; want row A and not_found=%q", got, stdout, stderr, code, err, tc.words)
+			}
+		})
 	}
 }
 

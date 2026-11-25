@@ -1,6 +1,7 @@
 package main_test
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -43,6 +44,65 @@ func TestTrailEmitRelayAttemptCLI(t *testing.T) {
 			}
 			if ts, _ := ra[0]["ts"].(string); !tsRe.MatchString(ts) {
 				t.Errorf("ts %v does not match SR-A-7.9", ra[0]["ts"])
+			}
+		})
+	}
+}
+
+// b.t1b: globals around relay-attempt select its trail only at flag positions;
+// token values and words after an operand must never redirect HOME.
+func TestTrailEmitGlobalFlagPositions(t *testing.T) {
+	for _, position := range []string{"before subverb", "in relay flags", "token value", "after operand"} {
+		t.Run(position, func(t *testing.T) {
+			home, selected, decoy := t.TempDir(), t.TempDir(), t.TempDir()
+			token := "tok-global"
+			args := []string{"trail-emit"}
+			if position == "before subverb" {
+				args = append(args, "--home", selected)
+			}
+			args = append(args, "relay-attempt")
+			if position == "token value" {
+				token = "--home=" + decoy
+			}
+			args = append(args, "--token", token, "--endpoint", "http://127.0.0.1:9/r", "--outcome", "200", "--instance-id", "trail-global")
+			if position == "in relay flags" {
+				args = append(args, "--home", selected)
+			}
+			unexpected := []string{"stray", "--home=" + decoy}
+			if position == "after operand" {
+				args = append(args, unexpected...)
+			}
+			stdout, stderr, code := runCLIWithHome(t, home, args...)
+			assertHomeTree(t, decoy)
+			if position == "after operand" {
+				env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
+				if want := fmt.Sprintf("unexpected arguments: %q", unexpected); env.ErrDescription != want {
+					t.Errorf("err_description=%q; want %q", env.ErrDescription, want)
+				}
+				assertHomeTree(t, home)
+				assertHomeTree(t, selected)
+				return
+			}
+			if code != 0 || stdout != "{}\n" || stderr != "" {
+				t.Fatalf("exit=%d stdout=%q stderr=%q; want 0, {} and empty", code, stdout, stderr)
+			}
+			trailHome := selected
+			if position == "token value" {
+				trailHome = home
+				assertHomeTree(t, selected)
+			} else {
+				assertHomeTree(t, home)
+			}
+			assertHomeTree(t, trailHome, ".config", ".config/agent-director", ".config/agent-director/ad-trail.jsonl")
+			lines := readTrailLines(t, trailHome)
+			attempts := relayAttemptLines(lines)
+			if len(lines) != 1 || len(attempts) != 1 {
+				t.Fatalf("trail=%v; want one relay-attempt record", lines)
+			}
+			for k, want := range map[string]any{"request_token": token, "instance_id": "trail-global", "source": "relay_hook", "target_endpoint": "http://127.0.0.1:9/r", "outcome": float64(200)} {
+				if got := attempts[0][k]; got != want {
+					t.Errorf("record[%q]=%v; want %v", k, got, want)
+				}
 			}
 		})
 	}

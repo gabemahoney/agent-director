@@ -12,8 +12,7 @@ import (
 
 // sweepHandlerWith implements the canonical all-agent check.
 func sweepHandlerWith(client *pkgapi.Client, args []string) error {
-	fs := flag.NewFlagSet("sweep", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := sweepFlagSet()
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
@@ -31,8 +30,7 @@ func sweepHandlerWith(client *pkgapi.Client, args []string) error {
 // recovery logger (clisetup.Open Pin 3) so cron operators see them in their
 // usual monitoring stream.
 func findMissingHandlerWith(client *pkgapi.Client, args []string) error {
-	fs := flag.NewFlagSet("find-missing", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := findMissingFlagSet()
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
@@ -58,9 +56,7 @@ func writeSweep(client *pkgapi.Client) error {
 // before Expire runs. Absent flag → cfg default.
 func expireHandlerWith(client *pkgapi.Client, args []string) error {
 	var olderThanStr string
-	fs := flag.NewFlagSet("expire", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&olderThanStr, "older-than", "", "duration override (e.g. 7d, 12h, 0d). Default: cfg.defaults.expire_retention_days.")
+	fs := expireFlagSet(&olderThanStr)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
@@ -85,4 +81,26 @@ func expireHandlerWith(client *pkgapi.Client, args []string) error {
 	// ids and kept_ids are never nil on success (ExpireResult), so both
 	// encode as [] when empty.
 	return writeJSON(os.Stdout, result)
+}
+
+// sweepFlagSet defines sweep's flags for both global scanning and the handler.
+func sweepFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("sweep", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs
+}
+
+// findMissingFlagSet defines find-missing's flags for both global scanning and the handler.
+func findMissingFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("find-missing", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs
+}
+
+// expireFlagSet defines expire's flags for both global scanning and the handler.
+func expireFlagSet(olderThanStr *string) *flag.FlagSet {
+	fs := flag.NewFlagSet("expire", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(olderThanStr, "older-than", "", "duration override (e.g. 7d, 12h, 0d). Default: cfg.defaults.expire_retention_days.")
+	return fs
 }

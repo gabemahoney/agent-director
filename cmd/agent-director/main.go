@@ -814,8 +814,10 @@ func run() (code int, standalone bool) {
 //
 // b.32k: after the hook short-circuit, runOrdinary() pre-scans argv for the four
 // global flags (--store-path, --home, --tmux-command, --create-if-missing)
-// with clisetup.ParseGlobalFlags, which agent-director-admin shares (b.vqr),
-// and strips them before per-verb dispatch sees argv. GlobalFlags.Apply then sets
+// through parseCommandGlobalFlags: clisetup.ParseGlobalFlags reads the prefix,
+// and clisetup.ParseVerbGlobalFlags uses the verb's shared FlagSet builder
+// to extract globals only at flag positions (b.t1b). Both binaries share
+// those stages. GlobalFlags.Apply then sets
 // HOME when --home is given, so config.Load's tilde-expansion picks it up —
 // the CLI binary is short-lived and single-threaded at startup, so
 // process-wide env mutation is safe.
@@ -836,7 +838,7 @@ func runOrdinary() int {
 		return runHook()
 	}
 
-	globals, strippedArgv, err := clisetup.ParseGlobalFlags(os.Args[1:])
+	globals, strippedArgv, err := parseCommandGlobalFlags(os.Args[1:])
 	if err != nil {
 		if werr := writeError(os.Stderr, "ErrInvalidFlags", err.Error()); werr != nil {
 			fmt.Fprintln(os.Stderr, werr)
@@ -857,7 +859,7 @@ func runOrdinary() int {
 	}
 
 	// A verb alias is honoured only as the first argument after the global
-	// flags (b.fv2). strippedArgv is ParseGlobalFlags' own copy, never os.Args.
+	// flags (b.fv2). strippedArgv is the parser's own copy, never os.Args.
 	if len(strippedArgv) > 0 {
 		if verb, ok := verbAliases[strippedArgv[0]]; ok {
 			strippedArgv[0] = verb

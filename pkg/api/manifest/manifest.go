@@ -778,7 +778,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "instance_ids",
 				Type:          "[]string",
-				Description:   "Instance ids to read, from one up to the Id Cap ([get_many] id_cap, 20 by default), none empty or repeated. On the CLI these are the words after the command.",
+				Description:   "Instance ids to read, from one up to the Id Cap ([get_many] id_cap, 20 by default), none empty or repeated. On the CLI every word after get-many is an unchanged id, including global-flag spellings and --; put global flags before the verb.",
 				Required:      true,
 				Nullable:      false,
 				AllowEmpty:    false,

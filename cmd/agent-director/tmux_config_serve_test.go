@@ -44,6 +44,12 @@ func startServeBin(t *testing.T, bin, home string, env ...string) *serveSession 
 func startServeFlags(t *testing.T, bin, home string, flags []string, env ...string) *serveSession {
 	t.Helper()
 	argv := append(slices.Clone(flags), "serve", "--stdio")
+	return startServeArgs(t, bin, home, argv, env...)
+}
+
+// startServeArgs starts an MCP session with the supplied complete CLI argv.
+func startServeArgs(t *testing.T, bin, home string, argv []string, env ...string) *serveSession {
+	t.Helper()
 	s := &serveSession{cmd: exec.Command(bin, argv...), lines: make(chan string, 8), nextID: 1}
 	s.cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}, env...)
 	s.cmd.Stderr = &s.stderr

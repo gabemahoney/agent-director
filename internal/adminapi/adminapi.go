@@ -95,11 +95,11 @@ const (
 
 // GlobalFlagsText introduces GlobalFlags in help and docs/admin-reference.md.
 const GlobalFlagsText = "For kill-finished and delete, use agent-director's store, home and tmux overrides. migrate-journal uses the configured store unless --store-path overrides it. " +
-	"snapshot-store requires an explicit --store-path and loads no config. Version installation commands accept only --home. Each global flag goes before or after the verb, as --flag value or --flag=value."
+	"snapshot-store requires an explicit --store-path and loads no config. Version installation commands accept only --home. Each global flag takes --flag value or --flag=value and counts only before the verb or at a flag position in that verb's grammar. A value-taking flag owns its next word whatever it spells; neither that word nor an inline =value is another flag. Globals stop at the first positional word, genuine --, unknown flag or malformed flag token. --create-if-missing always needs a value, exactly true or false."
 
 // GlobalFlags are agent-director-admin's global flags, the ones agent-director
-// takes (internal/clisetup.ParseGlobalFlags parses them for both binaries), in
-// the order help lists them.
+// takes (internal/clisetup.ParseGlobalFlags and ParseVerbGlobalFlags parse
+// them for both binaries), in the order help lists them.
 var GlobalFlags = []Flag{
 	{Name: "--store-path <path>", Description: "Use <path> instead of the configured store ([store] db_path in ~/.config/agent-director/config.toml, by default ~/.config/agent-director/state.db). Required for snapshot-store, which reads the existing source without opening it through SQLite. With migrate-journal --check-only, enables the read-only holder inventory after argument checks; without it that mode checks arguments only."},
 	{Name: "--home <dir>", Description: "Use <dir> as HOME for this run, so the config, the store and every other ~/ path resolve under it."},

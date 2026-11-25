@@ -42,6 +42,15 @@
 #     locations or at --symlink-dir).
 #   - Leave ~/.config/agent-director/ intact (the operator may want to
 #     keep their templates / state.db history).
+#   - Name its config.toml.pre-agent-rename.<YYYYmmdd-HHMMSS> and
+#     templates/*.pre-agent-rename.<YYYYmmdd-HHMMSS> copies on one line,
+#     each path shell-quoted, without reading their contents. They may hold
+#     tokens and can be deleted once the upgrade is confirmed. The copies
+#     are left alone by this inventory. --purge names them first and removes
+#     copies only inside directories it actually removes. A symlinked install
+#     root or templates directory is removed as a link; copies in retained
+#     targets survive. Check those targets too: printed paths through removed
+#     links no longer resolve.
 #
 # It works on ~/.config/agent-director. When only ~/.agent-director is
 # present (an install never moved to the new directory), it works on
@@ -1239,6 +1248,23 @@ for old_settings_bak in "${DEFAULT_SETTINGS_PATH}".bak.[0-9][0-9][0-9][0-9][0-9]
 done
 if [[ -n "$old_settings_baks" ]]; then
     echo "uninstall.sh: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:${old_settings_baks}"
+fi
+
+# Agent-rename copies may retain tokens after the live files change (b.mte).
+# Keep this inventory in step with install.sh's: exact timestamp form,
+# dangling links included, contents unread, each path quoted with %q.
+# Name them under --purge too, before removal: a later step may fail, and
+# copies in retained targets of a symlinked install root or templates directory
+# survive when the purge removes the links without following them.
+agent_rename_copies=""
+for agent_rename_copy in \
+    "${DEFAULT_INSTALL_ROOT}"/config.toml.pre-agent-rename.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9] \
+    "${DEFAULT_INSTALL_ROOT}"/templates/*.pre-agent-rename.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
+    [[ -e "$agent_rename_copy" || -L "$agent_rename_copy" ]] || continue
+    printf -v agent_rename_copies '%s %q' "$agent_rename_copies" "$agent_rename_copy"
+done
+if [[ -n "$agent_rename_copies" ]]; then
+    echo "uninstall.sh: agent-rename copies may hold tokens and can be deleted once the upgrade is confirmed:${agent_rename_copies}"
 fi
 
 # --------------------------------------------------------------------

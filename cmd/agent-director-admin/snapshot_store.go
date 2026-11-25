@@ -15,9 +15,7 @@ import (
 func snapshotStoreHandler(o clisetup.Overrides, args []string) error {
 	var directory string
 	var busyTimeoutMs int
-	fs := flag.NewFlagSet("snapshot-store", flag.ContinueOnError)
-	fs.StringVar(&directory, "directory", "", "existing empty private directory for the readonly snapshot")
-	fs.IntVar(&busyTimeoutMs, "busy-timeout-ms", store.DefaultBusyTimeoutMs, "maximum snapshot/lock wait in milliseconds")
+	fs := snapshotStoreFlagSet(&directory, &busyTimeoutMs)
 	if done, err := parseFlags(fs, args); done {
 		return err
 	}
@@ -31,4 +29,12 @@ func snapshotStoreHandler(o clisetup.Overrides, args []string) error {
 	return writeJSON(struct {
 		Path string `json:"path"`
 	}{path})
+}
+
+// snapshotStoreFlagSet defines snapshot-store's flags for both global scanning and the handler.
+func snapshotStoreFlagSet(directory *string, busyTimeoutMs *int) *flag.FlagSet {
+	fs := flag.NewFlagSet("snapshot-store", flag.ContinueOnError)
+	fs.StringVar(directory, "directory", "", "existing empty private directory for the readonly snapshot")
+	fs.IntVar(busyTimeoutMs, "busy-timeout-ms", store.DefaultBusyTimeoutMs, "maximum snapshot/lock wait in milliseconds")
+	return fs
 }
