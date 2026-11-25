@@ -13792,7 +13792,8 @@ template), each file the block changes is written as follows:
    written through, never replaced.
 
 A failed backup stops at once, before the `mv`. Each file migrated prints
-`migrate : <file> migrated for the agent rename (copy: <backup>)`; with
+`  migrate : <file> migrated for the agent rename (copy: <backup>); this copy may hold tokens and can be deleted once the upgrade is confirmed.`
+Both paths are shell-quoted with Bash `printf %q`. With
 nothing to change, one line says that `config.toml` and the templates need
 no change. The move's "references" lines use the migrated files' line
 numbers; a crossing move defers their output until the outcome is settled
@@ -14474,10 +14475,27 @@ migrates the file (see [Config and template migration at
 install-time](#config-and-template-migration-at-install-time)), one per
 file migrated, all with the one `<time>` (`YYYYmmdd-HHMMSS`) of that run.
 Each is a regular copy of the file's contents, made beside the file or its
-symlink, at the file's mode; nothing reads or removes them, so they stay
-until the operator deletes them (`uninstall.sh --purge` removes them with
-the directory). The move's scan for references to the old directory skips
-those in `templates/`.
+symlink, at the file's mode. They may retain tokens after the live file changes.
+Neither script reads their contents or deletes them individually; the operator
+can delete them once the upgrade is confirmed. `uninstall.sh --purge` removes
+copies only inside directories it removes; symlink targets, including linked
+install roots or `templates`, survive. See [upgrade cleanup advice](install.md#upgrade)
+for locating retained copies after unlinking. The move's scan for references
+to the old directory skips those in `templates/`.
+
+After the migration block, before move references and the store open,
+`install.sh` inventories existing `config.toml.pre-agent-rename.<time>` and
+`templates/*.pre-agent-rename.<time>` paths, including earlier runs' copies.
+`<time>` must match exactly eight digits, a hyphen and six digits; dangling
+symlinks are included. A nonempty inventory prints one stdout line:
+`  copies  : agent-rename copies may hold tokens and can be deleted once the upgrade is confirmed: <paths>`.
+Each path is quoted with Bash `printf %q`, keeping the list shell-readable on
+one line. A crossing run also names each new copy on its `migrate :` line.
+`uninstall.sh` uses the same inventory under its selected install root, after
+the settings-copy inventory and before removal, with the prefix
+`uninstall.sh: agent-rename copies may hold tokens and can be deleted once the upgrade is confirmed: <paths>`.
+It reports under `--purge` too, before removal. Both inventories are silent
+when no matching path exists; keep their matching and quoting in step.
 
 The restore's copies (`<name>.restore-<YYYYmmdd-HHMMSS>.<suffix>`) exist
 beside the binaries, the sentinel and the managed PATH link during a

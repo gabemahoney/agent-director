@@ -1192,6 +1192,9 @@ ls -l <file> <file>.pre-agent-rename.*
 df -h <file>
 ```
 
+These copies may hold tokens. Keep them for recovery until the upgrade is
+confirmed, then follow the [cleanup advice](install.md#upgrade).
+
 Then either:
 
 1. Fix the cause the `error` line names (free space on the disk that holds the
