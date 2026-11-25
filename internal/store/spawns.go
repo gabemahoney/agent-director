@@ -208,8 +208,9 @@ type Spawn struct {
 
 	// IdleSince is the schema-v7 idle_since column (b.146 problem 3), as
 	// stored ("" = NULL): set by the main agent's idle-prompt Notification
-	// (ApplyHookWaitingIfWorking), NULLed by any later hook. find-missing's
-	// repair of a stale check_permission row picks waiting when it is set.
+	// (ApplyHookWaitingIfWorking), NULLed by later hooks except a
+	// state-preserving SessionStart. find-missing's repair of a stale
+	// check_permission row picks waiting when it is set.
 	// Full-row reads fill it; SpawnStatusRow does not select it.
 	IdleSince string
 

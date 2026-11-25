@@ -98,8 +98,8 @@ const relayInsertSQL = `INSERT INTO permission_requests
 // The row write is gated (SR-22.9; hookGateSQL): it applies only when gate's
 // parent process is the row's recorded pane process. It sets state
 // check_permission, bumps last_seen_at, clears ended_at, launch_started_at,
-// the liveness markers and idle_since (any hook clears idle_since, b.146
-// problem 3), records the session and pane start time as every ordinary hook
+// the liveness markers and idle_since (this PermissionRequest reports activity,
+// b.146 problem 3), records the session and pane start time as every ordinary hook
 // does, and advances row_version by one. When the gate does not hold (or no
 // row has the id) nothing is written and HookApplied carries the reason from
 // one read after the rollback (notAppliedReason), with UpsertNoChange.

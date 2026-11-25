@@ -3139,7 +3139,7 @@ columns to this same list. None has a CHECK constraint or an index.
 | `pane_intent_at` | INTEGER (epoch ms) | a pane answer's intent | When the intent was written, read inside `RecordPaneIntent`'s transaction after its `PaneCheck` (so it is the commit's instant, not the call's start): the key of the sender's own later writes (`paneIntentOwnerSQL`) and the start of `paneIntentHold` for a sender that cannot be checked. NULLed with the sender when the intent is released; never cleared by age. |
 | `closed_at` | INTEGER (epoch ms) | a close of the Spawn's requests (`closeOrphanedRequests`): shared recovery's mark, the terminal SessionEnd's move to `ended`, and resume's move to `pending` | When the close closed the request, which still awaited an answer when its Spawn was marked `missing` or ended, or when its finished Spawn was resumed (b.146 rule 12): an undecided one is also denied (`find_missing` for the mark, `ended` for the other two); a decided one whose hook had not acked keeps its verdict. A closed request no longer awaits an answer (`PermissionRow.Closed`). NULL on every request no close closed; a decided pre-v7 request without an ack or completed pane answer is closed too, preserving its verdict. |
 | `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), validated Cursor invocation proof (`CommitCursorProof`), a Cursor turn's end (`ProveCursorTurnEnded`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When the agent proved the request's permission dialog gone (b.146 step 2c; see "Proofs by agent" under [The dialog hold](#the-dialog-hold-step-2c)), and how: `tool_ran` (a `PostToolUse`/`PostToolUseFailure` with its `tool_use_id`, which no Claude or Codex request records, b.wbs, or authenticated exact-request Cursor invocation proof under [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority), where a failed MCP invocation proves only dialog closure; Codex has no tool-run proof), `turn_end` (the turn of the agent that asked ended after it was written; Claude's main-agent `Stop` or idle-prompt Notification, or Codex's main-agent `Stop` or `Interrupt`, proves a durably eligible request with no `agent_id` whose `created_at` is before the second the hook started, b.omt, and a Claude subagent's `SubagentStop` proves that subagent's requests (its `agent_id`) created before that second, b.wbs; on Cursor, the gateway proves every request of the completing prompt turn not already proven or closed, answered or not; pending tool proofs retain their flush path), `agent_gone` (on a non-Cursor row only: a close of its Spawn's requests, including the Codex move to `ended` after its verified process is gone and its end report is recorded, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live relay-on Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`), unless it is a Cursor request of an earlier launch (`PermissionRow.HoldsDialog`), and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (the writes and reads the `holdsRowSQL` Must use entry under [v11 proof eligibility](#v11-columns-durable-main-turn-proof-eligibility) lists; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
-| `spawns.idle_since` | TEXT (`CURRENT_TIMESTAMP`) | the idle-prompt Notification | When the main agent's idle-prompt Notification last landed; NULLed by every other applied hook (`idleClear`). |
+| `spawns.idle_since` | TEXT (`CURRENT_TIMESTAMP`) | the idle-prompt Notification | When the main agent's idle-prompt Notification last landed; later hooks clear it except subagent lifecycle hooks and a state-preserving SessionStart (see [Event → state mapping](#event--state-mapping-srd-52)). |
 
 ### v11 columns: durable main-turn proof eligibility
 
@@ -4160,12 +4160,12 @@ still the one it read, so it knows the row has not changed since. As built:
     the snapshot and no permission request of the row holding it
     (`holdsRowSQL`: still awaiting an answer and not proven gone; b.omt),
     that sets `state` to `waiting` when
-    `idle_since` is set and to `working` otherwise, NULLs
+    `idle_since` is set on a non-Codex row and to `working` otherwise, NULLs
     `launch_started_at` (`launchStartClear`) and advances `row_version`,
     returning the state it wrote. It also writes the own-state settle columns
     for an immediate report. `inImmediateTx` refreshes family history before
     commit; the family report settles independently. No other own-state column
-    changes: `idle_since` stays until the agent's next hook, and
+    changes: `idle_since` follows the [idle-evidence rule](#event--state-mapping-srd-52), and
     `last_seen_at` is not bumped.
     Whether a request's relay hook may still run is the caller's to check
     first (`RepairCheckPermission`, which judges every request, a proven one
@@ -6539,7 +6539,7 @@ its own table, in [The agent-aware hook classifier](#the-agent-aware-hook-classi
 
 | Event | Tool / reason carve-out | Resulting state |
 | --- | --- | --- |
-| `SessionStart` | `source = compact` keeps `working` / `check_permission` / `ask_user` | Otherwise `waiting`; in one statement (`RecordSessionStartIdentity`), also writes `session_id` from `transcript_path`; `jsonl_path` only when the file exists on disk, else NULL/provisional — b.v2c; `pid` and `proc_starttime` = the hook's parent, the pane process; a differing session id archives the prior pair to `session_history`, tagged with the row's current life, in the same transaction; on a covered Launch an applied main one also returns the wake path in `watchPaths` ([The Claude route](#the-claude-route)) |
+| `SessionStart` | [Active-state preservation](#hooks-move-a-row-only-for-its-own-agent) | Otherwise `waiting`; see the [session identity and transcript contract](#sessionstart-hook-side-of-the-contract) and [covered Claude wake output](#the-claude-route) |
 | `UserPromptSubmit` | — | `working`; a main-agent one with a session id also advances the Turn Start counter in the same write, held or applied (see "Turn Start counter" under [`internal/store`](#internalstore)), then offers a wake prompt as take evidence ([The Claude route](#the-claude-route)) |
 | `PreToolUse` | `tool_name = AskUserQuestion` | `ask_user` |
 | `PreToolUse` | any other tool | `working`; for `tool_name` `Agent`, the row write is followed by its own gated entry transaction (see [Subagent capture](#subagent-capture)); no trail record, and `upsert_outcome` stays the row write's |
@@ -6614,11 +6614,11 @@ finished (see the residual windows below):
   gate does not apply writes its one `ad.hook.ignored`). A row that becomes
   `working` between the statements gets the soft refresh: the Notification
   is then ordered before the hook that moved the row.
-- **`idle_since`.** Every applied write of this Notification sets it, and
-  every other applied hook clears it (`idleClear`, in every gated hook
-  write; a held `working` transition clears it too), except `SubagentStart`
-  and `SubagentStop`, whose soft refresh (`ApplySubagentLifecycle`) writes no
-  `idle_since`. `find-missing`'s
+- **`idle_since`.** Every applied write of this Notification sets it.
+  Later applied hooks clear it (`idleClear`; a held `working` transition
+  clears it too), except `SubagentStart`, `SubagentStop` and a
+  [state-preserving SessionStart](#hooks-move-a-row-only-for-its-own-agent).
+  Those refreshes keep the idle evidence. `find-missing`'s
   repair of a relayed row left in `check_permission` reads it: `waiting`
   when it is set, `working` otherwise (see "The row after the last answer"
   under [Permission relay](#permission-relay)).
@@ -6733,13 +6733,14 @@ gate must also be enforced before its writes.
 For Claude/Codex `SessionStart` with `source: "compact"`, the classifier
 returns empty `NewState` and `SoftRefresh` true. The handler carries that
 through `HookGate.SessionStartSoftRefresh` to `RecordSessionStartIdentity`;
-it still uses the [SessionStart identity write](#hooks-move-a-row-only-for-its-own-agent).
+the store also checks for a same-session active state, independently of
+source, under the [SessionStart identity write](#hooks-move-a-row-only-for-its-own-agent).
 
 **The Codex table (`classifyCodex`).**
 
 | Event | `agent_id` | Result |
 | --- | --- | --- |
-| `SessionStart` | none | `waiting`, except `source: "compact"` keeps `working` / `check_permission` / `ask_user`; the session id is the payload's `session_id` and the transcript path is the payload's path, verbatim |
+| `SessionStart` | none | `waiting`, except [active-state preservation](#hooks-move-a-row-only-for-its-own-agent); the session id is the payload's `session_id` and the transcript path is the payload's path, verbatim |
 | `Stop` | none | `waiting` |
 | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | none | `working`, for any tool (never `ask_user`, `request_user_input` and `request_user_input_async` included); a main-thread tool hook of a turn other than the row's current, not-ended one is a soft refresh (see "The Codex turn" below) |
 | `Interrupt` | none | `waiting`, and the main agent's turn end for the relay's proofs (`TurnEnded`; see "The relay on Codex rows" under [Permission relay](#permission-relay)) |
@@ -7114,18 +7115,21 @@ So `recordSessionStart` (`internal/hook/handler.go`) runs in three steps:
    nothing.
 3. After a wait, `writeSessionStart` once more with the snapshot it reads
    then. That write's result is the hook's: applied when the pane now
-   recorded is the hook's parent (`waiting`, `ad.hook.fired`
-   `upsert_outcome` `updated`); `pid_mismatch` for a leftover or stray that
+   recorded is the hook's parent (state under the preservation rule below,
+   `ad.hook.fired` `upsert_outcome` `updated`); `pid_mismatch` for a leftover or stray that
    waited; `no_pane_recorded` when the row still records no pane at either
    bound; no record when the row is gone. Because this last gated write, not
    the wait, decides, an identity written between the last re-read and the
    bound (grace bound or cap) still applies.
 
 So SessionStart writes `no_pane_recorded` only after its bounded wait, and
-nothing is logged while it waits. Only SessionStart waits: it is the first
-hook a launch's agent fires, and Claude Code holds the agent's first
-response until its SessionStart hooks finish, so the hooks of that response
-fire after the wait. A subagent's
+nothing is logged while it waits. Only SessionStart waits. This relies on
+**assumption D1:** ordinary hooks follow SessionStart's write. Claude Code
+holds the first prompt back from the agent until SessionStart hooks finish,
+but neither agent's hook documentation guarantees when UserPromptSubmit
+fires relative to that write. Ordinary hooks do not wait or replay: otherwise
+a prompt or tool hook could block up to the 540 s cap. The pane-less startup
+window remains a residual below. A subagent's
 SessionStart (`subagent_event`) returns before this path and never waits. The
 wait makes no tmux call and adds no column. The grace period is the one
 `find-missing` uses, from `config.Tmux.EffectivePendingGrace` through
@@ -7202,22 +7206,31 @@ min(grace bound − `Now` at the start, `sessionStartWaitCap`).
   report more time left; the wait then ends at whichever comes first, the
   re-read cap (about the time left at its start) or the cap.
 
-**SessionStart is one statement.** With `SessionStartSoftRefresh`,
+**SessionStart is one statement.** For Claude and Codex,
 `RecordSessionStartIdentity` keeps a snapshot-pinned `working`,
-`check_permission` or `ask_user` state and its settle, permission-epoch and
-observation/evidence fields. All other cases write `waiting`, including
-compact on `pending`, `ended`, `missing` or `waiting`. The same gated UPDATE
-records the payload's session id and transcript path (presence rule),
-`pid` and `proc_starttime` = the hook's parent (the pane process), and
-`pane_starttime` when NULL; bumps `last_seen_at`; clears `ended_at`, liveness
-notes, `idle_since`, `launch_started_at`, `end_reported_at` and
+`check_permission` or `ask_user` when either `SessionStartSoftRefresh`
+(compact) is set or the incoming non-empty session id equals the row's.
+The parent-process gate establishes the current launch; each launch resets
+to `pending`, so an active state cannot be inherited from an earlier launch.
+The same-session check is independent of source (`startup`, `resume`, `clear`
+or `compact`). Compact also preserves active states across a session-id change.
+A kept state writes no settle base and keeps its settle, permission-epoch,
+observation/evidence fields and `idle_since`. Keeping idle evidence lets a
+later permission repair return an idle Claude row to `waiting`.
+
+All other cases write `waiting` and clear `idle_since`: a different session,
+unless compact preserves it; any report from `pending`, `ended`, `missing`
+or `waiting`; and Cursor's verified reports. An ordinary hook under a new
+session id while the row still records an old one cannot establish a match,
+so its later non-compact SessionStart remains a `waiting` boundary.
+The same gated UPDATE bumps `last_seen_at`; clears `ended_at`, liveness
+notes, `launch_started_at`, `end_reported_at` and
 `claude_capacity`; writes `codex_startup` under its admission rule; and
-advances `row_version` once. Snapshot changes still get one re-read/retry.
-The transaction still publishes busy-send candidates, archives rotations
-and refreshes families. A preserved state emits a same-state
+advances `row_version` once. The transaction still publishes busy-send
+candidates and refreshes families. A preserved state emits a same-state
 `ad.spawn.state_transition` with `soft_refresh: true`; other cases emit
-`waiting` with `soft_refresh: false`. On a covered Claude Launch, applied
-SessionStarts still return `watchPaths` and recover overdue forces ([The Claude route](#the-claude-route)).
+`waiting` with `soft_refresh: false`. Covered Claude output and force recovery
+follow [The Claude route](#the-claude-route).
 See [SessionStart hook side of the contract](#sessionstart-hook-side-of-the-contract)
 for identity and rotation details.
 
@@ -7310,7 +7323,17 @@ SessionStart and SessionEnd (`agent_id`) are rejected too, even from the
 pane process; its other hooks are kept but record no session id.
 
 **Residuals (SR-18.12).** A nested `claude`'s and a teammate pane's hooks
-are ignored, so their work is not reflected in the row. A row whose
+are ignored, so their work is not reflected in the row.
+
+If assumption D1 fails, an ordinary hook such as UserPromptSubmit reaching
+a `pending` row before its launch's identity write is dropped as
+`no_pane_recorded`, even while SessionStart waits. It is never replayed;
+SessionStart can then write `waiting` while that prompt runs, until another
+hook reports activity. Same-session preservation cannot recover activity
+that never reached the row. Field trails have shown no ordinary hook in
+this window; no authenticated live-harness probe establishes the ordering.
+
+A row whose
 create reply was lost takes no hook, and stays `pending`, until a verb
 adopts its pane by `@ad_pane` (SR-3.6: `kill`, and `send-keys` with
 `allow_pending`, through `adoptIdentity`, and a shared active check,
@@ -16692,7 +16715,7 @@ When the hook that would move the row is lost:
   columns for an immediate report. The sampled repair uses a nonwaiting
   guarded transaction and refreshes family history before commit; family
   reporting settles independently. No other own-state column changes
-  (`idle_since` stays until the agent's next hook; `last_seen_at` is not
+  (`idle_since` follows the [idle-evidence rule](#event--state-mapping-srd-52); `last_seen_at` is not
   bumped, since no hook reported). A request recorded after the read
   advances the snapshot (its first write moves the row), so the guard
   refuses. An applied repair writes one `ad.find_missing.tick` with
@@ -19351,37 +19374,12 @@ The FK `ON DELETE SET NULL` cascade (Epic 3 schema) handles the
 
 ### SessionStart hook side of the contract
 
-Claude/Codex SessionStart uses the gated statement
-`RecordSessionStartIdentity`
-(`internal/store/hook_writes.go`; see [Hooks move a row only for its own
-agent](#hooks-move-a-row-only-for-its-own-agent)). It applies only when
-the hook's parent is the row's recorded pane process, and for a resumed
-row that pane is the one the resume's identity write recorded: the move
-to `pending` cleared the old pane, so until that write no hook, the old
-agent's included, matches the row. The handler reads the row first
-(`GetSpawn`) and the write is also conditioned on that snapshot (SR-5.3);
-when only the snapshot changed, the handler re-reads and retries once.
-When the write does not apply only because the row records no pane yet
-(the resume's identity write has not landed), the hook waits for that
-write, until the pending grace period measured from the resume's launch
-start ends or 540 s after it began waiting, whichever comes first, then
-makes the gated write again (see [Hooks move a row
-only for its own agent](#hooks-move-a-row-only-for-its-own-agent)); a
-fresh spawn's and a reuse's SessionStart wait the same way.
-
-In the one UPDATE it sets `waiting`, with the
-[compact state-preservation rule](#hooks-move-a-row-only-for-its-own-agent), clears
-`ended_at` and the launch start, records the payload's session id and
-transcript path, and sets `pid` and `proc_starttime` to the hook's parent
-(`getppid()` of the exec-form hook, the pane process; no ancestry walk).
-
-- Fresh spawn `pending → waiting`: `ended_at` was already NULL; the
-  `ended_at = NULL` write is a no-op.
-- Resumed row `pending → waiting`: resume's move already cleared
-  `ended_at`, and the report-in clears the launch start, as on every
-  transition to a state other than `pending`. The trail's
-  `ad.spawn.state_transition` records `prior_state` `pending`. A resume
-  does not start a new life: the row keeps its `life_number`.
+Claude/Codex `RecordSessionStartIdentity` (`internal/store/hook_writes.go`)
+uses the gate, bounded identity wait, snapshot retry and active-state rule
+owned by [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent).
+That UPDATE also records the session id and transcript path under the rules
+below, sets `pid` and `proc_starttime` to the hook's parent (the pane process),
+and fills `pane_starttime` when NULL.
 
 `session_id` is overwritten by the same hook payload's
 `transcript_path` basename (an empty one keeps the column). Claude Code
@@ -19389,8 +19387,8 @@ rotates the UUID on every `--resume`, so the column carries the
 freshly-rotated value after the hook fires — the next resume of this
 resumed launch uses the new id, pointing at the new JSONL. An in-session
 `/clear`, `/resume` or compaction comes from the same process, so it
-applies too and records the payload's session id. Any rotation stays
-within the row's current life.
+applies too and records the payload's session id. Resume and session
+rotation keep the row's current `life_number`.
 
 **A Codex SessionStart.** The same statement serves Codex rows, with these
 differences. The session id is the payload's `session_id`, not a path's
@@ -19402,9 +19400,8 @@ file exists and is not empty by then in every kind, so the conditional
 start another session in the same process and Codex names it in a
 `SessionStart` at the next prompt, so the rotation archival below applies
 from then; Codex does not end the old session when the session changes.
-A compact SessionStart can arrive mid-turn and preserves the active state
-as above. It still invalidates `codex_startup` provenance. Every applied
-SessionStart sets `end_reported_at` to NULL, superseding an earlier end
+A state-preserving SessionStart still invalidates `codex_startup` provenance.
+Every applied SessionStart sets `end_reported_at` to NULL, superseding an earlier end
 report (see [The agent-aware hook
 classifier](#the-agent-aware-hook-classifier)).
 
@@ -20092,7 +20089,8 @@ check that the row is `ended` or `missing`) or hands it to a human. The note doe
 `send-keys`'s refusal of a `pending` row without `allow_pending`. The
 agent's next applied hook
 clears the note, as every applied hook clears the liveness columns: a
-SessionStart records the session identity and moves the row to `waiting`,
+SessionStart records the session identity and reports state under the
+[active-state preservation rule](#hooks-move-a-row-only-for-its-own-agent),
 and a gated UserPromptSubmit moves it to `working` and records the
 session id when the row has none. A UserPromptSubmit held because a
 permission request of the row holds it (still awaits an answer and is not

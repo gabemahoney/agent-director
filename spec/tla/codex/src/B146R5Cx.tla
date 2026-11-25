@@ -253,6 +253,16 @@ Noise == "Noise" \in Env
 
 \* b.ssz knob (see the header). A definition, not a CONSTANT, so B146R5's cfgs parse unchanged.
 KnobOn  == TRUE
+\* b.hib: one delayed accepted SessionStart. Eligibility quotients (same
+\* nonempty session OR compact soft refresh), including changed-id compact.
+\* FALSE is a different-session non-compact boundary. One occurrence makes
+\* this a fixed input, not an assumption of constant equality across repeats.
+HibRelax == FALSE
+HibFalse == FALSE
+HibKeepActive == TRUE
+HibKeepIdle == TRUE
+HibPreserveEligible == TRUE
+HibActive == {"working", "check_permission"}
 KnobOff == FALSE
 CxR5    == FALSE
 CxRv    == FALSE
@@ -365,6 +375,11 @@ paneV == <<oc, snap, sk, skt, skq, skd, st>>
 ghostV == <<typed, silent, wrong, misfire, race, late, busylie, falsefb, hit>>
 r5V == <<unp, quiet, snapOK, sOK, nz, rvd, rvw>>
 vars == <<ccV, hookV, storeV, decV, callV, gpV, paneV, ghostV, r5V, nl, legacyProof>>
+
+\* Constant FALSE with HibRelax off; projection preserves every legacy state
+\* and fairness edge. Only the relaxed Spec consumes this one pending hook.
+VARIABLE hibPending
+modelVars == <<vars, hibPending>>
 
 Hit(tag) == hit' = (hit \/ Probe = tag)
 
@@ -522,6 +537,7 @@ LookAsked == StrayHeld \/ UnprovenClosed
 
 -----------------------------------------------------------------------------
 Init ==
+    /\ hibPending = HibRelax
     /\ proc = "alive"
     /\ aph = IF PreV7Old /\ PreV7Current THEN "idle" ELSE "ss"
     /\ dl = [r \in R |-> IF r \in Legacy THEN "ans" ELSE "none"]
@@ -575,16 +591,29 @@ EnvRelease ==
 (* Claude Code: the lifecycle hooks. Each is one gated store write, or a  *)
 (* death before it (its write is lost).                                     *)
 
+HibKeeping == HibRelax /\ HibKeepActive /\ HibPreserveEligible /\ rs \in HibActive
 SessionStart ==
-    /\ aph = "ss" /\ proc = "alive" /\ lk = "free"
+    /\ ~HibRelax /\ aph = "ss" /\ proc = "alive" /\ lk = "free"
     /\ rs' = RowTo("waiting") /\ aph' = "idle" /\ idl' = FALSE
     /\ QuietTo(TRUE) /\ UNCHANGED <<unp, nz, rvd, rvw>>
     /\ UNCHANGED <<proc, dl, got, scr, inq, ptu, hookV, lk, envN, rec, dec, ack, pane, pas,
                    cls, gone, old, att, decV, callV, gpV, paneV, ghostV>>
 
+\* Same accepted snapshot-pinned write, with its phase unrestricted. R2
+\* keeps idle evidence on a kept active row; HibKeepIdle FALSE is R1's rule.
+\* A waiting boundary clears idle evidence under either knob setting.
+HibSessionWrite ==
+    /\ HibRelax /\ hibPending /\ proc = "alive" /\ lk = "free"
+    /\ rs' = IF HibKeeping THEN rs ELSE RowTo("waiting")
+    /\ aph' = IF aph = "ss" THEN "idle" ELSE aph
+    /\ idl' = IF HibKeeping /\ HibKeepIdle THEN idl ELSE FALSE
+    /\ QuietTo(IF HibKeeping THEN quiet ELSE TRUE) /\ UNCHANGED <<unp, nz, rvd, rvw>>
+    /\ UNCHANGED <<proc, dl, got, scr, inq, ptu, hookV, lk, envN, rec, dec, ack, pane, pas,
+                   cls, gone, old, att, decV, callV, gpV, paneV, ghostV>>
+
 (* The turn starts (the spawn's prompt): UserPromptSubmit writes working. *)
 TurnStart ==
-    /\ aph = "idle" /\ proc = "alive" /\ lk = "free"
+    /\ (aph = "idle" \/ (HibRelax /\ aph = "ss")) /\ proc = "alive" /\ lk = "free"
     /\ rs' = WorkingRow(AnyAwaiting) /\ aph' = "turn" /\ idl' = FALSE
     /\ QuietTo(FALSE) /\ UNCHANGED <<unp, nz, rvd, rvw>>
     /\ UNCHANGED <<proc, dl, got, scr, inq, ptu, hookV, lk, envN, rec, dec, ack, pane, pas,
@@ -1324,9 +1353,12 @@ Plain ==
 (* The pane's bytes after a step: AD's idle capture (IdleSnap) is taken  *)
 (* at an idle hook (cap) and spoilt by any change; the stray's capture    *)
 (* (SameScreen) is taken by StrayRead.                                    *)
-Track(cap, sread) ==
+Capture(cap, sread) ==
     /\ snapOK' = IF IdleSnap THEN cap \/ (snapOK /\ ~Changed) ELSE snapOK
     /\ sOK' = IF SameScreen THEN sread \/ (sOK /\ ~Changed) ELSE sOK
+
+Track(cap, sread) ==
+    /\ Capture(cap, sread)
     \* Track the single legacy record's durable proof at the actual writes.
     \* proveAgentGoneSQL only fills NULL: an existing turn_end stays turn_end.
     \* Stop/idle also fill NULL; SessionStart and AgentCrash alone prove nothing.
@@ -1346,15 +1378,25 @@ P(A) == A /\ UNCHANGED <<unp, quiet, nz, rvd, rvw, nl>> /\ Track(FALSE, FALSE)
 E(A) == A /\ UNCHANGED nl /\ Track(FALSE, FALSE)
 C(A) == A /\ UNCHANGED nl /\ Track(TRUE, FALSE)
 
-Next ==
+SS == C(SessionStart)
+
+\* Consuming the marker bounds delivery to one accepted commit, before or
+\* after turn end, idle notification, recovery or review. SessionStart never
+\* proves turn_end: Capture is shared, but Track's phase-based proof is not.
+HibSessionStart == HibSessionWrite /\ hibPending' = FALSE
+                   /\ UNCHANGED <<nl, legacyProof>> /\ Capture(~HibKeeping, FALSE)
+
+CoreNext ==
     \/ P(Plain)
-    \/ C(SessionStart \/ StopHook \/ IdleNotif)
+    \/ SS \/ C(StopHook \/ IdleNotif)
     \/ E(\/ TurnStart
          \/ \E r \in R : PostToolUse(r) \/ HX(r) \/ HT(r) \/ HI(r)
          \/ StraySend \/ StrayStale \/ NoiseStep \/ RevWrite \/ FMMissing
          \/ \E i \in I : OrcBlindAct(i))
     \/ StrayRead /\ UNCHANGED nl /\ Track(FALSE, TRUE)
     \/ Relaunch /\ Track(FALSE, FALSE)
+
+Next == (CoreNext /\ UNCHANGED hibPending) \/ HibSessionStart
 
 (* Fair: Claude Code's own steps (the agent goes on; a live hook takes its *)
 (* next step, or dies: death is never forced, never excluded); time; the  *)
@@ -1366,7 +1408,7 @@ Next ==
 (* Round 4's fairness, over whole steps (P, E, C). *)
 Fairness ==
     /\ WF_vars(P(EnvRelease))
-    /\ WF_vars(C(SessionStart)) /\ WF_vars(E(TurnStart)) /\ WF_vars(P(TurnEnd))
+    /\ WF_vars(SS) /\ WF_vars(E(TurnStart)) /\ WF_vars(P(TurnEnd))
     /\ WF_vars(C(StopHook)) /\ WF_vars(C(IdleNotif))
     /\ \A r \in R : /\ WF_vars(P(Ask(r))) /\ WF_vars(E(PostToolUse(r)))
                     /\ WF_vars(E(HX(r) \/ HT(r) \/ HI(r)) \/ P(HP(r) \/ HA(r) \/ HD(r) \/ HE(r)))
@@ -1385,7 +1427,19 @@ Fairness ==
     /\ WF_vars(StrayRead /\ UNCHANGED nl /\ Track(FALSE, TRUE)) /\ WF_vars(E(StrayStale))
     /\ \A i \in I : WF_vars(E(OrcBlindAct(i)))
 
-Spec == Init /\ [][Next]_vars /\ Fairness
+Spec == Init /\ [][Next]_modelVars /\ Fairness /\ WF_modelVars(HibSessionStart)
+
+\* The marker identifies only this commit. Eligibility does not depend on
+\* HibKeepActive, so a keep-off control must still fail on an active row.
+HibCommitted == HibRelax /\ hibPending /\ ~hibPending'
+HibActivePreserved == [][(HibCommitted /\ HibPreserveEligible /\ rs \in HibActive)
+                          => rs' = rs]_modelVars
+\* Existing quiet/capture evidence abstracts idle settlement, not b.3ie's
+\* literal timestamp columns. A soft refresh creates no new such evidence.
+HibNoIdleStamp == [][(HibCommitted /\ HibPreserveEligible /\ rs \in HibActive /\ rs' = rs)
+                      => (quiet' = quiet /\ snapOK' = snapOK /\ idl' = idl)]_modelVars
+HibNewSessionWaits == [][(HibCommitted /\ ~HibPreserveEligible)
+                         => (rs' = RowTo("waiting") /\ ~idl')]_modelVars
 
 -----------------------------------------------------------------------------
 (* Safety: no caller is told something false; no silent allow; nothing   *)
@@ -1538,7 +1592,7 @@ B21Fairness ==
     /\ \A r \in Legacy : WF_vars(P(Tick(r))) /\ WF_vars(P(Age(r)))
     /\ \A i \in I : WF_vars(P(OrcRead(i))) /\ WF_vars(P(OrcAct(i)))
     /\ WF_vars(E(FMMissing)) /\ WF_vars(E(StraySend))
-B21Spec == Init /\ [][B21Next]_vars /\ B21Fairness
+B21Spec == Init /\ [][B21Next /\ UNCHANGED hibPending]_modelVars /\ B21Fairness
 B21KeysEventuallyAccepted == <>(st = "done")
 
 \* Controls and fidelity checks are separate from the desired invariants.
@@ -1576,5 +1630,5 @@ B21MixedNext ==
     \/ C(SessionStart)
     \/ E(TurnStart \/ HX(1) \/ StraySend \/ OrcBlindAct(1))
     \/ P(Ask(1) \/ Tick(1) \/ HP(1) \/ HD(1) \/ HE(1) \/ OrcRead(1))
-B21MixedSpec == Init /\ [][B21MixedNext]_vars
+B21MixedSpec == Init /\ [][B21MixedNext /\ UNCHANGED hibPending]_modelVars
 =============================================================================

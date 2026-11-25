@@ -123,6 +123,16 @@ LastGasp == "LastGasp" \in Env
 \* b.ssz knobs (see the header). Definitions, not CONSTANTS, so Hold36h's cfgs parse unchanged.
 KnobOn  == TRUE
 KnobOff == FALSE
+\* b.hib: one delayed accepted SessionStart per run. Eligibility quotients
+\* (same nonempty session OR compact soft refresh), including changed-id
+\* compact. FALSE means a different-session non-compact boundary. For this
+\* single occurrence the input is fixed; there is no repeated-equality claim.
+HibRelax == FALSE
+HibFalse == FALSE
+HibKeepActive == TRUE
+HibKeepIdle == TRUE
+HibPreserveEligible == TRUE
+HibActive == {"working", "check_permission"}
 CxRelay            == FALSE
 CxIntNoTurnEnd     == FALSE
 CxTurnEndProvesSub == FALSE
@@ -170,6 +180,11 @@ VARIABLES
 
 vars == <<aph, turn, stopLost, iq, isnap, sub, st, got, rec, ack, pane, prov, ptu, rs, idl,
           wr, lock, rtx, ended, stale, hit, lw, rv>>
+
+\* The legacy state/fairness tuple stays intact. With HibRelax off this
+\* coordinate is constantly FALSE, so projection is the original graph.
+VARIABLE hibPending
+modelVars == <<vars, hibPending>>
 
 Hit(tag) == hit' = (hit \/ Probe = tag)
 
@@ -232,6 +247,7 @@ LwAfter(go) == lw' = IF CxRelay /\ go THEN (IF aph = "turn" THEN "turn" ELSE "af
 
 -----------------------------------------------------------------------------
 Init ==
+    /\ hibPending = HibRelax
     /\ aph = "idle" /\ turn = 0 /\ stopLost = FALSE /\ iq = "none" /\ isnap = {}
     /\ sub = "none"
     /\ st = [r \in R |-> "none"] /\ got = [r \in R |-> "none"]
@@ -602,7 +618,24 @@ FMRecon ==
                    wr, lock, rtx, ended, stale, hit, rv>>
 
 -----------------------------------------------------------------------------
-Next ==
+\* One accepted commit may land in ANY phase, including after Stop/idle,
+\* background completion or review. No further commit can be injected once
+\* hibPending is consumed. Snapshot misses/retries refine to stuttering;
+\* an accepted commit uses the classification pinned to its current row.
+\* R2's chosen rule keeps idle evidence when keeping an active row. Set
+\* HibKeepIdle FALSE to reproduce R1's clear and check RowSettles independently.
+\* A commit writing waiting always clears idle evidence.
+\* No request is proved or closed.
+HibKeeping == HibRelax /\ HibKeepActive /\ HibPreserveEligible /\ rs \in HibActive
+HibSessionStart ==
+    /\ HibRelax /\ hibPending /\ Free
+    /\ rs' = IF HibKeeping THEN rs ELSE "waiting"
+    /\ idl' = IF HibKeeping /\ HibKeepIdle THEN idl ELSE FALSE
+    /\ hibPending' = FALSE
+    /\ UNCHANGED <<aph, turn, stopLost, iq, isnap, sub, st, got, rec, ack, pane, prov, ptu,
+                   wr, lock, rtx, ended, stale, hit, lw, rv>>
+
+CoreNext ==
     \/ TurnStart \/ MainWork \/ TurnEnd \/ Interrupt \/ StopHook \/ StopDie
     \/ IdleEmit \/ IdleHook \/ IdleDie
     \/ CxInterrupt \/ IntHook \/ IntDie
@@ -613,6 +646,8 @@ Next ==
                     \/ HumanAnswer(r) \/ PaneAnswer(r) \/ ClaimClose(r) \/ PostToolUse(r)
                     \/ RelayGasp(r)
     \/ FMRecon
+
+Next == (CoreNext /\ UNCHANGED hibPending) \/ HibSessionStart
 
 (* Fair: OmtHold's (Claude Code's own steps, find-missing, and            *)
 (* record-pane-answer when Claim), plus a begun transaction commits and a *)
@@ -634,7 +669,20 @@ Fairness ==
     /\ WF_vars(IntHook \/ IntDie)
     /\ WF_vars(RevEnd)
 
-Spec == Init /\ [][Next]_vars /\ Fairness
+Spec == Init /\ [][Next]_modelVars /\ Fairness /\ WF_modelVars(HibSessionStart)
+
+\* Only the marker's TRUE->FALSE edge identifies this SessionStart commit.
+\* Ordinary SlowIdle/Stop/Interrupt transitions are outside the antecedent.
+\* Eligibility is independent of HibKeepActive so keep-off controls fail.
+HibCommitted == HibRelax /\ hibPending /\ ~hibPending'
+HibActivePreserved == [][(HibCommitted /\ HibPreserveEligible /\ rs \in HibActive)
+                          => rs' = rs]_modelVars
+\* Scope to an actually kept active state; the independent state assertion
+\* above rejects a keep-off overwrite. Literal settle columns are not modeled.
+HibNoIdleStamp == [][(HibCommitted /\ HibPreserveEligible /\ rs \in HibActive /\ rs' = rs)
+                      => idl' = idl]_modelVars
+HibNewSessionWaits == [][(HibCommitted /\ ~HibPreserveEligible)
+                         => (rs' = "waiting" /\ ~idl')]_modelVars
 
 -----------------------------------------------------------------------------
 TypeOK ==
