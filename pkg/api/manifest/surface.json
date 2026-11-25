@@ -700,7 +700,7 @@
         {
           "name": "jsonl_path",
           "type": "string",
-          "description": "Current session's transcript path, persisted by the hooks; legacy rows may be empty. Resume tries this path, then for claude recomputes the current session's path from cwd + session_id (under a usable absolute CLAUDE_CONFIG_DIR from extra_env, otherwise ~/.claude). A codex row uses only its recorded path; resume never builds one for it. Older sessions are never candidates.",
+          "description": "Current session's recorded transcript path; empty until a present path is recorded. An applied Claude or Codex main-agent hook can fill a missing path for the same session without replacing a recorded path. Claude state reads and sweeps also try conventional-path recovery. Resume tries this path, then for claude recomputes the current session's path from cwd + session_id (under a usable absolute CLAUDE_CONFIG_DIR from extra_env, otherwise ~/.claude). A codex row uses only its recorded path; resume never builds one for it. Older sessions are never candidates.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -796,7 +796,7 @@
         {
           "name": "transcript_status",
           "type": "string",
-          "description": "Derived operator-facing summary of the current session's transcript state: 'present' (jsonl_path recorded), 'never_written' (session id but NULL jsonl_path and prior_sessions is empty — nothing was ever written in the current life), 'rotated' (NULL jsonl_path but prior_sessions is non-empty — the current life has history under a different session id), or 'no_session' (no session_id yet). Session history belongs to a life; 'never_written' and 'rotated' are decided on the same entries prior_sessions lists. Same-agent reuse retains the history; an agent switch or switch back starts a new life with no history. A failed reuse's applied restore returns the pre-reuse life.",
+          "description": "Derived operator-facing summary of the current session's transcript state: 'present' (jsonl_path recorded), 'never_written' (session id but NULL jsonl_path and prior_sessions is empty — no transcript path is recorded in the current life), 'rotated' (NULL jsonl_path but prior_sessions is non-empty — the current life has history under a different session id), or 'no_session' (no session_id yet). Session history belongs to a life; 'never_written' and 'rotated' are decided on the same entries prior_sessions lists. Same-agent reuse retains the history; an agent switch or switch back starts a new life with no history. A failed reuse's applied restore returns the pre-reuse life.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [

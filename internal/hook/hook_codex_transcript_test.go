@@ -174,7 +174,7 @@ func TestCodexHookHeal(t *testing.T) {
 		{name: "file absent", fixture: "user-prompt-submit.json", absent: true},
 		{name: "path already set", fixture: "user-prompt-submit.json", path: "/x/already-set.jsonl"},
 		{name: "gate refusal", fixture: "user-prompt-submit.json", foreign: true},
-		{name: "a Claude row", fixture: "user-prompt-submit.json", claude: true},
+		{name: "a Claude row", fixture: "user-prompt-submit.json", claude: true, heal: true},
 		// The file's name carries the session id; only the agent_id keeps it from healing.
 		{name: "hook with agent_id", row: "019f0000-0000-7000-8000-000000000014", fixture: "pre-tool-use-subagent.json",
 			extra: func(t *testing.T) map[string]any {
@@ -202,7 +202,7 @@ func TestCodexHookHeal(t *testing.T) {
 			var st *store.Store
 			var p hookParent
 			if tc.claude {
-				// Claude's hooks never heal: its row names the session its transcript file names.
+				// b.xfc: Claude gets the same missing-path exception for its bound session.
 				path = writeTranscript(t, session)
 				payload = payloadWith(t, "user-prompt-submit.json", map[string]any{"session_id": session, "transcript_path": path})
 				st, _ = ssgSeed(t, id, store.StateWaiting, session, opts...)

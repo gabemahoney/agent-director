@@ -119,7 +119,8 @@ func TestClassifyEventSRDTable(t *testing.T) {
 
 // TestClassifyEventAgentSelection (SR-6.1): the agent picks the table and the
 // result's flags: an absent --agent is Claude; only Claude's hooks feed subagent
-// capture, only a Codex hook without an agent_id heals a transcript path;
+// capture; Claude and Codex hooks without agent_id may heal a transcript path
+// (b.xfc). Empty payloads and Cursor hooks do not heal;
 // Cursor is accepted, and an unknown agent is ErrInvalidAgent.
 func TestClassifyEventAgentSelection(t *testing.T) {
 	cases := []struct {
@@ -128,8 +129,9 @@ func TestClassifyEventAgentSelection(t *testing.T) {
 		wantCapture      bool
 		wantHeals        bool
 	}{
-		{"absent is claude", "", `{"hook_event_name":"Stop"}`, "claude", true, false},
-		{"claude", "claude", `{"hook_event_name":"Stop"}`, "claude", true, false},
+		{"absent is claude", "", `{"hook_event_name":"Stop"}`, "claude", true, true},
+		{"claude", "claude", `{"hook_event_name":"Stop"}`, "claude", true, true},
+		{"claude with agent_id", "claude", `{"hook_event_name":"PreToolUse","agent_id":"a1"}`, "claude", true, false},
 		{"claude, empty payload", "claude", ``, "claude", true, false},
 		{"codex", "codex", `{"hook_event_name":"Stop"}`, "codex", false, true},
 		{"codex with agent_id", "codex", `{"hook_event_name":"PreToolUse","agent_id":"a1"}`, "codex", false, false},

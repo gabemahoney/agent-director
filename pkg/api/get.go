@@ -123,9 +123,12 @@ type SpawnRow struct {
 	// RelayMode is "on" or "off" — whether this Spawn participates in the
 	// permission-relay flow.
 	RelayMode string `json:"relay_mode"`
-	// JSONLPath is the current session's transcript path, persisted by its
-	// hooks; legacy rows may be empty. Resume tries it, then for Claude
-	// recomputes only the current session's path from cwd + session_id under
+	// JSONLPath is the current session's recorded transcript path, empty until
+	// a present path is recorded. Applied Claude and Codex main-agent hooks can
+	// fill a missing path for the same session without replacing a recorded one.
+	// Claude state reads and sweeps also try conventional-path recovery.
+	// Resume tries the recorded path, then for Claude recomputes only the
+	// current session's path from cwd + session_id under
 	// a usable absolute CLAUDE_CONFIG_DIR (otherwise ~/.claude). Codex uses
 	// only the recorded path. Older sessions are never resume candidates.
 	JSONLPath string `json:"jsonl_path"`
@@ -213,9 +216,8 @@ type SpawnRow struct {
 	// session id — the same entries PriorSessions lists. One of:
 	//   - "present":      jsonl_path is recorded (a verified transcript).
 	//   - "never_written": a session id exists but jsonl_path is NULL and the
-	//                      visible history is empty — nothing was ever written
-	//                      in the current life (the case of a freshly restarted
-	//                      agent that has not been messaged).
+	//                      visible history is empty — no transcript path is
+	//                      recorded in the current life.
 	//   - "rotated":       jsonl_path is NULL and the visible history is
 	//                      non-empty — the current life has history under a
 	//                      different session id (see prior_sessions). This is

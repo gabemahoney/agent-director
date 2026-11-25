@@ -70,8 +70,8 @@ type endReporter interface {
 	ApplyHookEndReport(instanceID string, gate store.HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (store.UpsertOutcome, store.HookApplied, error)
 }
 
-// jsonlHealer is an optional extension of HookStore for a Codex hook's heal of
-// a NULL jsonl_path (ClassifyResult.HealsTranscript, SR-6.3). *store.Store
+// jsonlHealer is an optional extension of HookStore for a Claude or Codex hook's
+// heal of a NULL jsonl_path (ClassifyResult.HealsTranscript). *store.Store
 // satisfies it; a test double that does not heals nothing.
 type jsonlHealer interface {
 	HealJsonlPath(instanceID, sessionID, jsonlPath string) (bool, error)
@@ -300,10 +300,10 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // end_reported_at set; SR-6.5), and a marked one is ignored as subagent_event
 // like any subagent's; a main-thread Codex hook's write records the row's turn
 // from its turn_id, and its PreToolUse or PostToolUse of a turn other than
-// the row's current, not-ended one is a soft refresh (codexTurnGate; b.x72);
-// and after any applied write of a Codex hook without an agent_id, a NULL
+// the row's current, not-ended one is a soft refresh (codexTurnGate; b.x72).
+// After an applied write of a Claude or Codex hook without an agent_id, a NULL
 // jsonl_path is healed from the payload's path when that exists and its file
-// name carries the hook's session id (healCodexTranscript, SR-6.3). A Claude
+// name carries the hook's session id (healHookTranscript). A Claude
 // main-agent UserPromptSubmit with a session id advances the row's Turn Start
 // counter in its own gated write, applied or held (claudeTurnGate), and once
 // that write applied, a prompt in AD's measured wake wrapping is offered as
@@ -729,8 +729,8 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 	}
 
 	if applied.Applied {
-		// SR-6.3: a Codex hook's applied write heals a NULL jsonl_path.
-		healCodexTranscript(st, instanceID, res, transcriptPath, logger)
+		// An eligible main-agent hook fills only its session's NULL path.
+		healHookTranscript(st, instanceID, res, transcriptPath, logger)
 	}
 
 	if !applied.Applied && applied.Reason != "" {
@@ -783,17 +783,16 @@ func applyEndReport(st HookStore, instanceID string, gate store.HookGate, res Cl
 	return outcome, applied, true, err
 }
 
-// healCodexTranscript is the hook heal (SR-6.3), for a Codex hook without an
+// healHookTranscript is the hook heal for a Claude or Codex hook without an
 // agent_id (res.HealsTranscript) whose own gated write applied: a NULL
 // jsonl_path takes the payload's path through HealJsonlPath, guarded on the
 // hook's session id and on the row's NULL path, so it fills a NULL path once
 // and never overwrites one. It heals only a path that exists and whose file
 // name carries the hook's session id, so a /review thread's hook, which has the
 // main session id and its own rollout, never heals to the Review thread's
-// rollout. Claude's hooks never heal (find-missing heals Claude's rows). It is
-// fail-open: a store without HealJsonlPath heals nothing, and an error logs one
-// line.
-func healCodexTranscript(st HookStore, instanceID string, res ClassifyResult, transcriptPath string, logger *log.Logger) {
+// rollout. Claude state reads and sweeps also try conventional-path recovery.
+// A store without HealJsonlPath heals nothing; an error logs one line (fail-open).
+func healHookTranscript(st HookStore, instanceID string, res ClassifyResult, transcriptPath string, logger *log.Logger) {
 	if !res.HealsTranscript || res.SessionID == "" || transcriptPath == "" {
 		return
 	}
@@ -1106,9 +1105,9 @@ func waitForLaunchIdentity(ctx context.Context, st HookStore, hc HandleConfig, i
 // transcriptPresent reports whether the hook-reported transcript path exists
 // on disk (b.v2c AC1): a fresh Claude session writes no .jsonl transcript
 // until its first user turn, so the path a payload reports may not exist yet.
-// The store SETs jsonl_path only when the file is present and NULLs it
-// otherwise, so the row never asserts a dead pointer; find-missing heals the
-// row once the file appears (AC3). A stat error other than not-exist (e.g. a
+// SessionStart records the path only when present, otherwise NULL. Later
+// main-agent hooks can fill that NULL path; Claude state reads and sweeps also
+// try recovery (AC3). A stat error other than not-exist (e.g. a
 // permission wall) is treated as "not present" — the same conservative
 // posture the resume fallback takes. An empty path is not present.
 func transcriptPresent(path string) bool {

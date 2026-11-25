@@ -156,9 +156,8 @@ type ClassifyResult struct {
 	EndReport bool
 
 	// HealsTranscript is true when an applied write of the hook may heal the
-	// row's NULL jsonl_path from the payload's path (SR-6.3): Codex hooks
-	// without an agent_id. Claude's hooks never heal; find-missing heals
-	// Claude's rows.
+	// row's NULL jsonl_path from the payload's path: Claude and Codex hooks
+	// without an agent_id. Claude state reads and sweeps also try recovery.
 	HealsTranscript bool
 	// CodexStartup is fresh-history origin, never inferred from rollout metadata.
 	CodexStartup bool
@@ -386,6 +385,7 @@ func classifyClaude(p payload) ClassifyResult {
 	res := ClassifyResult{
 		Agent:            store.AgentClaude,
 		SubagentCapture:  true,
+		HealsTranscript:  p.AgentID == "",
 		EventName:        p.eventName(),
 		ToolName:         p.ToolName,
 		SessionID:        extractSessionID(p.TranscriptPath),
