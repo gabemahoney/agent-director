@@ -1,6 +1,7 @@
 package realtmux_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -150,11 +151,23 @@ func TestSendKeysCodexFallbackPasteRealTmux(t *testing.T) {
 				return captureErr == nil && strings.TrimRight(last, "\n") == ready
 			}, func() string { return fmt.Sprintf("capture %q (error %s), want %q", last, describe(captureErr), ready) })
 			_, log := newRecordingClient(t)
-			c := f.open(t, 0, filepath.Join(log.dir, "tmux-recorder"))
+			// b.fs2: end submission observation only after the real paste and
+			// Enter succeed; keep recording every transport command.
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c := f.open(t, 0, filepath.Join(log.dir, "tmux-recorder"), cancel)
 			t.Cleanup(func() { _ = c.Close() })
 
 			text := tc.text
-			result, sendErr := c.SendKeys(api.SendKeysParams{InstanceID: r.InstanceID, Text: text, AllowPending: true})
+			firstCtx := ctx
+			if tc.refusal != "" {
+				// The refusal request has its own context, never cancelled by
+				// transport. Reserve ctx for the follow-up that should paste.
+				refusalCtx, cancelRefusal := context.WithCancel(context.Background())
+				defer cancelRefusal()
+				firstCtx = refusalCtx
+			}
+			result, sendErr := c.SendKeysContext(firstCtx, api.SendKeysParams{InstanceID: r.InstanceID, Text: text, AllowPending: true})
 			if tc.refusal != "" {
 				if !errors.Is(sendErr, api.ErrSubmissionUnconfirmed) {
 					t.Errorf("unsafe literal input: result=%+v err=%v; want ErrSubmissionUnconfirmed", result, sendErr)
@@ -191,7 +204,7 @@ func TestSendKeysCodexFallbackPasteRealTmux(t *testing.T) {
 					t.Fatal(err)
 				}
 				text = "Read " + prompt + " and follow its instructions."
-				result, sendErr = c.SendKeys(api.SendKeysParams{InstanceID: r.InstanceID, Text: text, AllowPending: true})
+				result, sendErr = c.SendKeysContext(ctx, api.SendKeysParams{InstanceID: r.InstanceID, Text: text, AllowPending: true})
 			}
 			if !errors.Is(sendErr, api.ErrSubmissionUnconfirmed) {
 				t.Fatalf("fallback without submission evidence: result=%+v err=%v", result, sendErr)
