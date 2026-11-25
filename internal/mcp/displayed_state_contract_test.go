@@ -37,31 +37,39 @@ func TestDisplayedStateContractMCP(t *testing.T) {
 	})
 }
 
-// A fresh store per spelling prevents one dispatch from recovering for another.
+// b.915: both MCP spellings omit finished rows while retaining a live row.
 func TestSweepChecksMCP(t *testing.T) {
 	for _, verb := range []string{"sweep", "find_missing"} {
 		t.Run(verb, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "state.db")
-			if _, err := apitest.SeedSpawn(path, "finished", "ended", "/tmp", "off", "", true, apitest.WithNoPane()); err != nil {
-				t.Fatal(err)
-			}
-			d := settleDispatcher(t, path, nil)
-			raw := toolText(t, callTool(t, d, verb, `{}`))
-			apitest.AssertConfirmationsShape(t, raw)
-			var got api.SweepResult
-			if err := json.Unmarshal([]byte(raw), &got); err != nil {
-				t.Fatal(err)
-			}
-			if len(got.Checks) != 1 || got.Count != 0 || got.Unverified != 0 || got.IDs == nil || len(got.IDs) != 0 || got.UnverifiedIDs == nil || len(got.UnverifiedIDs) != 0 {
-				t.Fatalf("result = %s", raw)
-			}
-			row := got.Checks[0]
-			if row.InstanceID != "finished" || row.State != "ended" || row.FamilyState != "waiting" || row.ProcessLiveness != "unknown" || row.IdleScreenAvailability != "available" || row.Completion != "complete" || row.Reason != nil {
-				t.Errorf("finished check = %+v", row)
-			}
-			for _, record := range []api.Confirmation{row.Confirmations.State, row.Confirmations.ProcessLiveness, row.Confirmations.DisplayedState} {
-				if record.Status != "unknown" || record.ConfirmedAt != nil || record.Source != nil || record.CheckedAt != nil || record.Reason == nil || *record.Reason != "no_evidence" {
-					t.Errorf("finished row acquired new evidence: %+v", record)
+			for _, live := range []bool{false, true} {
+				path := filepath.Join(t.TempDir(), "state.db")
+				for _, state := range []string{"ended", "missing"} {
+					if _, err := apitest.SeedSpawn(path, state, state, "/tmp", "off", "", true, apitest.WithNoPane()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				wantChecks := 0
+				if live {
+					wantChecks = 1
+					if _, err := apitest.SeedSpawn(path, "pending", "pending", "/tmp", "off", "", false, apitest.WithNoPane()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				d := settleDispatcher(t, path, nil)
+				raw := toolText(t, callTool(t, d, verb, `{}`))
+				apitest.AssertConfirmationsShape(t, raw)
+				var got api.SweepResult
+				if err := json.Unmarshal([]byte(raw), &got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Checks == nil || len(got.Checks) != wantChecks || got.Count != 0 || got.Unverified != 0 || got.IDs == nil || len(got.IDs) != 0 || got.UnverifiedIDs == nil || len(got.UnverifiedIDs) != 0 {
+					t.Fatalf("result = %s", raw)
+				}
+				if live {
+					row := got.Checks[0]
+					if row.InstanceID != "pending" || row.State != "pending" || row.Completion != "complete" || row.Reason != nil || row.Confirmations.ProcessLiveness.Status != "pending" {
+						t.Errorf("live check = %+v", row)
+					}
 				}
 			}
 		})

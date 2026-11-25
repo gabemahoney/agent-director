@@ -1453,8 +1453,8 @@ describe("find-missing", () => {
 
         using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.findMissing({ timeout_ms: 1 });
-        const unknown = {status: "unknown", confirmed_at: null, source: null, checked_at: null, reason: "no_evidence"} as const;
-        expect(ts).toEqual({checks: [{instance_id: "finished", state: "ended", family_state: "waiting", idle_screen_availability: "available", process_liveness: "unknown", completion: "complete", reason: null, confirmations: {state: unknown, process_liveness: unknown, displayed_state: unknown}}], count: 0, ids: [], unverified: 0, unverified_ids: []});
+        // b.915: finished history contributes no checks through either client.
+        expect(ts).toEqual({ checks: [], count: 0, ids: [], unverified: 0, unverified_ids: [] });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
           ignorePaths: loadIgnorePathsForVerb("find-missing"),
@@ -1485,8 +1485,8 @@ describe("sweep", () => {
 
         using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.sweep({ timeout_ms: 1 });
-        const unknown = {status: "unknown", confirmed_at: null, source: null, checked_at: null, reason: "no_evidence"} as const;
-        expect(ts).toEqual({checks: [{instance_id: "finished", state: "ended", family_state: "waiting", idle_screen_availability: "available", process_liveness: "unknown", completion: "complete", reason: null, confirmations: {state: unknown, process_liveness: unknown, displayed_state: unknown}}], count: 0, ids: [], unverified: 0, unverified_ids: []});
+        // b.915: finished history contributes no checks through either client.
+        expect(ts).toEqual({ checks: [], count: 0, ids: [], unverified: 0, unverified_ids: [] });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
           ignorePaths: loadIgnorePathsForVerb("sweep"),

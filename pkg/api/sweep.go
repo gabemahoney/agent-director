@@ -11,8 +11,9 @@ import (
 // Counters describe only guarded liveness writes, independently of Checks.
 type SweepResult = FindMissingResult
 
-// SweepCheck is one member of the fixed selection, including finished and
-// unattempted rows. Its values and evidence come from the shared checker.
+// SweepCheck reports one agent that was live in the fixed selection, even if
+// it later finished, changed, disappeared or could not be checked. Its values
+// and evidence come from the shared checker.
 type SweepCheck struct {
 	InstanceID             string        `json:"instance_id"`
 	State                  string        `json:"state"`
@@ -35,9 +36,11 @@ type SweepCheck struct {
 // its existing narrow store and provider interfaces remain accepted. A
 // narrow store can expose only its live identities and available adapters,
 // so unsupported coverage is explicitly incomplete. Production selects all
-// agents from one consistent snapshot, retaining every selected ID even
-// when it changes, disappears or cannot be checked. Only selection errors
-// fail the call; interrupted work after selection remains in Checks.
+// agents from one consistent snapshot, including finished rows for late native
+// proof recovery. Checks reports only agents whose raw state was live in that
+// snapshot, retaining them even when they finish, change, disappear or cannot
+// be checked. Only selection errors fail the call; interrupted work for those
+// agents remains in Checks.
 // Missing is a check's judgement on available evidence, not proof that the
 // agent has exited. Run as the agents' user in their tmux environment.
 //
@@ -48,8 +51,9 @@ func Sweep(ctx context.Context, s FindMissingStore, t FindMissingTmux, pc ProcCh
 	return findMissingChecked(ctx, s, view, store.SettleRead{})
 }
 
-// Sweep checks a fixed all-agent snapshot. Complete describes coverage,
-// never freshness or command authority. FindMissing delegates to this method.
+// Sweep checks a fixed all-agent snapshot and reports agents that were live
+// when selected. Complete describes coverage, never freshness or command
+// authority. FindMissing delegates to this method.
 // A closed client or failed initial selection returns an error with empty
 // non-null arrays; per-agent failures preserve the other selected results.
 //
@@ -116,9 +120,15 @@ func sweepCompletion(outcomes []activeCheckOutcome) (string, *string) {
 	return "incomplete", nullableField(reason)
 }
 
-func (r *activeReadStore) sweepChecks() []SweepCheck {
-	checks := make([]SweepCheck, 0, len(r.rows))
-	for _, checked := range r.rows {
+func (r *activeReadStore) sweepChecks(selected []Spawn) []SweepCheck {
+	checks := []SweepCheck{}
+	for _, original := range selected {
+		// Membership follows the original raw state, before checks or refresh.
+		// Finished rows still participate internally in late native proof recovery.
+		if !store.IsLiveState(original.State) {
+			continue
+		}
+		checked := r.byID[original.InstanceID]
 		row := checked.row
 		state := row.State
 		if r.settle.SettleMs > 0 {

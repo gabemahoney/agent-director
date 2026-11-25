@@ -1358,7 +1358,10 @@ export interface SweepParams {
 /** Retained compatibility name for sweep parameters. */
 export interface FindMissingParams extends SweepParams {
 }
-/** A fixed-snapshot agent, including finished and unattempted rows. */
+/**
+ * An agent whose raw state was live at selection, even if it later finished,
+ * changed, disappeared or could not be checked.
+ */
 export interface SweepCheck {
     instance_id: string;
     state: StatusResult["state"];
@@ -1376,7 +1379,11 @@ export interface SweepCheck {
 }
 /** One bounded shared check pass; no input, answer, restart or signal authority. */
 export interface SweepResult {
-    /** Sorted fixed all-agent selection; never null. Failed/remaining rows stay represented. */
+    /**
+     * Sorted agents whose raw state was live in the initial snapshot; never null.
+     * Rows already ended or missing are omitted; selected agents remain even if
+     * they later finish, change, disappear or cannot be checked.
+     */
     checks: SweepCheck[];
     /**
      * Number of rows this sweep marked `missing` (the length of `ids`); a Codex

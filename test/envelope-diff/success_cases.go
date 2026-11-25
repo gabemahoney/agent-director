@@ -385,7 +385,7 @@ var successCases = append([]successCase{
 	},
 
 	// ── find-missing ──────────────────────────────────────────────────────
-	// A finished row is still selected; find-missing returns an unknown, complete check and empty counters
+	// b.915: a finished-only store returns empty checks and counters
 	// on both CLI and Client without touching tmux.
 	{
 		verb: "find-missing",
@@ -406,7 +406,7 @@ var successCases = append([]successCase{
 		},
 	},
 	// ── sweep ──────────────────────────────────────────────────────
-	// A finished row is still selected; sweep returns an unknown, complete check and empty counters
+	// b.915: a finished-only store returns empty checks and counters
 	// on both CLI and Client without touching tmux.
 	{
 		verb: "sweep",

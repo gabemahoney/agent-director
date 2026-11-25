@@ -347,8 +347,8 @@ Handling and the live-row sequence are in the
 ### sweep
 
 `client.sweep()` returns `Promise<SweepResult>` for one bounded all-agent pass.
-`checks: SweepCheck[]` carries each selected identity's values, three
-confirmation records and independent `completion`/`reason`. Legacy counters
+`checks: SweepCheck[]` carries values, three confirmation records and independent
+`completion`/`reason` for each identity live at selection. Legacy counters
 remain in the same result. See [Sweep results](../../docs/caller-contract.md#sweep-results)
 for membership, coverage and failure handling.
 
