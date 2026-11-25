@@ -332,9 +332,9 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // State-tracking is fail-open per SRD §3.2: any internal failure logs
 // and returns nil. The relay flow is fail-closed per SRD §6.4 and b.146
 // rule 3: a failure before its request is recorded (its first write
-// included) emits a deny envelope, so no dialog appears; once the request is
-// recorded, the hook writes only an answer it has acked, and every failure
-// ends with an empty stdout, so Claude Code's own dialog appears and the
+// included) emits a deny envelope; once the request is recorded, the hook
+// writes only an answer it has acked, and every failure ends with an empty
+// stdout, so Claude Code's own dialog appears and the
 // request falls back. A relayed PermissionRequest that the gate did not apply
 // returns no decision (empty stdout), so the process's own Claude Code asks
 // as it would with no relay.
@@ -425,10 +425,9 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		return nil
 	}
 
-	// Peek using the reporting agent's decode policy so failClosed can gate
-	// its envelope from the first post-read failure point. Claude's six
-	// non-classifier fields cannot blank the name; a syntax/type failure or
-	// missing name still silences the PermissionRequest envelope.
+	// Identify the event before any post-read failure. Claude/Codex peeks
+	// ignore unrelated field types; Cursor keeps its strict decode. An
+	// unreadable event name still silences the PermissionRequest envelope.
 	eventName := PeekEventNameForAgent(hc.Agent, raw)
 
 	// failClosed emits a deny envelope ONLY when this invocation is a

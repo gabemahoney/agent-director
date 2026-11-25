@@ -91,9 +91,9 @@ type payload struct {
 	FilePath string `json:"file_path"`
 }
 
-// decodePayload shares the agent's type policy between classification and
-// peeking. Invalid agent values keep the strict peek policy; ClassifyEvent
-// rejects them through ResolveAgent before decoding.
+// decodePayload applies the agent's classification type policy. Cursor and
+// invalid agents also use it for peeking; ClassifyEvent rejects invalid agents
+// through ResolveAgent before decoding.
 func decodePayload(agent string, raw []byte) (payload, error) {
 	var p payload
 	if agent == "" || agent == store.AgentClaude {
@@ -389,21 +389,44 @@ func (r ClassifyResult) SubagentLifecycle() bool {
 	return r.AgentID != "" && (r.EventName == "SessionStart" || r.EventName == "SessionEnd")
 }
 
-// PeekEventName extracts the event name using Claude's decode policy.
+// PeekEventName extracts the event name using Claude's event-only peek policy.
 // Production callers with a reporting agent use PeekEventNameForAgent.
 func PeekEventName(raw []byte) string {
 	return PeekEventNameForAgent(store.AgentClaude, raw)
 }
 
 // PeekEventNameForAgent extracts the event name without applying a state
-// table. It uses Claude's type policy only for an empty agent or claude;
-// Codex, Cursor and invalid agents keep the strict decode. It runs before
-// ResolveInstanceID so failClosed can gate its envelope from the first
-// failure point. A JSON syntax or type error returns "": the caller must
-// then exit silently because an envelope for an unknown event risks b.45p.
+// table. Claude (including an empty agent) and Codex read only hook_event_name,
+// falling back to event_name when the primary is empty, missing or null. An
+// unrelated field's type error cannot hide a known PermissionRequest. Cursor
+// and invalid agents retain their strict full decode. It runs before
+// ResolveInstanceID so failClosed can gate its envelope from the first failure
+// point. Invalid JSON or a type error in the selected event-name field returns
+// "": an envelope for an unknown event risks b.45p. A wrong-typed primary never
+// falls back to the alias.
 func PeekEventNameForAgent(agent string, raw []byte) string {
 	if len(raw) == 0 {
 		return ""
+	}
+	if agent == "" || agent == store.AgentClaude || agent == store.AgentCodex {
+		// Separate typed projections preserve the classifier's case matching
+		// and duplicate/null handling without decoding an unused alias.
+		var primary struct {
+			HookEventName string `json:"hook_event_name"`
+		}
+		if err := json.Unmarshal(raw, &primary); err != nil {
+			return ""
+		}
+		if primary.HookEventName != "" {
+			return primary.HookEventName
+		}
+		var alias struct {
+			EventName string `json:"event_name"`
+		}
+		if err := json.Unmarshal(raw, &alias); err != nil {
+			return ""
+		}
+		return alias.EventName
 	}
 	p, err := decodePayload(agent, raw)
 	if err != nil {
@@ -422,7 +445,8 @@ func PeekEventNameForAgent(agent string, raw []byte) string {
 // JSON syntax/type failures and an agent other than claude, codex or cursor
 // (ErrInvalidAgent) are the only errors returned. The handler logs errors
 // and exits 0; a relay-on failure emits deny only when the agent-aware peek
-// identified PermissionRequest. A failed peek still suppresses that envelope.
+// identified PermissionRequest, even if an unrelated field failed decoding.
+// An unidentified event still suppresses that envelope.
 func ClassifyEvent(agent string, raw json.RawMessage) (ClassifyResult, error) {
 	agent, err := ResolveAgent(agent)
 	if err != nil {

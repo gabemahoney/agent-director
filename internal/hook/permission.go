@@ -180,11 +180,11 @@ type relayRun struct {
 //     instant (rules 2, 14). Its wait for the store's write lock is cut at
 //     the hook's own deadline less the reserve (problem 1), and is zero when
 //     that has passed. When the lock is not taken in time, or the write
-//     fails, the hook writes today's fail-closed deny (the tool is denied, no
-//     dialog appears): nothing was recorded. When the gate does not hold (the row is
-//     no longer this process's, SR-22.9) nothing is recorded, nothing is
-//     written to stdout (the agent asks as it would with no relay) and
-//     onIgnored is called once with the store's reason (decision A8).
+//     fails, the hook writes a fail-closed deny: nothing was recorded. When
+//     the gate does not hold (the row is no longer this process's, SR-22.9)
+//     nothing is recorded, nothing is written to stdout (the agent asks as it
+//     would with no relay) and onIgnored is called once with the store's reason
+//     (decision A8).
 //  2. The poll (Poll), until its deadline.
 //  3. A decision read is acked, then written (deliver): the hook commits
 //     delivered_at in one statement that returns the decision it acked
