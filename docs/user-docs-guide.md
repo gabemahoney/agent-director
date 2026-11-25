@@ -48,13 +48,14 @@ User docs are for the people who install and run agent-director, and for the pro
 
 - **User docs:** `README.md`, `docs/install.md`, `docs/usage.md`, `docs/configuration.md`, `docs/maintenance.md`, `docs/caller-contract.md`, `docs/operator-actions.md`, `docs/hooks.md`, `docs/permissions.md`, `docs/settings.md`, `docs/multi-account.md`, `pkg/api/README.md` and `pkg/ts-bun-client/README.md`.
 - **Generated references:** `docs/cli-reference.md`, `docs/mcp-reference.md` and `docs/admin-reference.md` (see "The files").
-- **Architecture:** `docs/architecture.md`, under the rules in `docs/architecture-docs-guide.md`.
+- **Architecture:** `docs/architecture.md` and its linked `docs/architecture-<topic>.md` pages, under the rules in `docs/architecture-docs-guide.md`.
 - **Developer and operational guides:** `docs/migration-guide.md`, `docs/test-writing-guide.md` and `docs/release-skill.md`.
 
 The `docs/*-guide.md` files are rules for agents. Idea and Bug work never changes those rules; suggest a rule change to the maintainers as separate work. Do record facts a guide asks for, such as a new schema version's downgrade recipe in `docs/migration-guide.md` §5.
 
 ## Write and trim
 
+- Aim for about 300 lines per user README and 500 per other doc, including developer READMEs. These are guidelines, never hard caps: a longer doc must state its reason, and no check or gate may fail a doc on size alone.
 - Document what readers need to do with the software as it is now; requirements are a correctness check, not an outline to reproduce.
 - Use short, plain sentences, and lead with what the reader needs to know.
 - Explain each fact in one place and link to it elsewhere, because repeated explanations drift apart.
