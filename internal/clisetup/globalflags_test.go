@@ -19,11 +19,11 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// TestParseGlobalFlags covers the four global flags (b.32k, b.78b), which
+// TestGlobalFlagStages covers the four global flags (b.32k, b.78b), which
 // agent-director and agent-director-admin share (b.vqr): each value lands on
-// its field with its Set sentinel true, in either form and anywhere in argv,
+// its field with its Set sentinel true, in either form at a flag position,
 // and the flag tokens are stripped from the argv the verb dispatch sees.
-func TestParseGlobalFlags(t *testing.T) {
+func TestGlobalFlagStages(t *testing.T) {
 	cases := []struct {
 		name     string
 		argv     []string
@@ -55,7 +55,7 @@ func TestParseGlobalFlags(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, argv, err := clisetup.ParseGlobalFlags(tc.argv)
+			got, argv, err := parseGlobalFlagStages(tc.argv)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -89,7 +89,7 @@ func TestParseGlobalFlagsMissingValue(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.argv, "_"), func(t *testing.T) {
-			_, _, err := clisetup.ParseGlobalFlags(tc.argv)
+			_, _, err := parseGlobalFlagStages(tc.argv)
 			if err == nil || err.Error() != tc.flag+" requires a value" {
 				t.Errorf("argv %q: error = %v; want %q", tc.argv, err, tc.flag+" requires a value")
 			}
@@ -114,7 +114,7 @@ func TestParseGlobalFlagsCreateIfMissingInvalid(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.argv, "_"), func(t *testing.T) {
 			want := fmt.Sprintf("--create-if-missing must be true or false, got %q", tc.val)
-			if _, _, err := clisetup.ParseGlobalFlags(tc.argv); err == nil || err.Error() != want {
+			if _, _, err := parseGlobalFlagStages(tc.argv); err == nil || err.Error() != want {
 				t.Errorf("argv %q: error = %v; want %q", tc.argv, err, want)
 			}
 		})

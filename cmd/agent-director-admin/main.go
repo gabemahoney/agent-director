@@ -9,7 +9,9 @@
 // Like cmd/agent-director it is a thin shim: it parses and applies
 // agent-director's global flags (--store-path, --home, --tmux-command,
 // --create-if-missing) with the same code (clisetup.ParseGlobalFlags,
-// GlobalFlags.Apply), parses the verb's flags and calls through internal/adminapi.
+// ParseVerbGlobalFlags and GlobalFlags.Apply), parses the verb's flags and
+// calls through internal/adminapi. Each verb shares its FlagSet builder
+// between global scanning and its handler (b.t1b).
 // kill-finished and delete open the pkg/api Client with clisetup.Open;
 // migrate-journal and snapshot-store intentionally bypass Client initialization.
 // It prints the result as
@@ -109,12 +111,7 @@ func handlers(o clisetup.Overrides) map[string]func([]string) error {
 func migrateJournalHandler(o clisetup.Overrides, args []string) error {
 	var options adminapi.JournalMigrationOptions
 	var checkOnly bool
-	fs := flag.NewFlagSet("migrate-journal", flag.ContinueOnError)
-	fs.BoolVar(&options.MaintenanceWindow, "maintenance-window", false, "operator maintains exclusion of old mutators through verification")
-	fs.BoolVar(&options.RootsComplete, "roots-complete", false, "operator established all legacy input roots")
-	fs.Var((*stringSlice)(&options.LegacyRoots), "legacy-root", "additional absolute legacy input root (repeatable)")
-	fs.StringVar(&options.BackupDir, "backup-dir", "", "new absolute stopped-writer backup directory")
-	fs.BoolVar(&checkOnly, "check-only", false, "check arguments and, with --store-path, holders; write nothing")
+	fs := migrateJournalFlagSet(&options, &checkOnly)
 	done, invalid, err := parseVerbFlags(fs, args)
 	switch {
 	case invalid != "" && (checkOnly || checkOnlyArgs(args)):
@@ -256,7 +253,7 @@ func run(args []string) int {
 // ErrInvalidFlags; on a migrate-journal run it is migrate-journal's envelope
 // (journalGlobalFlagError).
 func dispatch(argv []string) error {
-	g, args, err := clisetup.ParseGlobalFlags(argv)
+	g, args, err := parseCommandGlobalFlags(argv)
 	if err != nil {
 		// The verb is not known yet; the token names a migrate-journal run.
 		if i := slices.Index(argv, "migrate-journal"); i >= 0 {
@@ -319,7 +316,7 @@ func helpHandler([]string) error {
 // name, else ErrInternal), never ErrJSONMarshal, which is only for
 // writeJSON's json.Marshal (b.3jc).
 func versionHandler(args []string) error {
-	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	fs := versionFlagSet()
 	if done, err := parseFlags(fs, args); done {
 		return err
 	}
@@ -335,8 +332,7 @@ func versionHandler(args []string) error {
 // o selects.
 func killFinishedHandler(o clisetup.Overrides, args []string) error {
 	var id string
-	fs := flag.NewFlagSet("kill-finished", flag.ContinueOnError)
-	fs.StringVar(&id, idFlag, "", "id of the finished row")
+	fs := killFinishedFlagSet(&id)
 	if done, err := parseFlags(fs, args); done {
 		return err
 	}
@@ -350,8 +346,7 @@ func killFinishedHandler(o clisetup.Overrides, args []string) error {
 // each row's outcome.
 func deleteHandler(o clisetup.Overrides, args []string) error {
 	var ids []string
-	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
-	fs.Var((*stringSlice)(&ids), idFlag, "id of a row to remove (repeatable; ≥1 required)")
+	fs := deleteFlagSet(&ids)
 	if done, err := parseFlags(fs, args); done {
 		return err
 	}
@@ -507,4 +502,35 @@ func (s *stringSlice) String() string {
 func (s *stringSlice) Set(v string) error {
 	*s = append(*s, v)
 	return nil
+}
+
+// migrateJournalFlagSet defines migrate-journal's flags for both global scanning and the handler.
+func migrateJournalFlagSet(options *adminapi.JournalMigrationOptions, checkOnly *bool) *flag.FlagSet {
+	fs := flag.NewFlagSet("migrate-journal", flag.ContinueOnError)
+	fs.BoolVar(&options.MaintenanceWindow, "maintenance-window", false, "operator maintains exclusion of old mutators through verification")
+	fs.BoolVar(&options.RootsComplete, "roots-complete", false, "operator established all legacy input roots")
+	fs.Var((*stringSlice)(&options.LegacyRoots), "legacy-root", "additional absolute legacy input root (repeatable)")
+	fs.StringVar(&options.BackupDir, "backup-dir", "", "new absolute stopped-writer backup directory")
+	fs.BoolVar(checkOnly, "check-only", false, "check arguments and, with --store-path, holders; write nothing")
+	return fs
+}
+
+// versionFlagSet defines version's flags for both global scanning and the handler.
+func versionFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	return fs
+}
+
+// killFinishedFlagSet defines kill-finished's flags for both global scanning and the handler.
+func killFinishedFlagSet(id *string) *flag.FlagSet {
+	fs := flag.NewFlagSet("kill-finished", flag.ContinueOnError)
+	fs.StringVar(id, idFlag, "", "id of the finished row")
+	return fs
+}
+
+// deleteFlagSet defines delete's flags for both global scanning and the handler.
+func deleteFlagSet(ids *[]string) *flag.FlagSet {
+	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
+	fs.Var((*stringSlice)(ids), idFlag, "id of a row to remove (repeatable; ≥1 required)")
+	return fs
 }

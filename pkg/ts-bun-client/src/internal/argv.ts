@@ -29,8 +29,9 @@
  *     names are refused with ErrReservedEnvKey, the name the CLI gives every
  *     refused extra_env key, thrown from buildArgv, so no subprocess runs
  *     (b.vpb, b.66q; see extraEnvFlags).
- *   - get-many refuses ids the CLI cannot carry: global-flag names (including
- *     equals spellings) and NUL bytes, before any subprocess runs.
+ *   - get-many refuses global-flag names and equals spellings as ids for
+ *     compatibility with older binaries. It also refuses NUL bytes, which
+ *     CLI arguments cannot carry. Both checks run before any subprocess.
  *
  * Implements SRD SR-1.2 (argv construction is verb-driven and shell-free).
  *
@@ -66,7 +67,7 @@ import type {
 // Public API
 // ---------------------------------------------------------------------------
 
-/** The CLI global flags ParseGlobalFlags takes anywhere in argv. Internal only. */
+/** The four CLI global-flag names. Internal only. */
 export const GLOBAL_FLAGS = [
   "--store-path", "--home", "--tmux-command", "--create-if-missing",
 ] as const;

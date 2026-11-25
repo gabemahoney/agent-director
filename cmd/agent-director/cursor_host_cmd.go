@@ -47,13 +47,8 @@ func hookCursorRotationVerifier(cfg config.Config) func(*store.Store, store.Curs
 // an existing store only after parsing, and proves pane ownership before any
 // runtime launch or ACP admission.
 func cursorHostHandler(args []string) error {
-	fs := flag.NewFlagSet("cursor-host", flag.ContinueOnError)
 	var program, encoded, prompt, load, mode string
-	fs.StringVar(&program, "runtime", "", "selected Cursor executable (internal)")
-	fs.StringVar(&encoded, "runtime-args", "[]", "validated Cursor model arguments (internal)")
-	fs.StringVar(&prompt, "initial-prompt", "", "fresh initial prompt (internal)")
-	fs.StringVar(&load, "load-session", "", "latest saved Cursor conversation (internal)")
-	fs.StringVar(&mode, "requested-mode", "", "authoritative initial Cursor mode (internal)")
+	fs := cursorHostFlagSet(&program, &encoded, &prompt, &load, &mode)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -73,4 +68,15 @@ func cursorHostHandler(args []string) error {
 		return errDispatch
 	}
 	return nil
+}
+
+// cursorHostFlagSet defines cursor-host's flags for both global scanning and the handler.
+func cursorHostFlagSet(program *string, encoded *string, prompt *string, load *string, mode *string) *flag.FlagSet {
+	fs := flag.NewFlagSet("cursor-host", flag.ContinueOnError)
+	fs.StringVar(program, "runtime", "", "selected Cursor executable (internal)")
+	fs.StringVar(encoded, "runtime-args", "[]", "validated Cursor model arguments (internal)")
+	fs.StringVar(prompt, "initial-prompt", "", "fresh initial prompt (internal)")
+	fs.StringVar(load, "load-session", "", "latest saved Cursor conversation (internal)")
+	fs.StringVar(mode, "requested-mode", "", "authoritative initial Cursor mode (internal)")
+	return fs
 }

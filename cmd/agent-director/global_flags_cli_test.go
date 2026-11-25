@@ -59,30 +59,38 @@ func TestGlobalFlagsOpenTheirStore(t *testing.T) {
 
 // TestGlobalFlagStorePathReachesServeMCPTools: with --store-path, serve's MCP
 // list reads that store and its expire deletes that store's row; serve creates
-// no store under HOME (b.wb7).
+// no store under HOME (b.wb7). b.t1b: a global after --stdio must also work.
 func TestGlobalFlagStorePathReachesServeMCPTools(t *testing.T) {
-	storeHome, _ := seedExpireRows(t, []string{expireGoneID})
-	home := t.TempDir()
-	srv := startServeFlags(t, binaryPath, home, []string{"--store-path", stateDB(storeHome)},
-		fakeTmuxEnv(t, storeHome, buildFakeTmux(t))...)
-	t.Cleanup(srv.kill)
-	srv.initialize(t)
+	for _, position := range []string{"prefix", "after stdio"} {
+		t.Run(position, func(t *testing.T) {
+			storeHome, _ := seedExpireRows(t, []string{expireGoneID})
+			home := t.TempDir()
+			args := []string{"--store-path", stateDB(storeHome), "serve", "--stdio"}
+			if position == "after stdio" {
+				args = []string{"serve", "--stdio", "--store-path", stateDB(storeHome)}
+			}
+			srv := startServeArgs(t, binaryPath, home, args,
+				fakeTmuxEnv(t, storeHome, buildFakeTmux(t))...)
+			t.Cleanup(srv.kill)
+			srv.initialize(t)
 
-	srv.listIncludes(t, expireGoneID)
-	text := srv.callToolOK(t, "expire", `{"older_than":"1h"}`)
-	srv.stop(t)
+			srv.listIncludes(t, expireGoneID)
+			text := srv.callToolOK(t, "expire", `{"older_than":"1h"}`)
+			srv.stop(t)
 
-	var res struct {
-		IDs []string `json:"ids"`
-	}
-	if err := json.Unmarshal([]byte(text), &res); err != nil || !slices.Equal(res.IDs, []string{expireGoneID}) {
-		t.Errorf("expire tool text = %q; want ids [%s]", text, expireGoneID)
-	}
-	if _, err := apitest.ReadSpawnColumns(stateDB(storeHome), expireGoneID); !errors.Is(err, store.ErrSpawnNotFound) {
-		t.Errorf("--store-path store's row after MCP expire: err = %v; want ErrSpawnNotFound", err)
-	}
-	if _, err := os.Stat(stateDB(home)); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("serve created a store under HOME (stat: %v); want only the --store-path store", err)
+			var res struct {
+				IDs []string `json:"ids"`
+			}
+			if err := json.Unmarshal([]byte(text), &res); err != nil || !slices.Equal(res.IDs, []string{expireGoneID}) {
+				t.Errorf("expire tool text = %q; want ids [%s]", text, expireGoneID)
+			}
+			if _, err := apitest.ReadSpawnColumns(stateDB(storeHome), expireGoneID); !errors.Is(err, store.ErrSpawnNotFound) {
+				t.Errorf("--store-path store's row after MCP expire: err = %v; want ErrSpawnNotFound", err)
+			}
+			if _, err := os.Stat(stateDB(home)); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("serve created a store under HOME (stat: %v); want only the --store-path store", err)
+			}
+		})
 	}
 }
 

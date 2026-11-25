@@ -43,14 +43,7 @@ func trailEmitRelayAttemptHandler(args []string) error {
 		bytesReceived int
 		instanceID    string
 	)
-	fs := flag.NewFlagSet("trail-emit relay-attempt", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&token, "token", "", "request_token (required)")
-	fs.StringVar(&endpoint, "endpoint", "", "target_endpoint URL or socket path (required)")
-	fs.StringVar(&outcomeStr, "outcome", "", "3-digit HTTP status code (100-599) or named class: connection_refused, timeout, dns_failure (required)")
-	fs.Var(newDecimalInt(&bytesSent, 0), "bytes-sent", "bytes sent (a negative value is refused)")
-	fs.Var(newDecimalInt(&bytesReceived, 0), "bytes-received", "bytes received (a negative value is refused)")
-	fs.StringVar(&instanceID, "instance-id", "", "instance_id (required)")
+	fs := trailEmitRelayAttemptFlagSet(&token, &endpoint, &outcomeStr, &bytesSent, &bytesReceived, &instanceID)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -115,4 +108,17 @@ func parseRelayOutcome(s string) (any, error) {
 	}
 	return nil, fmt.Errorf(
 		"--outcome %q is not a valid HTTP status code (100-599) or named class (connection_refused, timeout, dns_failure)", s)
+}
+
+// trailEmitRelayAttemptFlagSet defines trail-emit relay-attempt's flags for both global scanning and the handler.
+func trailEmitRelayAttemptFlagSet(token *string, endpoint *string, outcomeStr *string, bytesSent *int, bytesReceived *int, instanceID *string) *flag.FlagSet {
+	fs := flag.NewFlagSet("trail-emit relay-attempt", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(token, "token", "", "request_token (required)")
+	fs.StringVar(endpoint, "endpoint", "", "target_endpoint URL or socket path (required)")
+	fs.StringVar(outcomeStr, "outcome", "", "3-digit HTTP status code (100-599) or named class: connection_refused, timeout, dns_failure (required)")
+	fs.Var(newDecimalInt(bytesSent, 0), "bytes-sent", "bytes sent (a negative value is refused)")
+	fs.Var(newDecimalInt(bytesReceived, 0), "bytes-received", "bytes received (a negative value is refused)")
+	fs.StringVar(instanceID, "instance-id", "", "instance_id (required)")
+	return fs
 }

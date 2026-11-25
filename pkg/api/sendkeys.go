@@ -1398,7 +1398,8 @@ func (c *Client) SendKeys(params SendKeysParams) (SendKeysResult, error) {
 // pending Claude fallback's readiness wait (not_started with nothing typed),
 // input admission, intent commits and macOS paced Claude typing's pauses and
 // between-piece checks (not_started before the first piece,
-// partial_input_unconfirmed after one). A begun transport can still be
+// partial_input_unconfirmed after one), and pending fallback hook observation
+// (submission remains unknown after input). A begun transport can still be
 // ambiguous; it is never retried here.
 func (c *Client) SendKeysContext(ctx context.Context, params SendKeysParams) (SendKeysResult, error) {
 	if err := c.checkClosed(); err != nil {

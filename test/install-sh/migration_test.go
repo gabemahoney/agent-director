@@ -97,6 +97,142 @@ func TestMigrationEndToEnd(t *testing.T) {
 	}
 }
 
+// b.mte: copies can retain a rotated credential; every later install and plain
+// uninstall must name them with a warning, while keeping their bytes and modes.
+func TestMigrationCopyWarnings(t *testing.T) {
+	h := newMoveHome(t)
+	const oldValue = "decoy-old-0000-not-a-real-token"
+	const newValue = "decoy-new-1111-not-a-real-token"
+	const name = "tok,o'q\"$x`y`"
+	template := "name = \"tok\"\nclaude_args = [\"--model\", \"opus\"]\n\n[extra_env]\nSERVICE_TOKEN = \"" + oldValue + "\"\n"
+	h.migLay(h.New, migStoreBelow, migOldConfig, migFile{Name: "templates/" + name + ".toml", Text: template, Mode: 0o600})
+	live := filepath.Join(h.New, "templates", name+".toml")
+	crossing := moveMustInstall(t, h)
+
+	var copies, rels []string
+	for _, path := range []string{filepath.Join(h.New, "config.toml"), live} {
+		backups := migBackups(path)
+		if len(backups) != 1 {
+			t.Fatalf("copies of %s = %v, want exactly one", path, backups)
+		}
+		copies = append(copies, backups[0])
+		rel, err := filepath.Rel(h.Home, backups[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		rels = append(rels, rel)
+	}
+	if got := h.migRead(copies[1]); got != template {
+		t.Fatal("template copy does not hold the original bytes")
+	}
+	kept := h.Snapshot()
+	checkOutput := func(stage, stdout, stderr, phrase string) {
+		t.Helper()
+		output := stdout + "\n" + stderr
+		for _, value := range []string{oldValue, newValue} {
+			if strings.Contains(output, value) {
+				t.Errorf("%s printed a decoy credential", stage)
+			}
+		}
+		if phrase != "" {
+			if got := copiesNamed(t, output, phrase, "agent-rename copies"); !reflect.DeepEqual(got, copies) {
+				t.Errorf("%s inventory names %q; want exactly %q", stage, got, copies)
+			}
+			return
+		}
+		for _, copy := range copies {
+			quoted := h.Run(h.S.Bash, "-c", `printf '%q' "$1"`, "bash", copy)
+			if quoted.Code != 0 {
+				t.Fatalf("quoting a migration-copy path: %+v", quoted)
+			}
+			found := false
+			for _, line := range strings.Split(output, "\n") {
+				if strings.Contains(line, "migrate :") && strings.Contains(line, quoted.Stdout) && strings.Contains(line, "token") {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("%s lacks a migrate line naming %s and warning about tokens", stage, copy)
+			}
+		}
+	}
+	checkOutput("crossing install", crossing.Stdout, crossing.Stderr, "")
+
+	// Rotate only the live value. A user's similarly named file is not a
+	// migration copy, and must not be included in the later warning scans.
+	h.Write(live, strings.Replace(h.migRead(live), oldValue, newValue, 1), 0o600)
+	other := live + ".pre-agent-rename.mine"
+	h.Write(other, template, 0o600)
+	later := moveMustInstall(t, h)
+	checkOutput("later install", later.Stdout, later.Stderr, installRenameCopies)
+	if strings.Contains(later.Stdout+later.Stderr, ".pre-agent-rename.mine") {
+		t.Error("later install named a file without a migration timestamp")
+	}
+	migUnchanged(t, kept, h.Snapshot(), rels...)
+
+	out, code := uninstallExit(t, h.Home, "", "", nil)
+	if code != 0 {
+		t.Fatalf("plain uninstall exited %d:\n%s", code, out)
+	}
+	checkOutput("plain uninstall", string(out), "", uninstallRenameCopies)
+	if strings.Contains(string(out), ".pre-agent-rename.mine") {
+		t.Error("plain uninstall named a file without a migration timestamp")
+	}
+	migUnchanged(t, kept, h.Snapshot(), rels...)
+}
+
+const (
+	installRenameCopies   = "  copies  : agent-rename copies may hold tokens and can be deleted once the upgrade is confirmed:"
+	uninstallRenameCopies = "uninstall.sh: agent-rename copies may hold tokens and can be deleted once the upgrade is confirmed:"
+)
+
+// J49 (b.mte): "agent-rename copies may hold tokens and can be deleted once
+// the upgrade is confirmed:". Confirm the upgrade, shell-parse the inventory,
+// delete exactly its paths, and rerun without losing unrelated files.
+func TestAdviceFollow_J49_MigrationCopiesDeleteAndRerun(t *testing.T) {
+	h := newMoveHome(t)
+	const text = "name = \"tok\"\n"
+	const name = "tok,o'q\"$x`y`"
+	h.migLay(h.New, migStoreBelow, migOldConfig, migTemplate(name, text))
+	live := filepath.Join(h.New, "templates", name+".toml")
+	cfg := filepath.Join(h.New, "config.toml")
+	installed := moveMustInstall(t, h)
+	// A successful upgrade has the current store and the migrated live files.
+	if got, want := h.migStoreVersion(filepath.Join(h.New, "state.db")), moveCurrentVersion(t, h); got != want {
+		t.Fatalf("store version = %s; want current %s", got, want)
+	}
+	copies := append(migBackups(cfg), migBackups(live)...)
+	wantKept := map[string]string{cfg: migNewConfig, live: text + "agent = \"claude\"\n"}
+	for _, path := range []string{live + ".pre-agent-rename.mine", filepath.Join(h.New, "notes.txt")} {
+		h.Write(path, "operator-owned\n", 0o600)
+		wantKept[path] = "operator-owned\n"
+	}
+	for path, want := range wantKept {
+		if h.migRead(path) != want {
+			t.Fatalf("upgrade did not leave the expected live/user file %s", path)
+		}
+	}
+	named := copiesNamed(t, installed.Stdout, installRenameCopies, "agent-rename copies")
+	if len(copies) != 2 || !reflect.DeepEqual(named, copies) {
+		t.Fatalf("inventory names %q; want the two crossing copies %q", named, copies)
+	}
+	for _, path := range named {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rerun := moveMustInstall(t, h)
+	if strings.Contains(rerun.Stdout+rerun.Stderr, "agent-rename copies") {
+		t.Error("install still prints the copy inventory after its named paths were deleted")
+	}
+	for path, want := range wantKept {
+		if h.migRead(path) != want {
+			t.Errorf("deleting the inventory and rerunning changed unrelated file %s", path)
+		}
+	}
+}
+
 func TestMigrationBackupsBesideTheMergeBackup(t *testing.T) {
 	h := newMoveHome(t)
 	h.Flags = []string{"--no-symlink"} // hooks on: the inject_help_hook merge makes config.toml.bak.<ts>

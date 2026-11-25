@@ -95,6 +95,9 @@ error:
   files in.
 - A TypeScript call that outlasts `callTimeoutMs` (30 s by default) returns
   `ErrCallTimeout` while the verb may still complete: check the row first.
+  A first send to pending Codex can wait up to 20 s for hooks, plus transport
+  and admission. Raise `callTimeoutMs` if it is below about 25000 ms; slow
+  transport or store contention can require more.
 
 `kill` success on a live row verifies the process checks of that call. A
 finished-row call is a no-op without checking the process; it is not proof
@@ -127,6 +130,15 @@ To end a live row (`pending` included) and relaunch its id:
    longer deliver ([Launch end, resume and reuse](#launch-end-resume-and-reuse)).
 
 ## CLI arguments
+
+The global flags `--store-path`, `--home`, `--tmux-command` and
+`--create-if-missing` accept `--flag value` or `--flag=value`. They count
+before the verb or at a flag position in the verb's grammar. A value-taking
+flag owns its next word whatever it spells; neither that word nor an inline
+`=value` is another flag. Globals stop at the first positional word, genuine
+`--`, unknown flag or malformed flag token. For `get-many`, put all globals
+before the verb ([Reading many agents](#reading-many-agents)).
+`--create-if-missing` always needs a value, exactly `true` or `false`.
 
 After global flags are extracted, a flag-only CLI verb rejects every word
 left after flag parsing with exit 1 and `ErrInvalidFlags`. The description
@@ -910,10 +922,9 @@ To poll many agents, use `list` for their IDs, then one `get-many`:
 agent-director get-many agent-a agent-b
 ```
 
-On the CLI, each word after `get-many` is one ID, unchanged (commas and a
-leading `-` included), except the global flags `--store-path`, `--home`,
-`--tmux-command` and `--create-if-missing`, which the CLI takes anywhere,
-with their values.
+On the CLI, every word after `get-many` is one ID, unchanged, including
+commas, a leading `-`, global-flag spellings and `--`. Put global flags
+before the verb.
 
 Each `spawns` element is exactly that ID's `get` result, with every field and
 guarantee described for `get` in this contract. IDs with no record go to
@@ -1496,8 +1507,11 @@ Enter. Paste framing requires the application to have enabled bracketed paste;
 it does not establish composer readiness.
 
 After successful pending Codex fallback transport, the call observes the same
-launch for up to 2 s for hook-derived `working`, `ask_user` or
-`check_permission`. Success returns `{}` without exact transcript confirmation.
+launch for up to 20 s for hook-derived `working`, `ask_user` or
+`check_permission`: startup hooks can lag accepted input. Pending Claude
+fallback retains a 2 s observation after its readiness checks. An earlier
+caller deadline or cancellation ends observation sooner. Success returns `{}`
+without exact transcript confirmation.
 Without that activity it returns `ErrSubmissionUnconfirmed` with
 `keys_sent: true`, `submission_confirmed: false` and `row_state`, without
 an `outcome`. Read the pane and state instead of resending. Other fallback
