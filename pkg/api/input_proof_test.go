@@ -192,7 +192,13 @@ func TestInputProofSharedFirstRead(t *testing.T) {
 					if err == nil {
 						apitest.AssertConfirmationsShape(t, jsonOf(t, result))
 						assertLists(t, result, nil, nil)
-						if len(result.Checks) != 1 || result.Checks[0].InstanceID != r.ID || result.Checks[0].Completion != "complete" || result.Checks[0].Reason != nil {
+						// b.915: omit finished-at-selection output, but still persist
+						// the late proof checked below without gaining input authority.
+						if finished {
+							if result.Checks == nil || len(result.Checks) != 0 {
+								t.Fatalf("finished proof recovery checks = %+v; want []", result.Checks)
+							}
+						} else if len(result.Checks) != 1 || result.Checks[0].InstanceID != r.ID || result.Checks[0].Completion != "complete" || result.Checks[0].Reason != nil {
 							t.Fatalf("proof recovery check = %+v", result)
 						}
 					}

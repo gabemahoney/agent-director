@@ -558,8 +558,8 @@ case errors.Is(err, api.ErrTmuxSessionConflict):
 ### Sweep
 
 `Client.Sweep(ctx)` returns `(SweepResult, error)` for one bounded all-agent
-pass. `SweepResult.Checks` contains a `SweepCheck` per selected identity, with
-values, three confirmation records and independent `Completion`/`Reason` fields.
+pass. `SweepResult.Checks` contains a `SweepCheck` per identity live at selection,
+with values, three confirmation records and independent `Completion`/`Reason` fields.
 The result also retains `Count`, `IDs`, `Unverified` and `UnverifiedIDs`. See
 [Sweep results](../../docs/caller-contract.md#sweep-results) for membership,
 coverage, counters and failure handling.

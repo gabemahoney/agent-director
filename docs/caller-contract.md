@@ -960,9 +960,15 @@ TypeScript), or `ErrUnknownTool` over MCP. On either refusal, fall back to
 ## Sweep results
 
 Run `agent-director sweep` for one bounded all-agent pass. It selects all stored
-rows once, sorted by `instance_id`. Each selected identity remains in `checks`,
-including finished, changed, removed and unattempted rows; rows created later
-are not added. A per-agent failure does not suppress independent agents.
+rows once, sorted by `instance_id`. `checks` includes only identities whose raw
+state was live at selection (`pending`, `waiting`, `working`, `ask_user` or
+`check_permission`), before settling or recovery. Each remains even if it later
+finishes, changes, disappears or is unattempted; rows created later are not
+added. A per-agent failure does not suppress independent agents.
+
+`checks` omits rows already `ended` or `missing` at selection. Read those rows
+with `status`, `get`, `get-many` or `list`. Finished rows receive eligible recovery
+checks, including late exact input proof.
 
 The result has `checks`, `count`, `ids`, `unverified` and `unverified_ids`.
 All three arrays are non-null, including on an empty store. Each `checks` entry

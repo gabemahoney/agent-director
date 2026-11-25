@@ -15,14 +15,17 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // b.x9o cb: fresh SQLite stores and independent clocks prevent the first
 // alias from performing the second alias's recovery on its behalf.
+// b.915: every live state is selected; already ended/missing rows are absent.
 func TestSweepAliases(t *testing.T) {
 	t.Parallel()
+	const workingSocket = apitest.TestSocket + "-working"
 	var want api.SweepResult
 	for _, entry := range []string{"Sweep", "FindMissing", "Client.Sweep", "Client.FindMissing"} {
 		t.Run(entry, func(t *testing.T) {
@@ -33,9 +36,15 @@ func TestSweepAliases(t *testing.T) {
 			}{
 				{"a-live", store.StateWaiting, 9201}, {"b-gone", store.StateMissing, 9202},
 				{"c-ended", store.StateEnded, 9203}, {"d-pending", store.StatePending, 9204},
+				{"e-working", store.StateWorking, 9205}, {"f-ask", store.StateAskUser, 9206},
+				{"g-permission", store.StateCheckPermission, 9207},
 			} {
+				socket := apitest.TestSocket
+				if row.state == store.StateWorking {
+					socket = workingSocket
+				}
 				_, err := apitest.SeedSpawn(e.dbPath, row.id, row.state, "/tmp", "off", "", false,
-					apitest.WithNoPane(), apitest.WithPID(row.pid), apitest.WithProcStarttime(fmStart),
+					apitest.WithNoPane(), apitest.WithTmuxSocket(socket), apitest.WithPID(row.pid), apitest.WithProcStarttime(fmStart),
 					apitest.WithLaunchStartedAt(e.clock.Now().UnixMilli()))
 				if err != nil {
 					t.Fatal(err)
@@ -43,6 +52,9 @@ func TestSweepAliases(t *testing.T) {
 			}
 			e.pc.Set(9201, procfix.Alive(fmStart))
 			e.pc.Set(9202, procfix.Gone())
+			for _, pid := range []int{9205, 9206, 9207} {
+				e.pc.Set(pid, procfix.Alive(fmStart))
+			}
 			var got api.SweepResult
 			var err error
 			switch entry {
@@ -61,28 +73,92 @@ func TestSweepAliases(t *testing.T) {
 			}
 			assertLists(t, got, nil, nil)
 			apitest.AssertConfirmationsShape(t, jsonOf(t, got))
-			if len(got.Checks) != 4 {
-				t.Fatalf("checks = %+v; want every selected row", got.Checks)
+			if len(got.Checks) != 5 {
+				t.Fatalf("checks = %+v; want only rows live at selection", got.Checks)
 			}
-			for i, state := range []string{store.StateWaiting, store.StateMissing, store.StateEnded, store.StatePending} {
+			for i, state := range []string{store.StateWaiting, store.StatePending, store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
 				check := got.Checks[i]
 				if check.State != state || check.Completion != "complete" || check.Reason != nil {
 					t.Errorf("check %d = %+v; want %s, complete/null", i, check, state)
 				}
 			}
-			if got.Checks[2].Confirmations.ProcessLiveness.ConfirmedAt != nil || got.Checks[3].Confirmations.ProcessLiveness.Status != "pending" {
-				t.Error("complete finished/pending checks must not invent successful process evidence")
+			var ids []string
+			for _, check := range got.Checks {
+				ids = append(ids, check.InstanceID)
+			}
+			if !slices.Equal(ids, []string{"a-live", "d-pending", "e-working", "f-ask", "g-permission"}) {
+				t.Errorf("checks IDs = %v; want sorted live-at-selection IDs", ids)
+			}
+			if got.Checks[1].InstanceID != "d-pending" || got.Checks[1].Confirmations.ProcessLiveness.ConfirmedAt != nil || got.Checks[1].Confirmations.ProcessLiveness.Status != "pending" {
+				t.Error("complete pending check must not invent successful process evidence")
 			}
 			if entry == "Sweep" {
 				want = got
 			} else if !reflect.DeepEqual(got, want) {
 				t.Errorf("%s = %s; Sweep = %s", entry, jsonOf(t, got), jsonOf(t, want))
 			}
-			if calls := e.pc.StartTimeCalls(); !slices.Equal(calls, []int{9201}) {
+			if calls := e.pc.StartTimeCalls(); !slices.Equal(calls, []int{9201, 9205, 9206, 9207}) {
 				t.Errorf("process calls %v; want one per eligible selected row", calls)
 			}
-			e.assertNoTmuxCall(t)
+			// Only e-working's idle-screen display adapter attempts a pane lookup.
+			// Its distinct socket keeps other rows' unexpected lookups visible.
+			e.assertPaneCalls(t, tmux.CallLookup)
+			if calls, want := e.rec.SocketCalls(), []tmuxfix.SocketCall{{Call: tmux.CallLookup, Socket: workingSocket}}; !reflect.DeepEqual(calls, want) {
+				t.Errorf("socket calls = %+v; want only e-working display lookup %+v", calls, want)
+			}
 		})
+	}
+}
+
+// b.915: empty and finished-only stores both retain the non-null envelope.
+func TestSweepNoLiveRows(t *testing.T) {
+	t.Parallel()
+	for _, canonical := range []bool{false, true} {
+		for _, states := range [][]string{nil, {store.StateEnded, store.StateMissing}} {
+			e := newKillEnv(t)
+			for _, state := range states {
+				e.seedRow(t, killRowSpec{State: state})
+			}
+			got := mustSweep(t, e.st, e.pc, fmSweep{canonical: canonical, tmux: e.rec, clock: e.clock})
+			if raw := jsonOf(t, got); raw != `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[]}` {
+				t.Errorf("canonical=%v states=%v: %s", canonical, states, raw)
+			}
+			if calls := e.pc.StartTimeCalls(); len(calls) != 0 {
+				t.Errorf("finished rows were probed: %v", calls)
+			}
+			e.assertNoTmuxCall(t)
+		}
+	}
+}
+
+// b.915: membership uses the selected raw lifecycle state, while the returned
+// state keeps its existing settled presentation, including a terminal value.
+func TestSweepMembershipUsesRawState(t *testing.T) {
+	t.Parallel()
+	for _, canonical := range []bool{false, true} {
+		e := newKillEnv(t)
+		live := e.seedRow(t, killRowSpec{State: store.StateWorking, Opts: []apitest.SpawnOption{
+			apitest.WithSettle(store.StateEnded, e.clock.Now().UnixMilli()),
+		}})
+		e.seedRow(t, killRowSpec{State: store.StateEnded, Opts: []apitest.SpawnOption{
+			apitest.WithSettle(store.StateWorking, e.clock.Now().UnixMilli()),
+		}})
+		c := settleClientFor(t, e.dbPath, settleMax, e.rec, e.clock.Now)
+		api.SetProcCheckerForTest(c, e.pc)
+		var got api.SweepResult
+		var err error
+		if canonical {
+			got, err = c.Sweep(context.Background())
+		} else {
+			got, err = c.FindMissing(context.Background())
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertLists(t, got, nil, nil)
+		if len(got.Checks) != 1 || got.Checks[0].InstanceID != live.ID || got.Checks[0].State != store.StateEnded {
+			t.Errorf("raw-live selection with settled state = %+v", got.Checks)
+		}
 	}
 }
 
@@ -92,7 +168,7 @@ func TestSweepCancellationRetainsSelectedEvidence(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
 	a := e.seedRow(t, killRowSpec{State: store.StateWorking, Opts: []apitest.SpawnOption{apitest.WithIdleScreenTimeout(60)}})
-	b := e.seedRow(t, killRowSpec{State: store.StateEnded})
+	e.seedRow(t, killRowSpec{State: store.StateEnded}) // b.915: absent even when cancellation prevents all work.
 	if hook := apitest.ApplyAgentHook(t, e.dbPath, a.ID, "PreToolUse", ""); !hook.Applied {
 		t.Fatalf("PreToolUse = %+v", hook)
 	}
@@ -103,8 +179,7 @@ func TestSweepCancellationRetainsSelectedEvidence(t *testing.T) {
 	mustSweep(t, e.st, e.pc, fmSweep{canonical: true, clock: e.clock, tmux: e.rec})
 	e.clock.Advance(time.Minute)
 	before := mustSweep(t, e.st, e.pc, fmSweep{canonical: true, clock: e.clock, tmux: e.rec})
-	wantIDs := []string{a.ID, b.ID}
-	slices.Sort(wantIDs)
+	wantIDs := []string{a.ID}
 	var ids []string
 	for _, row := range before.Checks {
 		ids = append(ids, row.InstanceID)
@@ -120,12 +195,6 @@ func TestSweepCancellationRetainsSelectedEvidence(t *testing.T) {
 			} {
 				if record.Status != "confirmed" || record.ConfirmedAt == nil || record.CheckedAt == nil || record.Source == nil || *record.Source != source || record.Reason != nil {
 					t.Fatalf("fixture lacks populated %s evidence: %s", source, conf(record))
-				}
-			}
-		} else {
-			for _, record := range []api.Confirmation{row.Confirmations.State, row.Confirmations.ProcessLiveness, row.Confirmations.DisplayedState} {
-				if conf(record) != unknownRecord("no_evidence") {
-					t.Fatalf("finished fixture gained evidence: %s", jsonOf(t, row))
 				}
 			}
 		}
@@ -145,7 +214,7 @@ func TestSweepCancellationRetainsSelectedEvidence(t *testing.T) {
 	}
 	assertLists(t, got, nil, nil)
 	if len(got.Checks) != len(before.Checks) {
-		t.Fatalf("checks = %+v; want all selected rows", got.Checks)
+		t.Fatalf("checks = %+v; want all rows live at selection", got.Checks)
 	}
 	for i, row := range got.Checks {
 		want := before.Checks[i]
@@ -260,9 +329,14 @@ func TestSweepFixedSnapshot(t *testing.T) {
 	e := newKillEnv(t)
 	removed := e.seedRow(t, killRowSpec{State: store.StateWorking, Agent: agentGone})
 	changed := e.seedRow(t, killRowSpec{State: store.StateWorking, Agent: agentGone})
-	finished := e.seedRow(t, killRowSpec{State: store.StateEnded})
+	endedDuring := e.seedRow(t, killRowSpec{State: store.StateWorking})
+	e.seedRow(t, killRowSpec{State: store.StateEnded})
 	var added killRow
 	s := interleavedStore{Store: e.st, between: func() {
+		// b.915: a row finished by another writer after selection stays represented.
+		if hook := apitest.ApplyAgentHook(t, e.dbPath, endedDuring.ID, "SessionEnd", ""); !hook.Applied {
+			t.Fatalf("SessionEnd = %+v", hook)
+		}
 		cursorReadSQL(t, e.dbPath, "DELETE FROM spawns WHERE instance_id=?", removed.ID)
 		cursorReadSQL(t, e.dbPath, "UPDATE spawns SET launch_token=?, row_version=row_version+1 WHERE instance_id=?", tmuxfix.OtherToken, changed.ID)
 		added = e.seedRow(t, killRowSpec{State: store.StateWorking, Agent: agentGone})
@@ -282,7 +356,7 @@ func TestSweepFixedSnapshot(t *testing.T) {
 			t.Errorf("old evidence qualified new owner: %+v", row)
 		}
 	}
-	want := []string{removed.ID, changed.ID, finished.ID}
+	want := []string{removed.ID, changed.ID, endedDuring.ID}
 	slices.Sort(want)
 	if !slices.Equal(ids, want) {
 		t.Errorf("selected IDs %v; want %v once each", ids, want)

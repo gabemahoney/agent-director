@@ -5623,9 +5623,10 @@ invocation-owned `activeReadStore` in `pkg/api/active_checks.go`. Status/Get
 select one ID; List validates filters, selects stored state/display matches
 and applies its limit once. `Sweep` / `Client.Sweep` and their retained
 `FindMissing` / `Client.FindMissing` aliases use `findMissingChecked`, which
-selects all agents through `RecoveryRows(nil, settle)`. `activeRefresh` only
-projects already-selected IDs: it never reapplies filters, fills limit slots or
-probes hidden descendants.
+selects all agents through `RecoveryRows(nil, settle)`, retaining finished rows
+for late native proof recovery. Only agents whose raw state was live in that
+snapshot appear in `checks`. `activeRefresh` projects only selected IDs: it never
+reapplies filters, fills limit slots or probes hidden descendants.
 Family fields use the consistent stored projection, with unconfirmed freshness.
 
 **Must reuse for get-many:** `Client.GetMany` calls Get's complete one-ID read,
@@ -5777,8 +5778,10 @@ No provider is manufactured from the host environment. Reads never wait for a
 state change and do not send input, answer requests, replay, signal, restart or
 schedule work. Other read surfaces retain their existing scoped checks.
 
-`activeReadStore.sweepChecks` in `pkg/api/sweep.go` assembles every selected
-row through `mainFields` after deferred outcomes are known. `SweepResult` aliases
+`activeReadStore.sweepChecks` in `pkg/api/sweep.go` filters the original sorted
+selection by raw live state, then projects each retained identity's final checked
+row through `mainFields` after deferred outcomes are known. Later finishes,
+changes, removals and unattempted work do not alter membership. `SweepResult` aliases
 `FindMissingResult`, adding `Checks` without changing the guarded counters.
 **Must reuse:** extend this checker, outcome consumer and projector for sweep
 results; never add a second sampler or derive confirmations from response time.
@@ -20176,8 +20179,10 @@ step). The evidence model, notes, guard and marking order are in
    projection carries the sampled row/launch/process/turn/request-epoch identity
    needed by the adapters, including CWD for native proof. Finished rows skip
    liveness, turn, permission, display and transcript checks; only late exact
-   native proof remains eligible. A selection failure fails the sweep. Legacy
-   providers without `RecoveryRows` retain only their live-identity and
+   native proof remains eligible, but they are omitted from `checks`. Membership
+   uses the snapshot's raw state, before settling or recovery. A selection failure
+   fails the sweep. Legacy providers without `RecoveryRows` retain only their
+   live-identity and
    provisional-transcript capabilities, as described under
    [shared active checks](#shared-active-checks).
 2. A `pending` row inside the pending grace period receives no live-agent checks
@@ -20370,8 +20375,9 @@ again on the next run. A run spends at most the budget plus one call on
 tmux. `Client.Sweep` passes the value from
 `config.Tmux.EffectiveSweepBudget`. tmux problems never fail the sweep.
 
-**The result.** `checks` retains the sorted fixed selection, including finished,
-removed and unattempted rows; see [Sweep results](caller-contract.md#sweep-results).
+**The result.** `checks` retains the sorted identities live at selection, even if
+they later finish, change, disappear or are unattempted; see
+[Sweep results](caller-contract.md#sweep-results).
 It consumes shared outcomes independently of the counters. `ids` / `count`
 are the rows marked `missing` this sweep,
 on process or tmux evidence. A Codex row the sweep moved to `ended` is
@@ -20420,7 +20426,7 @@ not finish within its bound (nothing was checked), and keeps
 | File | Holds | Must use |
 | --- | --- | --- |
 | `find_missing_lookup.go` | `lookupRow` (SR-11.3's table), `oursRow`, `adoptedPaneRow`, `lookupMarkRow`, `emitRowNameHeld`, `notCalledNote` (each row's `tmux.Launch` comes from the shared `rowLaunch`, `lookup_outcome.go`). | The one mapping from a sweep row's lookup to its mark or note; a sweep never decides a row from a `tmux.Result` another way. |
-| `find_missing_writes.go` | The per-row outcome writers, shared by the process path and the tmux path: `markMissingSameLife` (the pinned marking order: guarded `MarkMissingIfSameLife`, whose transaction also closes the row's open permission requests and running subagent entries, then one `ad.find_missing.tick` with any extra fields the tmux path passes), `markEndedSameLife` (end-report recovery: guarded `MarkEndedIfSameLife` through `EndedMover`, whose transaction makes the same closes, then one `ad.find_missing.tick` with `new_state` `ended`, the reason and extra fields the caller passes; not in `ids` or `unverified_ids`; shared by the sweep's two gone-process paths, `goneRow`, and by pause's end-report check; [signal pause](#busy-uncovered-codex-pause) supplies its bounded adapter), `writeLivenessNote` (skips a note equal to the one read; the guarded `SetLivenessNoteIfSameLife`; the SR-11.4 tick rule in `noteTickReason`, emitted by `emitNoteTick`), `clearLivenessNote` (no write for a row with no note; the guarded `ClearLivenessIfSameLife`, no tick) and `writeUnreportedNote` (b.kdf: no write for a row already noted `unreported`; the guarded `NoteUnreportedIfSameLife`; the same tick rule through `emitNoteTick`; not in `ids` or `unverified_ids`; its caller `aliveRow` never passes a row noted `provenance_conflict`). Each takes the snapshot to guard on (the read one, or the adoption's) and returns a `findMissingWrite`; a changed, absent or failed write ticks nothing and adds to neither list. All selected rows remain in `checks`; store errors are logged through `logFindMissing`. | The only way a sweep marks, notes or clears a row: every mark, Codex move, note write, clear and `unreported` note (process or tmux evidence, adopted or not) goes through these five writers; a sweep's Codex end-report recovery uses `markEndedSameLife` only after proven process exit and an end report; never call the guarded store writes, write a tick or deny permission requests for a sweep row another way. |
+| `find_missing_writes.go` | The per-row outcome writers, shared by the process path and the tmux path: `markMissingSameLife` (the pinned marking order: guarded `MarkMissingIfSameLife`, whose transaction also closes the row's open permission requests and running subagent entries, then one `ad.find_missing.tick` with any extra fields the tmux path passes), `markEndedSameLife` (end-report recovery: guarded `MarkEndedIfSameLife` through `EndedMover`, whose transaction makes the same closes, then one `ad.find_missing.tick` with `new_state` `ended`, the reason and extra fields the caller passes; not in `ids` or `unverified_ids`; shared by the sweep's two gone-process paths, `goneRow`, and by pause's end-report check; [signal pause](#busy-uncovered-codex-pause) supplies its bounded adapter), `writeLivenessNote` (skips a note equal to the one read; the guarded `SetLivenessNoteIfSameLife`; the SR-11.4 tick rule in `noteTickReason`, emitted by `emitNoteTick`), `clearLivenessNote` (no write for a row with no note; the guarded `ClearLivenessIfSameLife`, no tick) and `writeUnreportedNote` (b.kdf: no write for a row already noted `unreported`; the guarded `NoteUnreportedIfSameLife`; the same tick rule through `emitNoteTick`; not in `ids` or `unverified_ids`; its caller `aliveRow` never passes a row noted `provenance_conflict`). Each takes the snapshot to guard on (the read one, or the adoption's) and returns a `findMissingWrite`; a changed, absent or failed write ticks nothing and adds to neither list. All identities live at selection remain in `checks`; store errors are logged through `logFindMissing`. | The only way a sweep marks, notes or clears a row: every mark, Codex move, note write, clear and `unreported` note (process or tmux evidence, adopted or not) goes through these five writers; a sweep's Codex end-report recovery uses `markEndedSameLife` only after proven process exit and an end report; never call the guarded store writes, write a tick or deny permission requests for a sweep row another way. |
 | `sweep_socket.go` | `sweepSockets.forRow(recorded)`: the socket a sweep row's calls use, the caller's resolved at most once per run for rows that record none, creating nothing; a refused resolution gives tmux unavailable, then not called. It implements SR-3.3's socket rule for a sweep (a recorded socket exactly as recorded; none recorded: the caller's socket, resolved as tmux would through `rowSocket` / `spawn.ResolveQuerySocket`, creating nothing, LFR H1), with SR-3.15's stop after a refusal. | The shared no-socket helper: every sweep (`find-missing`, and `expire` for each row that reaches its lookup) takes a row's socket from one `sweepSockets` per run; never resolve a sweep row's socket another way. |
 
 `missing` is a check's judgement on available evidence, not

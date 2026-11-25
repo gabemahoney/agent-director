@@ -19,7 +19,8 @@ import (
 )
 
 // cursorStartupRead is id's state as verb reports it; marked is whether a
-// Sweep listed id in its ids (always false for the reads).
+// Sweep listed id in its ids (always false for the reads). For Sweep, an
+// empty state means id was absent from checks.
 func cursorStartupRead(c *api.Client, verb, id string) (state string, marked bool, err error) {
 	switch verb {
 	case "Get":
@@ -58,9 +59,10 @@ func cursorStartupRead(c *api.Client, verb, id string) (state string, marked boo
 }
 
 // A pending Cursor launch whose Helper gateway is exactly gone reads missing on
-// every read and sweep, also inside the pending grace period or while its
+// every read and its first sweep, also inside the pending grace period or while its
 // launch owner lives (b.x9o, MI Q2A); an alive or unknown gateway is noted
 // only when no pending protection holds the row, and untouched while it does.
+// b.915: a later sweep omits the already-missing row from checks and ids.
 func TestCursorStartupAbsentBindingReads(t *testing.T) {
 	// Serial: deadline-sensitive real-store setup runs outside the parallel API fixture wave.
 	for _, verb := range []string{"Get", "Status", "List", "Sweep"} {
@@ -110,8 +112,12 @@ func cursorStartupAbsentBindingRead(t *testing.T, verb, protection, verdict stri
 		callStart := time.Now()
 		state, marked, err := cursorStartupRead(c, verb, b.InstanceID)
 		t.Logf("startup read start=%s elapsed=%v", callStart.Format(time.RFC3339Nano), time.Since(callStart))
-		if err != nil || state != want {
-			t.Errorf("%s gateway=%s no runtime binding: state=%q err=%v want=%s", verb, verdict, state, err, want)
+		wantState := want
+		if verb == "Sweep" && i == 1 && verdict == "gone" {
+			wantState = "" // Already missing at selection: absent from checks (b.915).
+		}
+		if err != nil || state != wantState {
+			t.Errorf("%s gateway=%s no runtime binding: state=%q err=%v want=%q", verb, verdict, state, err, wantState)
 		}
 		// Only the sweep that made the mark lists it.
 		if wantMarked := verb == "Sweep" && i == 0 && verdict == "gone"; marked != wantMarked {

@@ -7,6 +7,7 @@ package main_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"slices"
@@ -95,6 +96,9 @@ func testRecoveryCLIArgvTwinDiscrimination(t *testing.T, verb string) {
 		t.Fatalf("kill: %v", err)
 	}
 	_, _ = killed.Process.Wait() // reaped: the pid is gone, not a zombie
+	// b.915: finished rows do not join the two live-at-selection twins.
+	seedFindMissingRow(t, home, "id-twin-ended", store.StateEnded, apitest.WithNoPane())
+	seedFindMissingRow(t, home, "id-twin-missing", store.StateMissing, apitest.WithNoPane())
 
 	res := runFindMissing(t, home, nil, verb)
 	if !slices.Equal(res.IDs, []string{killedID}) || res.Count != 1 || res.Unverified != 0 {
@@ -122,6 +126,63 @@ func testRecoveryCLIArgvTwinDiscrimination(t *testing.T, verb string) {
 	if len(ticks) != 1 || ticks[0]["instance_id"] != killedID || ticks[0]["reconciliation_reason"] != "proc_absent" ||
 		ticks[0]["source"] != "ad_find_missing" {
 		t.Errorf("ticks = %v; want one proc_absent tick for %s from ad_find_missing", ticks, killedID)
+	}
+}
+
+// b.915: finished history must not inflate either CLI spelling's output.
+func TestB915SweepOutputScalesWithFinishedRows(t *testing.T) {
+	for _, verb := range []string{"sweep", "find-missing"} {
+		t.Run(verb, func(t *testing.T) {
+			sizes := map[int]int{}
+			for _, finished := range []int{0, 400} {
+				home := t.TempDir()
+				const killedID = "id-b915-killed"
+				cmd := exec.Command("sleep", "3600")
+				if err := cmd.Start(); err != nil {
+					t.Fatalf("start sleep: %v", err)
+				}
+				t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+				pid := cmd.Process.Pid
+				start := procstat.ReadStarttime(t, pid)
+				seedFindMissingRow(t, home, killedID, store.StateWorking, apitest.WithPID(pid), apitest.WithProcStarttime(start),
+					apitest.WithLaunchIdentity(store.LaunchIdentity{Socket: apitest.TestSocket, PaneID: apitest.TestPaneID,
+						PanePID: pid, PaneStarttime: start}))
+				for i := 0; i < finished; i++ {
+					state := store.StateEnded
+					if i%3 == 0 {
+						state = store.StateMissing
+					}
+					seedFindMissingRow(t, home, fmt.Sprintf("id-b915-fin-%04d", i), state, apitest.WithNoPane())
+				}
+				if err := cmd.Process.Kill(); err != nil {
+					t.Fatalf("kill: %v", err)
+				}
+				_, _ = cmd.Process.Wait() // no zombie can qualify as a live process
+
+				stdout, stderr, code := runSpawnCLIEnv(t, home, buildFakeTmux(t), nil, verb)
+				if code != 0 {
+					t.Fatalf("%s exit = %d\nstderr=%s", verb, code, stderr)
+				}
+				var got api.SweepResult
+				if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+					t.Fatalf("stdout not JSON: %v", err)
+				}
+				sizes[finished] = len(stdout)
+				t.Logf("verb=%s finished_rows=%d stdout_bytes=%d checks=%d ids=%v count=%d",
+					verb, finished, len(stdout), len(got.Checks), got.IDs, got.Count)
+				if got.Count != 1 || !slices.Equal(got.IDs, []string{killedID}) || got.Unverified != 0 || got.UnverifiedIDs == nil || len(got.UnverifiedIDs) != 0 {
+					t.Errorf("legacy counters changed: %+v", got)
+				}
+				if len(got.Checks) != 1 || got.Checks[0].InstanceID != killedID || got.Checks[0].State != store.StateMissing {
+					t.Errorf("checks = %+v; want only %s, live at selection and now missing", got.Checks, killedID)
+				}
+			}
+			// The only retained row has the same ID and values in both runs;
+			// fixed-width UTC millisecond evidence makes stdout lengths equal.
+			if sizes[400] != sizes[0] {
+				t.Errorf("stdout grew with finished history: %d bytes with 400 rows; want %d with none", sizes[400], sizes[0])
+			}
+		})
 	}
 }
 

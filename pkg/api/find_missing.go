@@ -122,7 +122,8 @@ type ProvisionalTranscript = store.ProvisionalTranscript
 // JSON envelope is deterministic across runs). A Codex row the sweep moved to
 // `ended` (its agent process gone, with an end report) is in neither.
 type FindMissingResult struct {
-	// Checks retains every selected agent, with independent evidence and coverage.
+	// Checks retains agents whose raw state was live at selection, with
+	// independent evidence and coverage even if they later finish or change.
 	Checks []SweepCheck `json:"checks"`
 	// Count is the number of rows this sweep marked missing: the length of
 	// IDs. A Codex row moved to ended is not counted.
@@ -510,7 +511,7 @@ func findMissingChecked(ctx context.Context, s FindMissingStore, view RelayView,
 			checked.display, checked.displayEvidence = proof.Row.CommittedDisplay(), proof.Row.DisplayEvidence
 		}
 	}
-	run.missing.Checks = run.sweepChecks()
+	run.missing.Checks = run.sweepChecks(rows)
 	return run.missing, nil
 }
 
@@ -799,8 +800,8 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 	}
 }
 
-// FindMissing delegates to Client.Sweep, including its fixed all-agent
-// checks and completeness contract. Its legacy counters reconcile live rows
+// FindMissing delegates to Client.Sweep, including its live-at-selection
+// Checks membership and completeness contract. Its legacy counters reconcile live rows
 // against their agents' processes and,
 // where a process cannot be checked, against tmux. Each live row's liveness
 // comes only from its agent process, checked by its recorded start time: the
