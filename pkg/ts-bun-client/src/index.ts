@@ -88,6 +88,7 @@ export {
   ErrPaneAnswerInProgress,
   ErrClaimTooSoon,
   ErrDialogMaybeOpen,
+  ErrCodexTurnErrored,
   ErrInvalidDecision,
   ErrNoOpenPermissionRequest,
   ErrAlreadyDecided,

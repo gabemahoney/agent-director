@@ -40,6 +40,8 @@ error:
   `send-keys`, follow [Manual input ownership](#manual-input-ownership).
 - `ErrCantSend`: nothing was stored, sent or typed; act on its `reason`
   ([Busy-send refusals](#busy-send-refusals)).
+- `ErrCodexTurnErrored`: nothing was sent; inspection is required before more
+  input. Follow [A Codex turn that ends in an error](#a-codex-turn-that-ends-in-an-error).
 - `ErrSendAcceptedForceFailed`: the Message was accepted or its pair repeated,
   but its force step failed. Never send it as new; follow
   [Stored force attempts](#stored-force-attempts).
@@ -1291,9 +1293,54 @@ capacity. The row reads `working` until a check finds the turn's end in
 Codex's rollout: a `status` or `get` of that row, a `get-many` naming it,
 a `list` selecting it, or `sweep` can move it to `waiting` (shown after any
 [settle time](configuration.md#settle-time-state)). Keep polling `status` as for
-any turn. `waiting` does not mean the turn succeeded: read the pane for the
-error before sending more work. The row's `state_changed_at` is the time of
+any turn. `waiting` does not mean the turn succeeded or that its composer is
+ready: the pane can show a menu. The row's `state_changed_at` is the time of
 that recovery write, not of the turn's end.
+
+`get` carries `last_turn_errored: boolean | null` at the top level;
+`get-many` carries it in every found `spawns` row (exactly `get`'s shape), and
+`list` in every `spawns` row. The key is always present on those surfaces,
+never on `status` or `sweep`:
+
+- `true`: the current Codex session's latest observed turn boundary is a
+  completion with `payload.error` present. Its value is never read;
+  `"error": null` also counts as present.
+- `false`: that boundary is a completion without the error key, or a new
+  `task_started`.
+- `null`: another agent, or unavailable bounded rollout evidence, including
+  a missing/unreadable rollout or no usable turn boundary. This means unknown,
+  never successful completion.
+
+This live observation is independent of state settling and of whether the
+turn's start hook arrived. It detects neither menus nor composer readiness.
+While the errored completion remains observable, reads, sends, menu answers
+and pane-hash checks do not clear it; the next observed `task_started` does.
+It is not retained independently of the rollout, so lost evidence can yield
+`null`. The screen and rollout can change after a read.
+
+When the observation is `true`, ordinary nonempty text plus Enter is refused
+with `ErrCodexTurnErrored`, with no input sent, on relay-on and relay-off rows.
+`--allow-pending` does not bypass it. Have a person or an LLM:
+
+1. Inspect `read-pane`. If the immediate caller cannot interpret the screen,
+   route the inspection to one that can; do not retry automatically.
+2. Answer a menu with `send-keys --key` and the chosen key. Pasted text cannot
+   answer it: `--text 2` can be ignored while its appended Enter accepts the
+   highlighted option.
+3. Inspect again. For intentional text input, pass that read's `pane_sha256`
+   as `--expect-pane-sha256`, with the same `--n-lines` if customized. A changed
+   pane returns `ErrPaneChanged`; inspect it again before choosing input.
+
+The key and inspected-hash paths pass this hold only; state, ownership and
+relay guards still apply. `--no-enter`, empty Enter-only calls and
+request-token answers also fall outside this ordinary-text hold. The first
+two remain manual operations, not an automated menu-recovery sequence.
+None of these operations clears the observation or authorizes replay of
+earlier input. A late pre-input refusal can retain a committed native delivery
+intent, which remains unresolved; do not send a new request to bypass it.
+If any input was already attempted before the error was observed, the result
+is `ErrSubmissionUnconfirmed` instead; follow
+[Ordinary text submission](#ordinary-text-submission).
 
 A turn Codex starts without a `UserPromptSubmit` hook leaves the row in the
 previous turn's state (`waiting` if it ended) until its own `Stop` or
@@ -1301,10 +1348,11 @@ Interrupt; no read ends it.
 
 That move proves none of the turn's permission requests gone. On a relay-on
 row that had a request in that turn, a plain `send-keys` and waiting `pause` can
-then be refused with `ErrDialogMaybeOpen`: have a person or an LLM read the
-pane and send with that read's `pane_sha256` as `--expect-pane-sha256` (to
-stop the agent, send `/exit` that way), as in
-[Permission relay](#permission-relay). The rule and its limits are in
+then be refused with `ErrDialogMaybeOpen`. Relay and dialog refusals take
+precedence over `ErrCodexTurnErrored`; neither the error observation nor
+`--key` bypasses them. Follow [Permission relay](#permission-relay); a matching
+inspected pane hash can pass the dialog hold too (to stop the agent, send
+`/exit` that way). The rule and its limits are in
 [The Codex turn](hooks.md#the-codex-turn).
 
 ## State change time
@@ -1498,6 +1546,11 @@ record, `record_id`: an exact new user record in this launch's native
 transcript proves the normalized text was submitted. Hook activity, a quiet input queue and pane text do not prove it.
 This proves submission, not completion of the agent's turn.
 
+Ordinary Codex input also requires that `last_turn_errored` is not observed
+as `true`; otherwise it returns `ErrCodexTurnErrored` before input. See
+[A Codex turn that ends in an error](#a-codex-turn-that-ends-in-an-error)
+for inspection and manual input, including the limits of `--allow-pending`.
+
 Native delivery for uncovered Codex supports Linux with exactly Codex
 0.159.2, on fresh launches with an ordinary empty composer. For new input, the row must be
 `waiting`, or `pending` with `allow_pending`. A resumed conversation,
@@ -1537,8 +1590,8 @@ file the agent can read and send a short instruction naming that file.
 These restrictions apply to ordinary Codex fallback, not the separate manual
 operations below.
 
-State, permission-relay and dialog guards run before capability selection or
-stored-request observation. `ended` and `missing` rows are always refused
+State, permission-relay, dialog and Codex turn-error guards run before capability
+selection or stored-request observation. `ended` and `missing` rows are always refused
 with `ErrSpawnNotInteractive`, including retries of existing requests.
 Ordinary sends share the [input-admission rules](#manual-input-ownership)
 with manual sends and waiting uncovered `pause`.
@@ -1563,9 +1616,12 @@ late proof without replaying input. Reusing an ID for different text or a
 different pane/process identity is refused. Use a fresh ID for an intentional
 identical turn. If omitted, an immediate repeat of the most recent confirmed
 identical text returns its existing result; this is not a general deduplication
-of every earlier turn. Observing an existing request requires the state,
-permission-relay and dialog guards to pass, and its exact launch and native
-session identity to match. This observation sends no input. An unresolved
+of every earlier turn. Observing an existing request must pass the same guards
+as new ordinary input and match its exact launch and native session identity.
+Repeating a stored `delivery_request_id` while Codex's `last_turn_errored` is
+`true` returns `ErrCodexTurnErrored` instead of reconciling; follow
+[Codex turn errors](#a-codex-turn-that-ends-in-an-error).
+This observation sends no input. An unresolved
 native attempt or unreadable/corrupt stored evidence blocks new input even with
 a new ID or when capability becomes unavailable; fallback never resends it. Request IDs
 do not give fallback sends native confirmation or deduplication. If a different

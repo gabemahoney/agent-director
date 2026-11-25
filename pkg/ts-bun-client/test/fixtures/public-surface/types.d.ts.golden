@@ -283,6 +283,8 @@ export interface Confirmations {
 }
 /** One Spawn row returned by the list verb. */
 export interface ListRow {
+    /** Codex latest task boundary: error-key presence, cleared by task_started; null for other agents or unavailable evidence. Live, independent of state settling; input alone does not clear it or prove readiness. */
+    last_turn_errored: boolean | null;
     /** Fixed supervised-pane contract; omitted for native integrations. Live rows stay pending, context is null, idle screen unavailable and subagents untracked. */
     integration_mode?: "pane_only";
     /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor and pane-only agents. */
@@ -744,6 +746,8 @@ export interface GetParams {
 }
 /** One tracked agent row, with its current session and request facts. */
 export interface GetResult {
+    /** Codex latest task boundary: error-key presence, cleared by task_started; null for other agents or unavailable evidence. Live, independent of state settling; input alone does not clear it or prove readiness. */
+    last_turn_errored: boolean | null;
     /** Published current Launch coverage; pending resume/reuse retains it until successful creation publishes its candidate. */
     busy_send: "covered" | "not_covered";
     /** A covered row's published Agent Defaults; omitted for an uncovered row. */
@@ -942,7 +946,7 @@ export interface SendKeysParams {
      * When true, also allows a pending row: a launch (spawn, reuse or resume)
      * whose agent has not reported in yet. Keys are delivered only to a
      * session started by the row's current launch. ended and missing rows are
-     * still rejected.
+     * still rejected. Does not bypass ErrCodexTurnErrored.
      */
     allow_pending?: boolean;
     /** Type `text` with no Enter after it (plain calls; a pane answer never presses Enter). */
@@ -950,13 +954,15 @@ export interface SendKeysParams {
     /**
      * One key to send instead of text, never followed by Enter: a named key (`"Escape"`,
      * `"Enter"`, `"Up"`, `"Down"`, `"Tab"`) or one character. Required on a pane answer.
+     * Answer menus with key, not pasted text. Passes ErrCodexTurnErrored only; other guards remain.
      */
     key?: string;
     /**
      * The `pane_sha256` of the readPane the keys were chosen from: the pane is captured again
      * with the same `n_lines` (ANSI stripped) and compared byte for byte, `ErrPaneChanged` when it
      * differs (the error does not carry the new hash). Required on a pane answer. On a plain call
-     * a matching hash also passes the hold of a request not proven gone (`ErrDialogMaybeOpen`);
+     * a matching hash also passes the hold of a request not proven gone (`ErrDialogMaybeOpen`)
+     * and the ordinary Codex turn-error hold (`ErrCodexTurnErrored`);
      * every other refusal still applies. Never pass it from an automatic flow: it means a person
      * or LLM judged this exact screen.
      */

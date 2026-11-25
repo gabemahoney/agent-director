@@ -47,7 +47,7 @@ last=""
 # idle_screen and those present only on some.
 status_plain='["confirmations","context","failure_reason","family_state","idle_screen_availability","process_liveness","state"]'
 status_idle='["confirmations","context","displayed_state","failure_reason","family_state","idle_screen_availability","process_liveness","since","state","tmux_session_name","unchanged_minutes"]'
-list_keys='["agent","confirmations","cwd","displayed_state","family_state","idle_screen_availability","instance_id","labels","last_seen_at","permission_requests","process_liveness","relay_mode","started_at","state","state_changed_at","tmux_session_name"]'
+list_keys='["agent","confirmations","cwd","displayed_state","family_state","idle_screen_availability","instance_id","labels","last_seen_at","last_turn_errored","permission_requests","process_liveness","relay_mode","started_at","state","state_changed_at","tmux_session_name"]'
 list_optional='["ended_at","launch_started_at","liveness_note","liveness_unverified_since","parent_id"]'
 # A covered row (every Claude launch; busy send covers Claude Code) also shows
 # agent_defaults on status and list, and delivery on status. launch sets the

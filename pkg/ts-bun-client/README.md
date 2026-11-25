@@ -166,6 +166,11 @@ See [Displayed states](../../docs/caller-contract.md#needs-intelligence-and-idle
 `GetResult` and `ListRow`, but not `StatusResult`, carry
 `state_changed_at: string`; see [State change time](../../docs/caller-contract.md#state-change-time).
 
+`GetResult` (including each `getMany` row) and `ListRow` also carry
+`last_turn_errored: boolean | null`, always present; `StatusResult` omits it.
+See [Codex turn errors](../../docs/caller-contract.md#a-codex-turn-that-ends-in-an-error)
+for observation semantics and the ordinary-send hold.
+
 State and family settling use the binary's
 [`[state] settle_ms`](../../docs/configuration.md#settle-time-state).
 Commands judge live state, which may differ from the reported state.
@@ -731,6 +736,7 @@ and [Settings](../../docs/settings.md). Request handling is in
 |---|---|
 | `ErrSpawnNotFound` | No row matches the supplied `instance_id`. |
 | `ErrSpawnNotInteractive` | The row cannot accept input under the current launch guards. |
+| `ErrCodexTurnErrored` | Ordinary Codex text refused before input; see [Codex turn errors](../../docs/caller-contract.md#a-codex-turn-that-ends-in-an-error). |
 | `ErrSubmissionUnconfirmed` | Submission is unconfirmed; inspect `errDetails` as described under [sendKeys](#sendkeys). |
 | `ErrCantSend` | Busy-send admission or options refused (`agent_not_covered`, identity conflict, unsupported mode, text or capacity limits); nothing stored, sent or typed. Carries `CantSendDetails`; see [Busy-send refusals](../../docs/caller-contract.md#busy-send-refusals). |
 | `ErrSendAcceptedForceFailed` | The Message was accepted or its pair repeated, but its force step failed. Carries the accepted Result in `errDetails`; see [Stored force attempts](../../docs/caller-contract.md#stored-force-attempts). |

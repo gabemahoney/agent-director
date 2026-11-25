@@ -742,7 +742,7 @@ func TestMakeTemplateHasErrorNames(t *testing.T) {
 func TestSendKeysHasInteractErrorNames(t *testing.T) {
 	assertErrorNames(t, "send-keys", "SendKeys", true, "ErrAgentCapabilityUnsupported", "ErrSendKeysWhileRelayed", "ErrSpawnNotFound",
 		"ErrSpawnNotInteractive", "ErrSubmissionUnconfirmed", "ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive",
-		"ErrInvalidFlags", "ErrRelayFallenBack", "ErrDialogMaybeOpen", "ErrNoOpenPermissionRequest", "ErrAlreadyDecided",
+		"ErrInvalidFlags", "ErrRelayFallenBack", "ErrDialogMaybeOpen", "ErrCodexTurnErrored", "ErrNoOpenPermissionRequest", "ErrAlreadyDecided",
 		"ErrPaneAnswerInProgress", "ErrPaneChanged", "ErrStoreBusy", "ErrCantSend", "ErrSendAcceptedForceFailed")
 }
 

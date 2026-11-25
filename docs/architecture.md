@@ -2492,8 +2492,9 @@ bound and 4 MiB line bound. No file time, fixed model capacity, cumulative
 billing count, screen text or read time supplies missing evidence.
 **Must use:** extensions to this source's context-usage evidence reuse the
 bounded reader and state validation rather than scanning independently in a
-verb. The one separate rollout scanner is the turn-end tail read in
-`pkg/api/codex_turn.go` (`codexRolloutEndsTurn`), which decides on the last
+verb. The one separate rollout scanner is the shared task-boundary tail read in
+`pkg/api/codex_turn.go` (`codexRolloutLastTurn`), used by `codexRolloutEndsTurn`
+and `codexLastTurnErrored`. It decides on the last
 `task_started` or `task_complete` within the rollout's last 1 MiB and supplies
 no context evidence (see "The Codex turn" under
 [The agent-aware hook classifier](#the-agent-aware-hook-classifier)).
@@ -6841,9 +6842,10 @@ unique.
   calls `CodexTurnSamples(id)` only for each selected raw `working` Codex row
   with an open recorded turn and `jsonl_path`. Status/Get never check its
   descendants; List never checks excluded rows. `find-missing` can recover a
-  missed end without an intervening read. `codexRolloutEndsTurn`, a tail scanner separate
+  missed end without an intervening read. `codexRolloutEndsTurn` uses the shared
+  `codexRolloutLastTurn` tail scanner, separate
   from the context reader's (see [Experimental context
-  readers](#experimental-context-readers)), opens the rollout as
+  readers](#experimental-context-readers)). It opens the rollout as
   `readCodexContext` does (absolute path whose base name carries the
   session id, `Lstat` regular file, `O_NONBLOCK` open, `SameFile`) and scans
   it backward from the end in rounds of 64 KiB doubling to 1 MiB, each
@@ -6865,6 +6867,17 @@ unique.
   outcome without suppressing independent rows. **Must use:** retain the
   `CodexTurnSamples` sample across rollout access and pass that same sample to
   `EndCodexTurnSample`; do not replace its revision guards with a fresh read.
+- *Turn-error observation.* `codexLastTurnErrored` uses that same bounded
+  scanner independently of lifecycle recovery or state settling. Get/GetMany's
+  `SpawnRow` and each `ListRow` always expose its nullable `last_turn_errored`.
+  The latest `task_complete`'s exact `payload.error` key presence sets it,
+  including a null value; error contents are never decoded, returned or logged.
+  `task_started` resets it. No stored error bit, schema change or cache is
+  involved; unavailable evidence and other agents yield null. **Must use:**
+  future task-boundary observations reuse `codexRolloutLastTurn`, rather than
+  adding a scanner per verb. The signal establishes neither menu presence nor
+  readiness. Caller handling belongs in
+  [Codex turn errors](caller-contract.md#a-codex-turn-that-ends-in-an-error).
 - *Residuals.* A turn Codex begins with no `UserPromptSubmit` leaves
   `codex_turn` on the previous turn until its `Stop` or `Interrupt`: its tool
   hooks keep the row's state, and no read ends it (its `task_started` is
@@ -11987,8 +12000,8 @@ tmux call), on a launch busy send does not cover: the row's `state` must be
 one of `waiting`, `working`, `ask_user`,
 `check_permission`. `ended` and `missing` are refused with
 `ErrSpawnNotInteractive` and no tmux call, with or without
-`allow_pending`. Passive reconciliation of an existing native request runs
-after the state, relay and dialog guards; finished rows cannot return proof.
+`allow_pending`. Passive reconciliation of an existing native request passes
+the [ordinary-input guards](#ordinary-input-delivery); finished rows cannot return proof.
 `pending` is refused the same way unless `allow_pending`
 is set. The agent's first SessionStart hook moves `pending` to `waiting`,
 after which the row is reachable without the flag. A `pending` row noted
@@ -12138,7 +12151,8 @@ id it comes before `ErrSpawnNotFound`), a busy-send option's
 observation of existing native requests. There, finished rows always return
 `ErrSpawnNotInteractive`. That state guard also refuses a
 `pending` row with no launch start or no launch token, so that row keeps
-`ErrSpawnNotInteractive` whatever its name. Then the relay guard and the
+`ErrSpawnNotInteractive` whatever its name. Then the relay/dialog guard, the
+[ordinary-Codex turn-error hold](#ordinary-input-delivery), and the
 unusable-recorded-name check:
 a recorded session name that is empty, holds a control character, or
 holds a character tmux stores differently (`.`, `:`, invalid UTF-8) →
@@ -12146,12 +12160,28 @@ holds a character tmux stores differently (`.`, `:`, invalid UTF-8) →
 removing the row is a human's decision (docs/operator-actions.md). Next resolve
 the row's socket, acquire the launch's writer lock when the row has a launch token,
 select capability and reconcile any ordinary request. These steps cannot mask
-the existing state, relay or dialog refusals. Native framing validation, or
+the preceding refusals. Native framing validation, or
 Codex fallback validation and paste-capability checks, or macOS paced Claude's
 size limit and then pending Claude's terminal-capability check, follow
 reconciliation. Only then perform the initial lookup.
 
 ### Ordinary input delivery
+
+Ordinary Codex sends run `codexTurnErrorGuard` after state and relay/dialog
+guards, before the unusable-name check, capability selection and input preparation. It returns
+`ErrCodexTurnErrored` when the shared [turn-error observation](#the-agent-aware-hook-classifier)
+is true, even for a repeat of a stored `delivery_request_id`: the call refuses
+instead of reconciling. Manual key/hash operations remain outside this ordinary
+hold and retain their separate guards. The send's `admitInput` validator repeats it;
+`guardCodexTurnBeforeWrite` rechecks before each native dispatch or fallback
+paste and Enter, including calls without a journal, because rollout appends
+do not advance SQLite's admission revision. Other guards retain precedence.
+A refusal before any attempted input preserves the named error; a committed
+native intent remains unresolved and monotonic. After attempted input,
+`stopInputValidation`/paste handling reports `ErrSubmissionUnconfirmed`,
+without claiming nothing was sent. No path grants replay authority. Flag
+scope and inspection belong in the
+[caller contract](caller-contract.md#a-codex-turn-that-ends-in-an-error).
 
 **Must use:** all supported native ordinary-text delivery goes through
 `sendKeysRun.deliverOrdinary` in `pkg/api/sendkeys_submission.go` and the
@@ -12291,10 +12321,11 @@ Enter is relabelled `CallSendEnter` so it maps as `typeText`'s Enter after
 text.
 
 **Must use:** ordinary Codex fallback goes through `sendKeysRun.pasteText` and
-the optional `PasteKeysTmux` capability in `internal/tmux/paste.go`.
-Journal-backed calls require `GuardedPasteKeysTmux`, implemented by
-`tmux.Client.PasteKeysPaneGuarded`, to recheck captured admission immediately
-before paste and Enter, including after waited buffer preparation. The existing
+the `GuardedPasteKeysTmux` capability in `internal/tmux/paste.go`, which embeds
+`PasteKeysTmux`. Every such call, with or without a journal, requires
+`tmux.Client.PasteKeysPaneGuarded` or an injected equivalent to recheck admission
+and rollout evidence immediately before paste and Enter, including after waited
+buffer preparation. The existing
 manual-interference record is committed before transport; an unresolved native
 attempt still blocks fallback. Fallback does not claim native proof. The existing public tmux interfaces remain
 source-compatible; an injected adapter without the capability is refused
@@ -12430,7 +12461,7 @@ retain their prefix and metadata; truncation or rewriting refuses proof.
 An unfinished record at the watermark cannot confirm the request. Validated
 owned paths and native session identity are persisted for later passive
 reconciliation, including after a descriptor closes or the process exits,
-provided the row's state, relay and dialog guards still allow the call.
+provided the [ordinary-input guards](#ordinary-input-delivery) still allow the call.
 Multiple exact records are ambiguous and never return submitted.
 
 **Must use:** `internal/inputjournal` owns persisted records, validation, the
@@ -21041,7 +21072,7 @@ adds it here.
 - Native `ErrSubmissionUnconfirmed` distinguishes no automatic input started,
   potentially partial input and an unconfirmed Enter. Neither text nor Enter
   is replayed automatically. Re-issue the same delivery request to observe
-  exact late transcript proof while state, relay and dialog guards allow it;
+  exact late transcript proof while the [ordinary-input guards](#ordinary-input-delivery) allow it;
   an unresolved owner blocks new native text and fallback resends. Fallback
   pending Codex and Claude observation uses hook state without claiming exact
   text proof.

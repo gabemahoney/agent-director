@@ -59,6 +59,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/contextfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/droidfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -155,6 +156,7 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		id                 = fs.String("id", "", "instance_id (UUID); auto-generated if empty")
 		relayMode          = fs.String("relay-mode", "off", "relay_mode value (on|off); defaults to off")
 		sessionID          = fs.String("session-id", "", "session_id; non-empty enables resume pre-flight")
+		codexErroredTurn   = fs.Bool("codex-errored-turn", false, "seed the captured errored Codex turn's agent, session and rollout")
 		contextFixture     = fs.String("context-fixture", "", "named sanitized context fixture; seeds its agent, session and transcript")
 		contextWriterPID   = fs.Int("context-writer-pid", 0, "live test-owned process retained by the caller for fresh Codex context")
 		writerPID          = fs.Int("writer-pid", 0, "live caller process for ordinary read-surface fixtures")
@@ -178,6 +180,10 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 	}
 	if *noIdentity && *socket != "" {
 		printError(stderr, errors.New("--socket and --no-launch-identity cannot be combined"))
+		return 1
+	}
+	if *codexErroredTurn && *contextFixture != "" {
+		printError(stderr, errors.New("--codex-errored-turn and --context-fixture cannot be combined"))
 		return 1
 	}
 	if *id == "" {
@@ -262,6 +268,21 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 			*sessionID, *state = "", store.StatePending
 			opts = append(opts, apitest.WithLaunchIdentity(identity))
 		}
+	}
+	// b.cqr: reuse the sanitized captured turn for TS-to-CLI boundary tests.
+	if *codexErroredTurn {
+		turn := codexfix.ErroredTurn
+		*sessionID = turn.SessionID
+		rollout := filepath.Join(filepath.Dir(*storePath), "rollout-"+*id+"-"+turn.SessionID+".jsonl")
+		if err := os.MkdirAll(filepath.Dir(rollout), 0o700); err != nil {
+			printError(stderr, err)
+			return 1
+		}
+		if err := os.WriteFile(rollout, turn.Ended(), 0o600); err != nil {
+			printError(stderr, err)
+			return 1
+		}
+		opts = append(opts, apitest.WithAgent(store.AgentCodex), apitest.WithNoSubagentTracking(), apitest.WithJsonlPath(rollout))
 	}
 	instanceID, err := apitest.SeedSpawn(*storePath, *id, *state, *cwd, *relayMode, *sessionID, *createStore, opts...)
 	if err != nil {

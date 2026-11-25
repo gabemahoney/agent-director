@@ -59,6 +59,8 @@ type ListParams struct {
 // §12 list shape promises so future store-internal additions don't
 // leak silently.
 type ListRow struct {
+	// LastTurnErrored is the same live nullable observation as SpawnRow's.
+	LastTurnErrored *bool `json:"last_turn_errored"`
 	// IntegrationMode identifies the fixed pane-only capability contract;
 	// omitted for agents with native integration.
 	IntegrationMode string `json:"integration_mode,omitempty"`
@@ -370,6 +372,7 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			}
 		}
 		row := listRow(r, reported, display)
+		row.LastTurnErrored = codexLastTurnErrored(r)
 		row.ProcessLiveness, row.Confirmations = mainFields(s, r, filters.Settle)
 		if r.State == store.StateCheckPermission && judged != nil {
 			row.PermissionRequests = judgedOpenInfos(judged, j)

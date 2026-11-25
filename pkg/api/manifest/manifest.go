@@ -81,6 +81,10 @@ var confirmationsField = FieldDef{Name: "confirmations", Type: "object", Descrip
 
 var failureReasonField = FieldDef{Name: "failure_reason", Type: "string?", Description: "Sanitized failure recorded by the Cursor gateway for the reported state's current interval: waiting means a failed turn, missing a failed session. Always present; null when no applicable reason is recorded. Only agent cursor records reasons; Claude Code, Codex and other agents return null regardless of their outcome. Follows state settling, survives reads, and clears when the next prompt or lifecycle transition replaces that state's evidence, including rotation or a new launch. Raw runtime message and data are never included. Not a confirmations.state.reason value or permission to replay input.", Nullable: true, AllowEmpty: false, AllowedValues: nil}
 
+const lastTurnErroredText = "Live observation of the current Codex session's latest rollout task boundary: true for task_complete with payload.error present (its value is never read), false for a clean completion or the next task_started. Always present on get, get-many rows and list rows; null for other agents or unavailable bounded rollout evidence. Independent of state settling; input or a menu answer alone does not clear it. Not menu detection, composer readiness or permission to replay input."
+
+var lastTurnErroredField = FieldDef{Name: "last_turn_errored", Type: "bool?", Description: lastTurnErroredText, Nullable: true, AllowEmpty: false, AllowedValues: nil}
+
 // stateEnum is the exhaustive set of valid spawn state strings (SRD §6): the
 // lifecycle states a state field reports. Inlined into AllowedValues where
 // state fields appear.
@@ -729,6 +733,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
+			lastTurnErroredField,
 			{Name: "busy_send", Type: "string", Description: "The published current Launch's recorded busy-send coverage. Pending or uncertain resume/reuse retains the published coverage until successful creation publishes its candidate.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"covered", "not_covered"}},
 			agentDefaultsField, deliveryField, deliveryCapabilitiesField,
 			{Name: "instance_id", Type: "string", Description: "Stable id of the Spawn.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
@@ -797,7 +802,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "send-keys",
-		Description: "Covered: Held, not typed. Else strip CR, keep LF, add Enter (empty text: Enter only); native exact proof or pane. ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else hook-derived get/status, escalate if unknown. See caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Covered: Held. Else text+Enter (empty text: Enter only). ErrCodexTurnErrored: read-pane, then key/hash. ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else hook-derived get/status, escalate if unknown. caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -821,13 +826,13 @@ var Verbs = []VerbDef{
 			},
 			{
 				Name: "delivery_request_id", Type: "string",
-				Description: "Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay and dialog guards pass. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Unresolved or unreadable/corrupt native evidence blocks fallback resends too; discovering old proof never dispatches a different request. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers. For a Covered Agent instead: a confirmed send's Message ID, any nonempty UTF-8, only with caller_uuid; omitted, AD makes a UUID; given empty, null or not valid UTF-8, ErrInvalidFlags.",
+				Description: "Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay, dialog and ordinary-Codex error guards pass; those guards precede the unusable-name check. An errored Codex row returns ErrCodexTurnErrored instead of reconciling. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Unresolved or unreadable/corrupt native evidence blocks fallback resends too; discovering old proof never dispatches a different request. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers. For a Covered Agent instead: a confirmed send's Message ID, any nonempty UTF-8, only with caller_uuid; omitted, AD makes a UUID; given empty, null or not valid UTF-8, ErrInvalidFlags.",
 				Required:    false, Nullable: false, AllowEmpty: true,
 			},
 			{
 				Name:          "allow_pending",
 				Type:          "bool",
-				Description:   "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected (ErrSpawnNotInteractive), including requests to reconcile stored or late proof. Ignored for a Covered Agent, whose Messages are held in any state.",
+				Description:   "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected (ErrSpawnNotInteractive), including requests to reconcile stored or late proof. Does not bypass ErrCodexTurnErrored. Ignored for a Covered Agent, whose Messages are held in any state.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -836,7 +841,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "no_enter",
 				Type:          "bool",
-				Description:   "Type text with no Enter after it. With neither text nor key: ErrInvalidFlags (nothing to send). A pane answer never presses Enter." + coveredRawKey,
+				Description:   "Type text with no Enter after it. With neither text nor key: ErrInvalidFlags (nothing to send). A pane answer never presses Enter. This manual operation passes the Codex turn-error hold but does not clear it." + coveredRawKey,
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -845,7 +850,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "key",
 				Type:          "string",
-				Description:   "Send this one key instead of text, never followed by Enter: a named key (Escape, Enter, Up, Down, Tab), sent by name, or one character, typed literally. The caller picks the key; agent-director never interprets the screen. Required on a pane answer. Anything else: ErrInvalidFlags." + coveredRawKey,
+				Description:   "Send this one key instead of text, never followed by Enter: a named key (Escape, Enter, Up, Down, Tab), sent by name, or one character, typed literally. The caller picks the key; agent-director never interprets the screen. Answer menus with key, not pasted text. Passes the Codex turn-error hold only; relay and dialog guards still apply. Required on a pane answer. Anything else: ErrInvalidFlags." + coveredRawKey,
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -854,7 +859,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "expect_pane_sha256",
 				Type:          "string",
-				Description:   "Required on a pane answer, optional otherwise. " + paneHashDescription + " On a plain call a matching hash also passes the hold of a request not proven gone (ErrDialogMaybeOpen); every other refusal still applies." + coveredRawKey,
+				Description:   "Required on a pane answer, optional otherwise. " + paneHashDescription + " On a plain call a matching hash also passes the hold of a request not proven gone (ErrDialogMaybeOpen) and the ordinary Codex turn-error hold (ErrCodexTurnErrored); every other refusal still applies." + coveredRawKey,
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -905,6 +910,7 @@ var Verbs = []VerbDef{
 			"ErrSendKeysWhileRelayed",
 			"ErrRelayFallenBack",
 			"ErrDialogMaybeOpen",
+			"ErrCodexTurnErrored",
 			"ErrNoOpenPermissionRequest",
 			"ErrAlreadyDecided",
 			"ErrPaneAnswerInProgress",
@@ -1495,7 +1501,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. State filtering occurs before limit. A row showing a Displayed State carries displayed_state (string?) beside its state, with since/request_token/tool_name/unchanged_minutes omitted. " + needsIntelligenceText + " " + idleScreenText + " Every row carries idle_screen_availability (string: available for Claude and Codex, unavailable for Cursor and pane-only agents), a capability outcome, never a state. Empty array when none match (never null). Each row carries family_state (string: working or waiting). " + familyStateText + " Each row carries process_liveness (string: alive, exited or unknown). " + processLivenessText + " Each row carries confirmations (object). " + confirmationsText + " Each row carries optional integration_mode (string: pane_only; omitted for other agents). " + paneOnlyContract + " Each row carries agent (string: the agent it runs) and liveness_unverified_since (timestamp?, the time a check first noted the row, kept while the note changes) and liveness_note (string?, the latest check's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a check that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a check finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. " + launchStartLiveSentence + " Each row carries state_changed_at (timestamp), as get's: " + stateChangedAtText + " Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is a check's judgement on available evidence, not proof that the agent has exited. " + settledStateText + " Each row also carries permission_requests, as get's: " + permissionRequestsDescription + " A covered row carries agent_defaults, as get's; an uncovered row omits it.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. State filtering occurs before limit. A row showing a Displayed State carries displayed_state (string?) beside its state, with since/request_token/tool_name/unchanged_minutes omitted. " + needsIntelligenceText + " " + idleScreenText + " Every row carries idle_screen_availability (string: available for Claude and Codex, unavailable for Cursor and pane-only agents), a capability outcome, never a state. Empty array when none match (never null). Each row carries family_state (string: working or waiting). " + familyStateText + " Each row carries process_liveness (string: alive, exited or unknown). " + processLivenessText + " Each row carries confirmations (object). " + confirmationsText + " Each row carries optional integration_mode (string: pane_only; omitted for other agents). " + paneOnlyContract + " Each row carries agent (string: the agent it runs) and liveness_unverified_since (timestamp?, the time a check first noted the row, kept while the note changes) and liveness_note (string?, the latest check's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a check that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a check finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. " + launchStartLiveSentence + " Each row carries state_changed_at (timestamp), as get's: " + stateChangedAtText + " Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is a check's judgement on available evidence, not proof that the agent has exited. " + settledStateText + " Each row also carries permission_requests, as get's: " + permissionRequestsDescription + " A covered row carries agent_defaults, as get's; an uncovered row omits it. last_turn_errored (bool?): " + lastTurnErroredText, Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrInvalidFlags",
