@@ -961,7 +961,8 @@ The exempt script:
    the install adds a proper entry beside it (b.zbg). No copy of
    `settings.json` is kept, as its `env` can hold tokens (b.f3n): a file
    the merge cannot use is refused before any write (below), and the
-   write is atomic, so a failed one leaves the file as it was.
+   write is atomic, so a failed one leaves the file as it was. The
+   replacement temp is removed on failure or INT/TERM/HUP (b.o4v).
 
    An empty `settings.json`, or one holding only whitespace (a file
    made with `touch`, say), is merged as `{}` and gets both hooks
@@ -1582,7 +1583,8 @@ destructive *additions*.
   the same mode as the file it copies (b.ojn). A symlinked file is written
   through: the link is kept and the file it points to gets the edit
   (b.nw5). A link that points nowhere, or whose links loop, is left
-  alone.
+  alone. A failed write leaves the original file as it was; failure or
+  INT/TERM/HUP removes the replacement temp for either file (b.o4v).
 - It works out both edits before it changes anything. A symlinked file
   it must edit but cannot write through, because the directory of the
   file it points to cannot be written in (home-manager's read-only

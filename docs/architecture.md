@@ -13562,6 +13562,15 @@ an existing operator file in either script goes through
 or a `cp -p`; `ad_mode_of`, `ad_resolve_link`, `ad_link_write_check`,
 `ad_replace_keeping_mode` and `ad_backup_keeping_mode` exist in both
 scripts (install.sh, uninstall.sh) and change together.
+
+Both scripts initialize `replace_tmp` empty before arming traps.
+`ad_replace_keeping_mode` registers the resolved target's `.new` there before
+writing and clears it only after a successful `mv`. Their EXIT cleanup
+removes it on a failed write, `chmod`, `mv` or INT/TERM/HUP, including a
+partial write (b.o4v). Keep callers under `set -e`, outside conditionals
+that suppress errexit. `uninstall.sh`'s INT/TERM/HUP traps exit 130/143/129
+to run EXIT cleanup, which preserves the failing command's exit status.
+
 `test/install-sh/retry.sh`'s merge-modes table and
 `TestUninstallKeepsFileModes` pin this with `chmod` and `cp` stand-ins on
 `PATH`: each `.new` is 600 and each `.bak` holds only its original's owner
@@ -13575,6 +13584,8 @@ copy is one more plaintext copy of them that nothing removes. A copy would guard
 nothing: every file the merge or the filter cannot take is refused or left
 alone before any write, and `ad_replace_keeping_mode`'s `mv` either
 replaces the file or leaves it as it was.
+`TestSettingsReplaceFailureLeavesNoCopy` pins the no-copy rule on failed
+`chmod`/`mv` and TERM in both scripts.
 
 Releases before 0.17.6 did copy it, to
 `settings.json.bak.<YYYYmmdd-HHMMSS>` beside it before each hooks-on

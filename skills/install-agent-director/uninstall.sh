@@ -107,6 +107,23 @@
 
 set -euo pipefail
 
+# Own only the replacement temp this invocation assigns, never an inherited
+# path. Keep it visible to EXIT even when errexit or a signal ends the write.
+replace_tmp=""
+ad_exit_cleanup() {
+    local exit_rc=$?
+    if [[ -n "$replace_tmp" ]]; then
+        # A cleanup error must not replace the failing command's exit status.
+        rm -f "$replace_tmp" || true
+    fi
+    return "$exit_rc"
+}
+trap ad_exit_cleanup EXIT
+# An explicit exit runs EXIT cleanup and keeps the usual signal status.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
 # HOME first, before anything is read or written (see the header).
 case "${HOME-}" in
     /*) ;;
@@ -211,14 +228,18 @@ ad_link_write_check() {
 # survives and its target gets the edit. A link this cannot write through
 # was refused (ad_link_write_check) before any edit; ad_resolve_link's own
 # loop failure stays as a backstop for a link changed since.
+# Register the temp before writing so EXIT removes even a partial copy
+# on a failed write, chmod, mv or interrupt (b.o4v).
 ad_replace_keeping_mode() {
     local target tmp
     target=$(ad_resolve_link "$1") || return
     tmp="${target}.new"
+    replace_tmp="$tmp"
     rm -f "$tmp"
     (umask 077; printf '%s\n' "$2" >"$tmp")
     chmod "$(ad_mode_of "$target")" "$tmp"
     mv -f "$tmp" "$target"
+    replace_tmp=""
 }
 
 # ad_backup_keeping_mode <file> <bak> — copy <file> to <bak> with <file>'s
