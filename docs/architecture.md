@@ -12424,9 +12424,14 @@ cannot publish new owned paths. An older rollout descriptor is insufficient.
 
 Watermarks preserve prefix length/hash and validated Codex session metadata.
 The request's durable `SnapshotAt` prevents an old exact message in a rollout
-first discovered after typing from proving this request: an unknown rollout
-must have native creation time after the request snapshot. Known paths must
-retain their prefix and metadata; truncation or rewriting refuses proof.
+first discovered after typing from proving this request. An unknown rollout's
+native creation time is the `session_meta` record's outer `timestamp` (its first
+write), which must parse and be strictly after `SnapshotAt`; missing,
+unparseable, equal or older times, or a missing snapshot, refuse proof.
+`payload.timestamp` is session start and only binds the rollout to the launch
+via `manifest.Created`. Codex 0.159.2 starts the session before the snapshot but
+writes the rollout at the first prompt. Known paths must retain their prefix
+and metadata; truncation or rewriting refuses proof.
 An unfinished record at the watermark cannot confirm the request. Validated
 owned paths and native session identity are persisted for later passive
 reconciliation, including after a descriptor closes or the process exits,

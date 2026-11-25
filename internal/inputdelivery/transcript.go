@@ -149,8 +149,8 @@ func (s *nativeSession) Confirm(a *Attempt) (*Proof, error) {
 		session := s.manifest.SessionID
 		if a.Identity.Agent == "codex" {
 			var valid bool
-			var created time.Time
-			session, created, valid = s.codexMetadata(data, a.Identity)
+			var written json.RawMessage
+			session, written, valid = s.codexMetadata(data, a.Identity)
 			if !valid {
 				continue
 			}
@@ -160,10 +160,18 @@ func (s *nativeSession) Confirm(a *Attempt) (*Proof, error) {
 				continue
 			}
 			// An FD first observed after the snapshot proves process ownership,
-			// not that its existing records are new. Only a native session
-			// created after this request's durable snapshot can start at zero.
-			if !known && (a.SnapshotAt.IsZero() || !created.After(a.SnapshotAt)) {
-				continue
+			// not that its existing records are new. Codex can start a session
+			// before the snapshot but write its rollout only on the first prompt.
+			// Only a rollout first written after the snapshot can start at zero.
+			if !known {
+				var timestamp string
+				if json.Unmarshal(written, &timestamp) != nil {
+					continue
+				}
+				created, err := time.Parse(time.RFC3339Nano, timestamp)
+				if err != nil || a.SnapshotAt.IsZero() || !created.After(a.SnapshotAt) {
+					continue
+				}
 			}
 			if mark.SessionID != "" && (mark.SessionID != session || mark.MetadataSHA256 != metadataHash) {
 				return nil, fmt.Errorf("owned transcript metadata changed")
@@ -220,32 +228,33 @@ func (s *nativeSession) codexSession(data []byte, id Identity) (string, bool) {
 	return session, valid
 }
 
-func (s *nativeSession) codexMetadata(data []byte, id Identity) (string, time.Time, bool) {
+func (s *nativeSession) codexMetadata(data []byte, id Identity) (string, json.RawMessage, bool) {
 	n := bytes.IndexByte(data, '\n')
 	if n < 0 {
-		return "", time.Time{}, false
+		return "", nil, false
 	}
 	var meta struct {
-		Type    string
-		Payload struct {
+		Type      string
+		Timestamp json.RawMessage
+		Payload   struct {
 			ID, CWD   string
 			Version   string `json:"cli_version"`
 			Timestamp string
 		}
 	}
 	if json.Unmarshal(data[:n], &meta) != nil || meta.Type != "session_meta" || meta.Payload.CWD != id.CWD || meta.Payload.Version != "0.159.2" {
-		return "", time.Time{}, false
+		return "", nil, false
 	}
 	if _, err := uuid.Parse(meta.Payload.ID); err != nil {
-		return "", time.Time{}, false
+		return "", nil, false
 	}
 	t, err := time.Parse(time.RFC3339Nano, meta.Payload.Timestamp)
 	// A process descriptor can briefly reference an older rollout. Its own
 	// session metadata must also belong to this fresh diagnostic launch.
 	if err != nil || t.Before(s.manifest.Created) {
-		return "", time.Time{}, false
+		return "", nil, false
 	}
-	return meta.Payload.ID, t, true
+	return meta.Payload.ID, meta.Timestamp, true
 }
 
 func (s *nativeSession) matchRecord(line []byte, a *Attempt, session string) (string, bool) {
