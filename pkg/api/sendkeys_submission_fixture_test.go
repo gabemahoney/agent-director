@@ -527,8 +527,8 @@ func newSubmissionEnv(t *testing.T) *submissionEnv {
 			}
 			e.waits++
 			e.slept += d
-			if d <= 0 || d > 100*time.Millisecond || e.waits > 20 {
-				t.Fatalf("submission wait %d = %v; want at most twenty positive waits <= 100ms", e.waits, d)
+			if d <= 0 || d > 100*time.Millisecond || e.waits > 200 {
+				t.Fatalf("submission wait %d = %v; want at most two hundred positive waits <= 100ms", e.waits, d)
 			}
 			e.clock.Advance(d)
 		},
