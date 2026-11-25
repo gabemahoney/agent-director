@@ -82,9 +82,10 @@ additions, Claude's version, config directory or keybindings.
   [`CLAUDE_CONFIG_DIR`](multi-account.md). These additions also apply with a
   relative config directory or an existing or unreadable `keybindings.json`.
 - **Codex:** `-c log_dir="<evidence-dir>"`, `RUST_LOG=off,codex_tui=info`,
-  the complete built-in Codex 0.159.2 keymap through `-c tui.keymap=…`, and
+  a pinned Codex 0.159.2 keymap through `-c tui.keymap=…`, and
   `-c tui.vim_mode_default=false`. These override user, project and cloud
-  keybindings and start with Vim disabled. The logging setting overrides
+  keybindings and keep Vim disabled. The Insert binding is omitted because
+  Codex 0.159.2 does not accept it in keymap config. The logging setting overrides
   `extra_env.RUST_LOG`. `CODEX_HOME` follows
   [Codex group folders](multi-account.md#codex-group-folders).
   A higher-priority `/etc/codex/managed_config.toml` containing keymap or Vim

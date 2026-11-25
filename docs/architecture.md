@@ -12349,7 +12349,7 @@ pinned version, safe arguments, Codex keymap/managed checks and platform.
 that attempt to fallback.
 
 Codex gets a per-launch `log_dir` override,
-`RUST_LOG=off,codex_tui=info`, a complete `-c tui.keymap=…` and
+`RUST_LOG=off,codex_tui=info`, a pinned `-c tui.keymap=…` and
 `-c tui.vim_mode_default=false`. `codexDefaultKeymap` supplies every leaf of
 the pinned schema: 12 contexts and 154 actions, including empty bindings,
 so lower user/project/cloud layers cannot merge in custom actions. These
