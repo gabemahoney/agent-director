@@ -10168,7 +10168,7 @@ Claude Code adds a complete envelope's `additionalContext` to the running
 turn. `cmd/agent-director` gives the wake a non-blocking stderr that takes a
 write deadline (`hookStderr`) and keeps the hook logger and teardown
 diagnostics (`teardownDiagnostics`) off it. It gives the steer a
-non-blocking stdout (`hookStdout`) and ignores SIGPIPE in that process, so a
+non-blocking stdout (`hookStdout`). Both hook processes ignore SIGPIPE, so a
 reader that closed returns EPIPE, recorded `partial` or `uncertain`. Both
 turn a panic into exit 0.
 
