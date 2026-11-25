@@ -37,12 +37,12 @@ func TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry(t *testing.T) {
 			verdictUpdates.Add(1)
 		}
 		return nil
-	}, func(ctx context.Context) error {
-		<-ctx.Done() // SQLite has committed; only its response is uncertain.
-		return ctx.Err()
+	}, func(context.Context) error {
+		// b.b8z: inject response loss only after SQLite has committed.
+		return errors.New("synthetic lost commit result")
 	})
-	budget := int64(100)
-	_, err := api.Decide(s, v, api.DecideParams{InstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: &budget})
+	// No overall bound: elapsed time must not select a pre-COMMIT outcome.
+	_, err := api.Decide(s, v, api.DecideParams{InstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
 	name, description := errnames.Classify(err)
 	if name != "ErrInternal" || errors.Is(err, api.ErrStoreBusy) || !strings.Contains(description, "commit outcome unconfirmed; read the request before retrying") {
 		t.Fatalf("actual public failure=%s %q; want uncertain COMMIT inspection advice", name, description)
