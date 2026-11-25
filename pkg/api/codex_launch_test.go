@@ -30,6 +30,10 @@ func assertCodexLaunch(t *testing.T, creates []tmuxfix.SocketCall, dbPath, id, p
 	if l.Program != program {
 		t.Errorf("create runs %q; want %q", l.Program, program)
 	}
+	// b.j6m: spawn, template, finished-ID reuse and resume all launch inline.
+	if n := len(l.Before(codexfix.KindNoAltScreen)); n != 1 {
+		t.Errorf("--no-alt-screen before `--` appears %d times; want once", n)
+	}
 	cols, err := apitest.ReadSpawnColumns(dbPath, id)
 	if err != nil {
 		t.Fatalf("ReadSpawnColumns(%s): %v", id, err)

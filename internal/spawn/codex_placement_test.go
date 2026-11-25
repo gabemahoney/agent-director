@@ -25,7 +25,7 @@ var codexArgShapes = []struct {
 	{"prompt only", nil, []string{"--", "fix the build"}},
 	{"image option", []string{"-i", "/img/a.png", "--model", "o3"}, nil},
 	{"images kept together", []string{"-i", "/img/a.png", "/img/b.png", "--model", "o3"}, []string{"--", "look"}},
-	{"prompt holds our flags", []string{"--model", "o3"}, []string{"--", "--no-daemon", "--enable", "write_stdin_approval", "--dangerously-bypass-hook-trust"}},
+	{"prompt holds our flags", []string{"--model", "o3"}, []string{"--", "--no-daemon", "--no-alt-screen", "--enable", "write_stdin_approval", "--dangerously-bypass-hook-trust"}},
 	{"lone dashes", nil, []string{"--"}},
 }
 
@@ -82,12 +82,17 @@ func TestCodexSettingsStandAfterPassThroughArguments(t *testing.T) {
 						t.Errorf("hook part at %d stands before the last pass-through argument at %d", it.Index, l.LastPassThroughIndex())
 					}
 				}
-				// A flag in the prompt is data: AD's own copy is still there before `--`.
-				if n := len(l.Of(codexfix.KindNoDaemon)); n != 1+countOf(after, "--no-daemon") {
-					t.Errorf("--no-daemon appears %d times; want AD's once plus the prompt's", n)
-				}
-				if n := len(l.Before(codexfix.KindNoDaemon)); n != 1 {
-					t.Errorf("--no-daemon before `--` appears %d times; want once", n)
+				// b.j6m: a flag in the prompt is data, so AD still adds its own before `--`.
+				for _, flag := range []struct {
+					arg  string
+					kind codexfix.Kind
+				}{{"--no-daemon", codexfix.KindNoDaemon}, {"--no-alt-screen", codexfix.KindNoAltScreen}} {
+					if n := len(l.Of(flag.kind)); n != 1+countOf(after, flag.arg) {
+						t.Errorf("%s appears %d times; want AD's once plus the prompt's", flag.arg, n)
+					}
+					if n := len(l.Before(flag.kind)); n != 1 {
+						t.Errorf("%s before `--` appears %d times; want once", flag.arg, n)
+					}
 				}
 			})
 		}
@@ -119,6 +124,8 @@ func TestCodexSettingsSkipWhatTheCallerPassed(t *testing.T) {
 		count func(codexfix.Launch) int
 	}{
 		{"--no-daemon", []string{"--no-daemon"}, func(l codexfix.Launch) int { return len(l.Of(codexfix.KindNoDaemon)) }},
+		// b.j6m: suppress AD's copy only when the caller's flag precedes `--`.
+		{"--no-alt-screen", []string{"--no-alt-screen"}, func(l codexfix.Launch) int { return len(l.Of(codexfix.KindNoAltScreen)) }},
 		{"bypass flag", []string{"--dangerously-bypass-hook-trust"}, func(l codexfix.Launch) int { return len(l.Of(codexfix.KindBypass)) }},
 		{"--enable separate", []string{"--enable", "write_stdin_approval"}, func(l codexfix.Launch) int { return len(l.Enabled(codexfix.FeatureWriteStdinApproval)) }},
 		{"--enable=", []string{"--enable=write_stdin_approval"}, func(l codexfix.Launch) int { return len(l.Enabled(codexfix.FeatureWriteStdinApproval)) }},

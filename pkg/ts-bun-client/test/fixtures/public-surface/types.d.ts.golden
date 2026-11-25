@@ -564,7 +564,8 @@ export interface SpawnParams extends AgentDefaultParams {
      * `features.codex_hooks`, and `--disable hooks` or `codex_hooks` are refused
      * (`ErrSpawnDeniedFlag`); with `disable_ask_user` on, `--enable
      * default_mode_request_user_input` and the question-tool keys are refused too. agent-director
-     * adds no second `--no-daemon`, `--dangerously-bypass-hook-trust` (pre-trust ok) or
+     * adds `--no-alt-screen` to run Codex inline. It adds no second `--no-daemon`,
+     * `--no-alt-screen`, `--dangerously-bypass-hook-trust` (pre-trust ok) or
      * `--enable write_stdin_approval` when the arguments already carry one before any `--`;
      * Codex rejects a flag the arguments themselves repeat.
      * Cursor accepts `--model`/`-m` (split or equals), `--mode` (agent/plan/ask),

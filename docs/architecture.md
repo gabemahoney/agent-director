@@ -8884,10 +8884,13 @@ and the others call it.
   every `--enable` and `--disable` after every `-c`). A resume's argv is
   `<codex> resume <session id> [filtered args] <block>`, with no saved
   prompt: nothing of agent-director's stands before `resume`. The block leaves out
-  `--no-daemon`, `--dangerously-bypass-hook-trust` and
+  `--no-daemon`, `--no-alt-screen`, `--dangerously-bypass-hook-trust` and
   `--enable write_stdin_approval` when the arguments already carry them
   before their first `--`, because Codex rejects a repeat of the first
-  two.
+  three. `CodexSettingsArgs` emits `--no-alt-screen` immediately after
+  `--no-daemon` (unless either is omitted), so every Codex spawn, reuse and
+  resume runs inline and keeps normal-buffer scrollback. Native-delivery
+  preparation adds no second copy.
 - **The settings builder.** `CodexSettingsArgs` is pure: it takes the
   running binary's path, the installed path, the effective relay window,
   the two config settings, the folder and the pre-trust outcome, and
@@ -12557,10 +12560,14 @@ the agent's own pane by pane id: `capture-pane -p [-e] -t %N -S -<n>`.
 Default `n=25` (for `n_lines` 0 or omitted), no upper cap (SRD §12
 explicitly leaves the bound to the caller). tmux prints up to `n` rows of
 history and then the whole visible screen, so `tmux.Client.CapturePaneID`
-keeps only the last `n` rows (`tmux.LastPaneLines`, b.7y8; before it, an
-alternate-screen TUI such as Claude Code's or Codex's gave its whole
-screen for every `n`). The rows are counted up from the last row with
-content: blank rows (whitespace only once ANSI is stripped) below it are
+keeps only the last `n` rows (`tmux.LastPaneLines`, b.7y8), including when an
+alternate-screen pane supplies its whole visible screen. Codex launches
+run inline through the shared settings block (b.j6m), so capture includes
+normal-buffer scrollback up to tmux's `history-limit` (default 2000 rows;
+agent-director sets none). Output tmux never retained cannot be recovered.
+Already-running alternate-screen Codex panes remain limited to the visible
+screen until relaunched or resumed. Rows are counted up from the last row
+with content: blank rows (whitespace only once ANSI is stripped) below it are
 left out, blank rows between content rows count, and an all-blank pane
 is `""`. Blankness is judged on the stripped row, so an `ansi` read and a
 default read pick the same rows. The trim lives in the client, so
@@ -24694,12 +24701,13 @@ and how often, and never what the whole string is.
   and `Args`, whether it stands `AfterDashDash`, and its decoded value:
   `KindPassThrough` (anything not recognised, with the decoded `Override` for
   any `-c`), `KindResume` (`resume <id>`, `SessionID`), `KindDashDash`,
-  `KindNoDaemon`, `KindBypass`, `KindEnable` / `KindDisable` (`Feature`),
+  `KindNoDaemon`, `KindNoAltScreen`, `KindBypass`,
+  `KindEnable` / `KindDisable` (`Feature`),
   `KindHooks` (`Event` and `Hooks`), `KindState` (`hooks.state`, key to trust
   hash), `KindPaste`, `KindQuestionTool` (`Bool`) and `KindProjects` (decoded
   cwd to trust level). A part is classified by its shape, not by who put it
-  there, so a caller's own `--no-daemon` is the same kind as the settings
-  block's; a test tells them apart by position, count or value. `Split`
+  there, so a caller's own `--no-daemon` or `--no-alt-screen` has the same kind
+  as the settings block's; a test tells them apart by position, count or value. `Split`
   fails the test when a kind AD writes does not decode as the TOML AD writes.
 - `Launch` readers: `Of`, `Before` and `After` (by kind, in argv order, before
   or after the first `--`), `Resume`, `PassThrough`, `PassThroughAfter` and

@@ -124,13 +124,14 @@ type codexSettingsInput struct {
 	// does the block carry the folder trust and the bypass of Codex's hook
 	// review.
 	PreTrustOK bool
-	// OmitNoDaemon, OmitBypass and OmitWriteStdin drop an argument the caller
-	// already passes before its first `--`: Codex rejects a repeated
-	// --no-daemon or --dangerously-bypass-hook-trust, and a second --enable
-	// write_stdin_approval is only noise.
-	OmitNoDaemon   bool
-	OmitBypass     bool
-	OmitWriteStdin bool
+	// OmitNoDaemon, OmitNoAltScreen, OmitBypass and OmitWriteStdin drop an
+	// argument the caller already passes before its first `--`: Codex rejects
+	// a repeated --no-daemon, --no-alt-screen or --dangerously-bypass-hook-trust,
+	// and a second --enable write_stdin_approval is only noise.
+	OmitNoDaemon    bool
+	OmitNoAltScreen bool
+	OmitBypass      bool
+	OmitWriteStdin  bool
 }
 
 // codexQuotePath quotes a path for the shell text of a hook command (SR-5.3):
@@ -221,6 +222,7 @@ func codexEntries(in codexSettingsInput) []codexEventEntry {
 // settings, in the order they stand in argv (SR-5.2):
 //
 //	--no-daemon
+//	--no-alt-screen
 //	-c hooks.<Event>=[...]   one per event in codexHookEvents
 //	-c hooks.state={"<key>"={trusted_hash="sha256:..."},...}
 //	-c tui.disable_paste_burst=true
@@ -240,6 +242,9 @@ func CodexSettingsArgs(in codexSettingsInput) []string {
 	var out []string
 	if !in.OmitNoDaemon {
 		out = append(out, codexOptNoDaemon)
+	}
+	if !in.OmitNoAltScreen {
+		out = append(out, codexOptNoAltScreen)
 	}
 	var state []string
 	entries := codexEntries(in)

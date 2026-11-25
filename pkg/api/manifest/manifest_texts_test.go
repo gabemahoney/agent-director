@@ -167,7 +167,7 @@ func manifestTextCases() []textCase {
 			"and --disable hooks or codex_hooks",
 			"with disable_ask_user on, also --enable default_mode_request_user_input and the question-tool keys")},
 		{verb: "spawn", param: "agent_args", c: apitest.DescCase{Name: "no second flag added, repeats not dropped",
-			Require: []string{"agent-director adds no second --no-daemon, --dangerously-bypass-hook-trust (pre-trust ok) or --enable write_stdin_approval when the arguments already carry one before any --; Codex rejects a flag the arguments themselves repeat."},
+			Require: []string{"agent-director adds --no-alt-screen to run Codex inline. It adds no second --no-daemon, --no-alt-screen, --dangerously-bypass-hook-trust (pre-trust ok) or --enable write_stdin_approval when the arguments already carry one before any --; Codex rejects a flag the arguments themselves repeat."},
 			Forbid:  []string{"is dropped", "A repeated --no-daemon"}}},
 		{verb: "get", field: "agent_args", c: apitest.DescCase{Name: "verbatim argv, no placement claim",
 			Require: []string{"Verbatim argv passed through to the agent program."}, Forbid: []string{"--settings", "after the supervisor's own flags"}}},

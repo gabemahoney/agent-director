@@ -139,6 +139,10 @@ func assertCodexSettings(t *testing.T, l codexfix.Launch, w codexWant) {
 	if n := len(l.Of(codexfix.KindNoDaemon)); n != 1 {
 		t.Errorf("--no-daemon appears %d times; want once", n)
 	}
+	// b.j6m: every Codex launch keeps output in tmux's scrollback.
+	if n := len(l.Before(codexfix.KindNoAltScreen)); n != 1 {
+		t.Errorf("--no-alt-screen before `--` appears %d times; want once", n)
+	}
 	events := sorted(keysOf(codexTestLabels))
 	if got := sorted(l.Events()); !slices.Equal(got, events) {
 		t.Errorf("hook events = %v; want %v", got, events)

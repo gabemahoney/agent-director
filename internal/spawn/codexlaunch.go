@@ -37,9 +37,10 @@ func codexProgram(cfg config.Config) string {
 // effective relay window, the config's inject_help_hook and disable_ask_user,
 // cwd and the carried pre-trust outcome. An argument agent-director would add
 // that args already carries before its first `--` is left out of the block
-// (--no-daemon, --dangerously-bypass-hook-trust, --enable write_stdin_approval;
-// a copy after `--` is the prompt and does not count). The only failures are a
-// binary path that cannot be resolved, as for Claude's settings.
+// (--no-daemon, --no-alt-screen, --dangerously-bypass-hook-trust,
+// --enable write_stdin_approval; a copy after `--` is the prompt and does not
+// count). The only failures are a binary path that cannot be resolved, as for
+// Claude's settings.
 func codexSettingsBlock(args []string, cwd string, preTrust PreTrustOutcome, cfg config.Config) ([]string, error) {
 	exe, err := executablePath()
 	if err != nil {
@@ -61,6 +62,7 @@ func codexSettingsBlock(args []string, cwd string, preTrust PreTrustOutcome, cfg
 	}
 	read := ReadCodexArgs(args)
 	in.OmitNoDaemon = read.Has(codexOptNoDaemon)
+	in.OmitNoAltScreen = read.Has(codexOptNoAltScreen)
 	in.OmitBypass = read.Has(codexOptBypassHookTrust)
 	in.OmitWriteStdin = read.HasEnable(codexFeatureWriteStdin)
 	return CodexSettingsArgs(in), nil

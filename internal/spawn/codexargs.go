@@ -28,6 +28,7 @@ const (
 	codexOptRemoteAuthTokenEnv       = "--remote-auth-token-env"
 	codexOptImage                    = "--image"
 	codexOptNoDaemon                 = "--no-daemon"
+	codexOptNoAltScreen              = "--no-alt-screen"
 	codexOptBypassHookTrust          = "--dangerously-bypass-hook-trust"
 	codexFeatureHooks                = "hooks"
 	codexFeatureHooksAlias           = "codex_hooks"
@@ -79,7 +80,7 @@ var codexFlagLong = map[string]bool{
 	"--approve-for-me": true, "--not-so-yolo": true,
 	"--dangerously-bypass-approvals-and-sandbox": true, "--yolo": true,
 	"--worktree": true, "--search": true,
-	"--no-alt-screen": true, "--no-daemon": true,
+	codexOptNoAltScreen: true, codexOptNoDaemon: true,
 	"--dangerously-bypass-hook-trust": true, "--last": true, "--all": true,
 	"--include-non-interactive": true,
 }

@@ -23,6 +23,8 @@ const (
 	KindDashDash Kind = "dashdash"
 	// KindNoDaemon is `--no-daemon`.
 	KindNoDaemon Kind = "no-daemon"
+	// KindNoAltScreen is `--no-alt-screen`.
+	KindNoAltScreen Kind = "no-alt-screen"
 	// KindBypass is `--dangerously-bypass-hook-trust`.
 	KindBypass Kind = "bypass-hook-trust"
 	// KindEnable and KindDisable are `--enable <feature>` and
@@ -176,6 +178,8 @@ func (l *Launch) scan(argv []string, i int) (Item, int, error) {
 		return one(KindDashDash)
 	case arg == "--no-daemon":
 		return one(KindNoDaemon)
+	case arg == "--no-alt-screen":
+		return one(KindNoAltScreen)
 	case arg == "--dangerously-bypass-hook-trust":
 		return one(KindBypass)
 	}

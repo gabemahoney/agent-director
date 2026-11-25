@@ -1474,7 +1474,8 @@ Native delivery for uncovered Codex supports Linux with exactly Codex
 positional startup prompt, alternate mode or unsupported agent argument is
 outside this contract. Accepted extra arguments are `--model`/`-m`,
 `--permission-mode`, `--effort` (each with a value), `--no-alt-screen` and
-`--dangerously-skip-permissions`. The launch's keybinding requirements and
+`--dangerously-skip-permissions`. `--no-alt-screen` is supplied automatically;
+callers need not add it for native delivery. Keybinding requirements and
 generated settings are in [Ordinary delivery launch settings](settings.md#ordinary-delivery-launch-settings).
 When native capability is unavailable, including other versions, platforms,
 resumed conversations or unsupported launch arguments, ordinary Codex input
@@ -2512,8 +2513,14 @@ repair that selection; follow the [fresh-instance boundary](#cursor-operation-bo
     [Permissions](permissions.md#disable_ask_user-config)). Every spelling of
     a value is read (the next word, after `=`, or attached to a short flag),
     and an option is refused even after the `--`. A repeat of a flag the
-    supervisor adds is not refused or removed; see
-    [Codex's layers](settings.md#codexs-layers).
+    supervisor adds is not refused or removed. Every Codex spawn, reuse and
+    resume runs inline with `--no-alt-screen`; a caller copy before the first
+    `--` is not added again. Callers cannot select the alternate screen by
+    argument. Scrollback may contain an extra startup header (cosmetic).
+    A `read-pane` request above the pane height can include older conversation,
+    menus and headers; compare `pane_sha256` only at the same `n_lines`.
+    Retention limits are in [`read-pane`](cli-reference.md#read-pane);
+    other launch settings are in [Codex's layers](settings.md#codexs-layers).
   - `resume` does not apply spawn's argument refusals. It filters recognized
     session selectors and Claude print mode from stored arguments as described
     in [Pause and resume](usage.md#pause-and-resume).
