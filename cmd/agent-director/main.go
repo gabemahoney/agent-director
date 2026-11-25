@@ -551,7 +551,9 @@ func newHookLogger() *log.Logger {
 // hookStderr is the error stream Handle may write busy send's one wake prompt
 // to (hook.HandleConfig.Stderr). For the owned FileChanged hook it is the
 // process's stderr made non-blocking, so the route's write deadline bounds a
-// stalled pipe (SR-3.2) and no write outlives its job; the hook logger and
+// stalled pipe (SR-3.2) and no write outlives its job. That hook process also
+// ignores SIGPIPE, so a closed reader returns EPIPE for the route to record
+// partial or uncertain output before exiting 0. The hook logger and
 // teardown's diagnostics are kept off stderr for that event. Any other event,
 // or a descriptor that cannot be made non-blocking, gets os.Stderr, which
 // takes no write deadline, so the route issues nothing to it.
@@ -559,6 +561,7 @@ func hookStderr(eventName string) io.Writer {
 	if eventName != hook.EventNameFileChanged || syscall.SetNonblock(syscall.Stderr, true) != nil {
 		return os.Stderr
 	}
+	signal.Ignore(syscall.SIGPIPE)
 	return os.NewFile(uintptr(syscall.Stderr), "/dev/stderr")
 }
 
