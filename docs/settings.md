@@ -49,6 +49,8 @@ Every Codex spawn, reuse and resume adds a command-line settings block.
 It writes nothing in the Codex folder, project `.codex/` or spawn's cwd.
 
 - Runs without a shared background service; existing services are unused.
+- Runs inline with `--no-alt-screen`, preserving scrollback for
+  [`read-pane`](cli-reference.md#read-pane).
 - Adds the [Codex hook entries](hooks.md#the-codex-entry-set), trusted even
   with `no_pre_trust` or failed pre-trust. Your own hooks remain separate.
 - Disables the paste-burst delay. See
@@ -103,7 +105,7 @@ agent-director's command-line block overrides Codex's native settings and the
 caller arguments supplied at spawn or replayed at resume. It appears before
 any `--` separating the prompt.
 
-agent-director does not duplicate a caller's `--no-daemon`,
+agent-director does not duplicate a caller's `--no-daemon`, `--no-alt-screen`,
 `--dangerously-bypass-hook-trust` (with pre-trust `ok`) or
 `--enable write_stdin_approval` given before any `--`. Codex rejects
 repetitions within the caller's own arguments. Conflicting arguments and their

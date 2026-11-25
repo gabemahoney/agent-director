@@ -423,12 +423,25 @@ func planObservation(row Spawn, target DisplayDetail, extra bool, now time.Time,
 // (nil when the commit changed no contribution, or nothing committed), and
 // whether it committed anything, a display record alone included. An
 // observer that commits nothing returns examined's committed display and
-// record.
+// record. ReaderEvidence, when present, is separate response-only evidence
+// for the reader's projection; it never changes that shared pair.
 type DisplayOutcome struct {
 	Display   DisplayDetail
 	Evidence  string
 	Families  map[string]string
 	Committed bool
+
+	// ReaderEvidence confirms no Displayed State for a successful sample
+	// below this reader's timeout while a peer's idle_screen remains stored.
+	// It is response-only, paired with the examined row, never persisted over
+	// that episode's Evidence or used to change the shared Display.
+	ReaderEvidence string
+
+	// Observed is the row as a committing pane observation left its display
+	// and baseline. A caller retaining Display/Evidence after a failed final
+	// refresh must project with these facts, not examined's old candidate.
+	// It is response-only and nil when no pane observation committed.
+	Observed *Spawn
 }
 
 // committedOutcome is examined's committed display and record, what an
@@ -542,13 +555,26 @@ func (s *Store) ObserveIdleScreen(examined Spawn, sample PaneSample, now time.Ti
 // updates in the same commit (Spawn.displayEvidenceAfter). A sample that
 // changes no observation, baseline or display still commits its attempt to
 // the record alone, with no version advance, so the record's checked time is
-// the latest sample a later read can rely on.
+// the latest sample a later read can rely on. An unchanged pane below this
+// reader's timeout preserves a peer's current idle_screen finding instead:
+// it changes neither candidate nor evidence and returns ReaderEvidence for
+// this reader's own no-display result when the shared display is idle_screen.
 func (s *Store) ObserveIdleScreenOutcome(examined Spawn, sample PaneSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayOutcome, error) {
 	previous := committedOutcome(examined)
 	baseline, target := planPane(examined, sample, now, timeout)
 	plan, err := planObservation(examined, target, baseline != committedPaneBaseline(examined), now, settle)
 	if err != nil {
 		return previous, err
+	}
+	if previous.Display.State != StateNeedsIntelligence && baseline == committedPaneBaseline(examined) && examined.IdleScreenBeforeTimeout(now, timeout) {
+		// Only the timeout differs, not the pane facts. Such a reader cannot
+		// clear a peer's episode or cancel its entry candidate (b.dss).
+		if previous.Display.State == StateIdleScreen {
+			local := examined
+			local.DisplayEvidence = ""
+			previous.ReaderEvidence = local.displayEvidenceAfter(DisplayDetail{State: examined.ReportedState}, displayNone, "", now.UnixMilli())
+		}
+		return previous, nil
 	}
 	evidence := examined.displayEvidenceAfter(plan.result, displayValue(target), sample.failure(), now.UnixMilli())
 	if !plan.write && evidence == examined.DisplayEvidence {
@@ -582,7 +608,18 @@ func (s *Store) ObserveIdleScreenOutcome(examined Spawn, sample PaneSample, now 
 		}
 	}
 	s.emitObservationTransitions(plan.events)
-	return DisplayOutcome{Display: plan.result, Evidence: evidence, Families: families, Committed: true}, nil
+	observed := examined
+	observed.DisplayEvidence = evidence
+	if plan.write {
+		observed.DisplayObservation = plan.text
+		observed.ObservationVersion++
+		observed.PaneSHA256, observed.PaneSinceMillis = baseline.sha256, baseline.sinceMillis
+		observed.PaneEpoch = examined.PermissionEpoch
+		if baseline == (paneBaseline{}) {
+			observed.PaneEpoch = -1
+		}
+	}
+	return DisplayOutcome{Display: plan.result, Evidence: evidence, Families: families, Committed: true, Observed: &observed}, nil
 }
 
 // lockedObservationRow re-reads examined's row inside an observer's write

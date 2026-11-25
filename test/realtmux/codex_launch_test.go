@@ -17,6 +17,7 @@ import (
 	_ "modernc.org/sqlite" // the store file driver, for agePendingLaunch
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -472,6 +473,10 @@ func TestCodexLaunchRecordsTheLaunch(t *testing.T) {
 		t.Errorf("the stand-in ran in %q, want the spawn's cwd %q (%v)", readFileTrim(t, rec.path("cwd")), want, err)
 	}
 	l := rec.launch(t)
+	// b.j6m: the actual process argv must preserve terminal scrollback.
+	if n := len(l.Before(codexfix.KindNoAltScreen)); n != 1 {
+		t.Errorf("--no-alt-screen before `--` appears %d times; want once", n)
+	}
 	command, exe := sessionStartCommand(t, l)
 	if !strings.HasPrefix(command, "exec '"+exe+"' hook --agent codex") {
 		t.Errorf("SessionStart command %q, want `exec '<binary>' hook --agent codex`", command)

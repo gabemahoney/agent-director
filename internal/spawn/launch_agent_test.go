@@ -3,6 +3,7 @@ package spawn
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -39,18 +40,18 @@ func setLaunchPath(cfg *config.Config, agent, path string) {
 func TestLaunchProgram(t *testing.T) {
 	launches := []struct {
 		name string
-		// next is the argument after the program, by agent.
-		next   map[string]string
+		// next is the argument prefix after the program, by agent (b.j6m).
+		next   map[string][]string
 		create func(t *testing.T, agent, path string) (argv []string, rowText string)
 	}{
-		{"spawn", map[string]string{"claude": "--settings", "codex": "--no-daemon"}, func(t *testing.T, agent, path string) ([]string, string) {
+		{"spawn", map[string][]string{"claude": {"--settings"}, "codex": {"--no-daemon", "--no-alt-screen"}}, func(t *testing.T, agent, path string) ([]string, string) {
 			e := newLaunchEnv(t)
 			e.r.Agent, e.r.AgentArgs = agent, nil
 			setLaunchPath(&e.cfg, agent, path)
 			id := e.mustLaunch()
 			return e.onlyCreate().Command, fmt.Sprintf("%+v", e.row(id))
 		}},
-		{"reuse", map[string]string{"claude": "--settings", "codex": "--no-daemon"}, func(t *testing.T, agent, path string) ([]string, string) {
+		{"reuse", map[string][]string{"claude": {"--settings"}, "codex": {"--no-daemon", "--no-alt-screen"}}, func(t *testing.T, agent, path string) ([]string, string) {
 			e := newLaunchEnv(t)
 			e.r.Agent, e.r.AgentArgs = agent, nil
 			setLaunchPath(&e.cfg, agent, path)
@@ -60,7 +61,7 @@ func TestLaunchProgram(t *testing.T) {
 			}
 			return c.Create.Command, fmt.Sprintf("%+v", c.Row)
 		}},
-		{"resume", map[string]string{"claude": "--resume", "codex": "resume"}, func(t *testing.T, agent, path string) ([]string, string) {
+		{"resume", map[string][]string{"claude": {"--resume"}, "codex": {"resume", "session-program-1", "--no-daemon", "--no-alt-screen"}}, func(t *testing.T, agent, path string) ([]string, string) {
 			e := newRelaunchEnv(t)
 			e.row.Agent, e.row.AgentArgs = agent, nil
 			setLaunchPath(&e.cfg, agent, path)
@@ -80,8 +81,9 @@ func TestLaunchProgram(t *testing.T) {
 				}
 				t.Run(agent+"/"+l.name+"/"+p.name, func(t *testing.T) {
 					argv, rowText := l.create(t, agent, path)
-					if len(argv) < 2 || argv[0] != want || argv[1] != l.next[agent] {
-						t.Errorf("create argv starts %q; want program %q (one argument) then %q", argv[:min(2, len(argv))], want, l.next[agent])
+					prefix := append([]string{want}, l.next[agent]...)
+					if len(argv) < len(prefix) || !slices.Equal(argv[:len(prefix)], prefix) {
+						t.Errorf("create argv starts %q; want program and arguments %q", argv[:min(len(prefix), len(argv))], prefix)
 					}
 					if path != "" && strings.Contains(rowText, path) {
 						t.Errorf("row = %s; want nothing about the launch path on it", rowText)

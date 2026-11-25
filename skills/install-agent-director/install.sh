@@ -445,6 +445,7 @@ tmp_sentinel=""
 stage_bin=""
 stage_admin=""
 migrate_tmp=""
+replace_tmp=""
 link_tmp=""
 version_out=""
 version_err=""
@@ -793,7 +794,8 @@ ad_restore_copies_remove() {
 # install made and has not moved into place (the staged binary copies, the
 # --from-release downloads, the binary and admin temp copies, a migration
 # sentinel's temp file that step 3 never moved into place, and a migration
-# write's temp file and the managed link's temp link), and the restore's
+# write's temp file, a settings/config replacement's temp file and the
+# managed link's temp link), and the restore's
 # copies unless RESTORE_KEEP_COPIES is 1: after a success, a refusal, a
 # post-swap failure and a failed move alike.
 # A SIGKILL leaves the copies, under their documented name pattern. Every
@@ -824,7 +826,7 @@ ad_exit_cleanup() {
         printf '%s' "$MOVE_NOTES_DEFERRED" 2>/dev/null || true
     fi
     for f in "${TMP:-}" "${ADMIN_TMP:-}" "${tmp_bin:-}" "${tmp_admin:-}" \
-        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}" "${migrate_tmp:-}" "${link_tmp:-}" \
+        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}" "${migrate_tmp:-}" "${replace_tmp:-}" "${link_tmp:-}" \
         "${version_out:-}" "${version_err:-}"; do
         if [[ -n "$f" ]]; then
             rm -f "$f"
@@ -7244,10 +7246,13 @@ fi
 # (b.ojn): the new file is written owner-only (umask 077) and only then
 # given them, so no one who could not read the old contents can read the
 # new ones, even before the mv. A new <file> takes the umask's mode.
+# Register the temp before writing so EXIT removes even a partial copy
+# on a failed write, chmod, mv or interrupt (b.o4v).
 ad_replace_keeping_mode() {
     local target tmp
     target=$(ad_resolve_link "$1") || return
     tmp="${target}.new"
+    replace_tmp="$tmp"
     rm -f "$tmp"
     if [[ -f "$target" ]]; then
         (umask 077; printf '%s\n' "$2" >"$tmp")
@@ -7256,6 +7261,7 @@ ad_replace_keeping_mode() {
         printf '%s\n' "$2" >"$tmp"
     fi
     mv -f "$tmp" "$target"
+    replace_tmp=""
 }
 
 # The help hooks an earlier release's install.sh wrote name the old
