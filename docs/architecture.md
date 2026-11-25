@@ -4335,8 +4335,9 @@ derive a confirmation time from a read's or response's clock,
 **v20 columns: display evidence and observation writer.** `spawns.display_evidence`
 and then `spawns.observation_writer` are nullable TEXT,
 appended after the v19 columns in fresh DDL and by `migrateV19toV20` on a normal
-v19 store. `display_evidence` holds one JSON record for the shown display: `idle_screen` or
-`none` (the public `displayed_state` is omitted). `observation_writer` holds
+v19 store. `display_evidence` holds one JSON record for the shared committed
+display: `idle_screen` or `none`. A reader's projected response can differ
+(see [Displayed State reporting](#displayed-state-reporting)). `observation_writer` holds
 the token of the observer commit that last wrote the display observation or
 record (see [Best-effort commits and races](#best-effort-commits-and-races));
 it is never reported. No backfill derives evidence or a writer
@@ -8082,9 +8083,10 @@ knows about never yields a Displayed State, so its row reads
 separate future work. Displayed States are report-only and computed on
 demand by the selected `status`, `get`, `list` and `find-missing` checks;
 AD runs no background process or timer for them. Display detection interprets
-neither pane text nor agent logs. `confirmations.displayed_state` reports the
-stored evidence of the exact display returned, including no Displayed State;
-only an owned-pane sample can confirm it. Unavailable display (Cursor) remains
+neither pane text nor agent logs. `confirmations.displayed_state` reports
+evidence bound to the exact display returned, including no Displayed State;
+see **Display evidence** below for stored and response-only records.
+Only an owned-pane sample can confirm it. Unavailable display (Cursor) remains
 `unknown`/`unsupported` with null evidence. User-facing rules are in the
 [caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows);
 this section holds the shared components every Displayed State and every
@@ -8101,15 +8103,17 @@ agent must go through.
 | `store.IdleScreenApplies` | The eligibility rule used by `Spawn.PaneObservable`: only Claude and Codex may be sampled, whatever a row's timeout override. |
 | `pkg/api/display.go` `idleScreenAvailability` | The shared status/get/list availability projection: Claude and Codex read `available`; Cursor and other nonempty unknown agents read `unavailable`. An empty agent reads `available` for Go custom-store compatibility, without sampling eligibility. |
 | `StateDetail`, `stateDetail` | The one wire shape of the Displayed State shown: `displayed_state`, `since` (RFC3339 UTC, exactly milliseconds) and that state's detail (`unchanged_minutes` for `idle_screen`; `request_token` and `tool_name` are kept for `needs_intelligence`), embedded in `StatusResult` and `SpawnRow`. `ListRow` carries only `DisplayedState` (call `get` for the rest); `StatusResult` adds `tmux_session_name` only while `displayed_state` is present. A field that does not apply is omitted, never null, empty or zero. `api.StateNeedsIntelligence` and `api.StateIdleScreen` are the only state constants pkg/api exports. |
-| `store.ObserveNeedsIntelligenceOutcome`, `store.ObserveIdleScreenOutcome` | Guarded writers returning `DisplayOutcome`: paired `Display`/`Evidence`, affected `Families` and `Committed` (including record-only commits). When nothing commits, they return the examined snapshot's pair. They recheck through `lockedObservationRow` and atomically commit observation/evidence and affected family changes without waiting for a lock. Existing observer wrappers remain. |
+| `store.ObserveNeedsIntelligenceOutcome`, `store.ObserveIdleScreenOutcome` | Guarded writers returning `DisplayOutcome`: paired `Display`/`Evidence`, affected `Families` and `Committed` (including record-only commits). `ReaderEvidence` is separate response-only no-display evidence; `Observed` carries a committing pane observer's resulting snapshot. When nothing commits, they return the examined snapshot's pair. They recheck through `lockedObservationRow` and atomically commit observation/evidence and affected family changes without waiting for a lock. Existing observer wrappers remain. |
 | `planPermission` (`permissionCandidate`), `planPane`, `planObservation` | The permission plan (fallback clocks; never a display target), the pane target (baseline and qualifying `idle_screen`) and the pure observation/display plan, shared by the unlocked pre-check and locked commit. The guarded observer combines that plan with the [evidence comparison](#best-effort-commits-and-races) to decide whether to write. `planObservation` also ends a stored `needs_intelligence` at once, with its exit record. |
+| `Spawn.IdleScreenBeforeTimeout`, `Spawn.IdleScreenObservedBeforeTimeout` | Shared timeout-only preservation and stored-read eligibility rules for a current idle candidate on a valid unchanged period. The former judges an actual matching sample; the latter uses successful capture times, never the response clock. Both exclude factual exit candidates. |
+| `idleScreenTimeout`, `projectReaderDisplay`, `readerDisplayRecord` | Shared row-override/default resolution and final reader projection. The active checker projects after final refresh for status/get/get-many/list/sweep. A bound matching sample can supply this call's capture time and response-only no-display evidence; projection changes no stored episode, trail or family contribution. Must reuse these paths rather than add per-verb timeout or evidence rules. |
 | `store.FallbackClock` | The one rule for the start of a fallen-back request's fallback clock, used by shared active observations, by the `RecordPermissionFallbacks` write that state reads, `find-missing` and `get-permission` share and by those readers' pick-up for that write (`addGone`), so a persisted clock is never one a read rejects and a read attempts no write that stores nothing, save one `get-permission` case ([Readers never wait](#readers-never-wait-problem-4)). |
-| `Spawn.CommittedDisplay` | The previous committed display and detail (`store.DisplayDetail`), read from one row snapshot; what a read returns when it cannot commit. |
+| `Spawn.CommittedDisplay` | The previous committed display and detail (`store.DisplayDetail`), read from one row snapshot; the fallback when a read cannot commit, before reader projection. |
 | `committedDisplayStateSQL` | `Spawn.CommittedDisplay` in SQL: the deterministic function `committed_display_state`, which gets each column as a BLOB so it judges the bytes a read scans, a NUL included, and never fails. A lifecycle write (`hookStateSet`, `immediateSettleSet`, `RepairCheckPermissionIfSameLife`, `invalidatePaneSet`) must use it, never a `json_extract` of the observation's `state`, to keep a displayed observation, record `display_exit` or decide whether a held Codex turn start has a shown display to end (`paneEvidencePresentSQL`), so it keeps or exits exactly the display a read shows. The function exists only on this binary's connections (the sqlite3 CLI that `install.sh` and `sql.sh` run cannot call it), so it never goes in a trigger, view, index, CHECK or generated column. |
 | `RecordPermissionFallbacks` (via `recordGone`) | The shared active checker's and `get-permission`'s write of `hook_gone_at` and the fallback clock; it keeps the first basis and the existing `hook_gone_at` behaviour. |
 | `takeDisplayExits`, `emitDisplayTransitions` | Drain an immediate exit inside the writing transaction; emit after its commit. |
 | `invalidatePaneSet` | Every Codex turn-start and pane-adoption writer must use this shared SET fragment to clear the baseline and old `idle_screen` candidate/display. The fragment leaves `permission_epoch` alone; a turn start that changes the raw state advances it separately. Its transaction refreshes families and drains display exits. |
-| `ListFilters.StoredDisplay`, `ListFilters.IDs`, `listFiltered` | Select stored reported-state or committed-display matches, then limit, before checks. Refresh by the selected IDs only; returned state/display may no longer match. Never widen or refill that selection after checking. |
+| `ListFilters.StoredDisplay`, `ListFilters.IDs`, `listFiltered` | Select stored reported-state or committed-display matches, then limit, before checks. Refresh by the selected IDs only; returned state/display may no longer match, including reader-specific omission of a stored idle episode. Never widen or refill that selection after checking. |
 
 A new Displayed State, such as unknown-prompt inference for
 `needs_intelligence`, adds its own target planner beside `planPane` and
@@ -8175,6 +8179,10 @@ reaches the timeout: the row's own `idle_screen_timeout_seconds` when
 positive, else the reader's `[state] idle_screen_timeout_seconds`. At least
 two successful matching owned-pane captures must span that timeout; equality
 proves neither continuous inactivity between captures nor exit.
+If the baseline is unchanged and a current idle finding is below this
+reader's timeout, `ObserveIdleScreenOutcome` preserves the shared candidate,
+display, baseline and evidence without writing or emitting a transition.
+Changed or failed samples still follow the existing reset and exit planner.
 `unchanged_minutes` is the period in whole minutes, floored, at the committing
 check. A failed sample's reset is persisted like any baseline change, so the
 next success starts fresh; a reset that cannot commit is skipped, so a later
@@ -8193,7 +8201,16 @@ ends at once with its exit record) with its
 interval. `display_exit` holds a pending immediate exit: `prior_state` (the
 Displayed State left), `new_state` and `at_ms`. The decoders accept only
 these encodings; anything else, an earlier encoding included, decodes as no
-committed display or exit marker.
+committed display or exit marker. Reader eligibility and response-only
+evidence add no stored fields or encoding keys.
+
+`projectReaderDisplay` omits an ongoing idle episode below the reader's own
+effective timeout. `IdleScreenObservedBeforeTimeout` ends the observed span
+at the latest applicable successful matching capture: `observed_at_ms`, a
+later successful pane record's `checked_at`, or this invocation's bound
+matching sample. A failed attempt's time, an old shorter-span confirmation
+or the response clock cannot extend that span. The shared episode and
+`since` remain intact, and factual exit candidates bypass this suppression.
 
 **Display evidence.** A successful pane sample updates only the record for
 the display it establishes. The first success in a stay sets `confirmed_at` and
@@ -8204,6 +8221,14 @@ settling candidate leaves the shown record unchanged. A failed sample stores
 its reason and check time with any applicable older confirmation; without one,
 it is `not_confirmed` with null confirmation time/source. Stored reads,
 settlement, reopen and age projection never stamp either time.
+
+When the reader hides a shared episode, `ReaderEvidence` can confirm no
+display at this call's successful matching sample time, without replacing
+the stored episode record. `readerDisplayRecord.applies` binds the sample's
+time, fingerprint and optional evidence to its snapshot, identity, life,
+agent, raw state, epoch, observation version, observation/evidence and pane
+baseline; the fingerprint must also match that baseline. With no applicable
+sample, omission creates no evidence and borrows none from the hidden episode.
 
 #### Best-effort commits and races
 
@@ -8236,6 +8261,15 @@ record-only included, also writes a fresh random `observation_writer` token
 token, so a caller whose COMMIT rolled back never claims a peer's identical
 later commit or re-emits its transitions. Only confirmed landing
 reports the new pair and emits any transition; doubt keeps the previous pair.
+For a pane commit, ordinary or proven landed, response-only
+`DisplayOutcome.Observed` carries the resulting observation, version,
+baseline and evidence with that pair; a record-only commit changes only its
+evidence. The active checker's `displayRow` binds these facts to the returned
+pair. A successful final refresh replaces both; a failed refresh keeps both,
+including a retained exit's display and committed failed-sample record.
+Final reader projection requires those bound facts and revalidates the
+invocation's sample against them. Unknown facts from a narrow observer skip
+projection rather than reuse a pre-commit candidate.
 A COMMIT abandoned at its deadline usually cannot be confirmed this way,
 so its transition is not emitted even if the
 write lands (see `ad.spawn.displayed_state_transition` under
@@ -8246,8 +8280,9 @@ Selected reads and sweeps may commit a display, evidence, fallback clock or pane
 **Settling, trail, family and raw guards.**
 
 - *Settling.* Entering and leaving a Displayed State are candidates held for
-  `[state] settle_ms` from the check that first saw them, the same hold
-  ordinary state settling uses (`settle.go`); `since` is the check that
+  the committing reader's `[state] settle_ms` from the check that first saw
+  the candidate, the same hold ordinary state settling uses (`settle.go`);
+  `since` is the check that
   committed the entry and is kept while a clearing settles and while
   `unchanged_minutes` changes, which refreshes the detail with no settling,
   `since` change or trail record. A hook that changes the raw state
@@ -8259,6 +8294,10 @@ Selected reads and sweeps may commit a display, evidence, fallback clock or pane
   value every other reader shows, never a stale copy of it, and no
   `displayed_state` is reported. A successful non-pane exit clears the
   evidence to unknown; a failed settle-out keeps the entire shown record.
+  A below-timeout reader cannot cancel a peer's idle entry candidate.
+  A factual exit retains its display for every reader until an eligible
+  check commits it after the hold; missing checks or unavailable writes can
+  retain it longer than `settle_ms`.
 - *Immediate exits.* A terminal write (`ended`, `missing`) or a command's
   state write (`MoveToPending`, reuse, resume, and shared stale
   `check_permission` repair through `RepairCheckPermissionSample`) advances
@@ -8280,7 +8319,8 @@ Selected reads and sweeps may commit a display, evidence, fallback clock or pane
   a failed launch's restore can recover its prior owner's none record.
 - *Trail.* One `ad.spawn.displayed_state_transition` per entry and exit,
   carrying `instance_id`, `prior_state`, `new_state` and `ts`;
-  emitted after the commit and fail-open. A Displayed State change never
+  emitted after the shared commit and fail-open. Reader-specific omission or
+  timeout-only preservation emits none. A Displayed State change never
   writes `ad.spawn.state_transition`.
 - *Family.* A live member's retained `idle_screen` display contributes
   `working` until its exit commits. Contribution changes update durable family histories and

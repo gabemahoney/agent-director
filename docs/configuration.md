@@ -199,6 +199,11 @@ on CLI, MCP and the Go and TypeScript clients:
   change, a reported value can have held for less than the new interval.
   A wall-clock step back delays settling; a jump forward can settle early.
 
+Display entry candidates use the qualifying reader's settle interval. A
+reader below its own idle-screen timeout cannot cancel a peer's candidate.
+A factual exit retains the display for every reader until an eligible check
+commits it after the candidate has held for T; T is no wall-clock upper bound.
+
 Settling preserves the shown value's [confirmation](caller-contract.md#confirmations).
 It creates neither evidence nor attempt times. A retained display keeps its
 own record until its exit commits; `since` still dates committed display entry.
@@ -213,7 +218,7 @@ value or one above the maximum is refused (see
 
 ## Idle-screen timeout (`[state]`)
 
-`[state] idle_screen_timeout_seconds` is the minimum span of matching
+`[state] idle_screen_timeout_seconds` is the minimum span of successful matching
 owned-pane captures that qualifies a `working` Claude or Codex row for
 `idle_screen`. Eligible `status`, `get`, `get-many`, `list` and `sweep` checks
 sample it; the timeout schedules no check and confirms nothing by itself.
@@ -239,7 +244,8 @@ Sampling and baseline resets are defined in the
   says.
 - **When a change takes effect.** As [any other](#when-a-change-takes-effect):
   a reader judges a row with no timeout of its own with the value it has
-  loaded.
+  loaded. A longer timeout can hide a peer's shared episode; see
+  [Unchanged panes](caller-contract.md#unchanged-panes) for eligibility.
 
 ## Timing settings (`[tmux]`)
 

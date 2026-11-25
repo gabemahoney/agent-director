@@ -139,6 +139,39 @@ func (sp Spawn) IdleScreenCurrent() bool {
 	return ok && sp.PaneObservable() && o.PermissionEpoch == sp.PermissionEpoch && o.Candidate == StateIdleScreen
 }
 
+// IdleScreenBeforeTimeout judges a matching sample taken at now against the
+// current pane finding's unchanged period and this reader's timeout. An exit
+// candidate is deliberately excluded: its retained display belongs to the
+// period that ended, not the replacement baseline, and still shows to every
+// reader while the exit settles. A backwards clock never hides a finding.
+func (sp Spawn) IdleScreenBeforeTimeout(now time.Time, timeout time.Duration) bool {
+	o, ok := decodeDisplayObservation(sp.DisplayObservation)
+	baseline := committedPaneBaseline(sp)
+	return ok && sp.PaneObservable() && o.PermissionEpoch == sp.PermissionEpoch &&
+		o.Candidate == StateIdleScreen && now.UnixMilli() >= o.ObservedAt &&
+		baseline != (paneBaseline{}) && now.Sub(time.UnixMilli(baseline.sinceMillis)) < timeout
+}
+
+// IdleScreenObservedBeforeTimeout is the stored-read projection of the same
+// rule. sampledAt is this invocation's successful matching capture time, or
+// zero without one; it is never the response clock. With a current idle
+// candidate and valid baseline, observed_at_ms dates the last successful pane
+// sample that changed the observation. A later evidence-only success advances
+// the applicable pane record's checked_at instead. Failed attempts cannot
+// supply that later time, and an exit candidate still retains its display.
+func (sp Spawn) IdleScreenObservedBeforeTimeout(sampledAt int64, timeout time.Duration) bool {
+	o, ok := decodeDisplayObservation(sp.DisplayObservation)
+	if !ok {
+		return false
+	}
+	latest := max(o.ObservedAt, sampledAt)
+	if ev, applies := sp.applicableDisplayEvidence(sp.CommittedDisplay(), sp.DisplayEvidence); applies &&
+		ev.Reason == "" && ev.Source == EvidencePane {
+		latest = max(latest, ev.Checked)
+	}
+	return sp.IdleScreenBeforeTimeout(time.UnixMilli(latest), timeout)
+}
+
 // planPane judges sample against row's committed baseline at now: the
 // baseline to store and, once its unchanged period has reached timeout, the
 // idle_screen target with the completed minutes of that period. A failed
