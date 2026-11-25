@@ -361,9 +361,14 @@
 # (docs/operator-actions.md). A file that changed since pre-flight and that the
 # migration then refuses stops the install the same way, with exit 5 and
 # ErrConfigMalformed or ErrTemplateMalformed. With no store, or a store at or above that
-# version, no file is read or changed. An unreadable store version stops the
-# install in pre-flight (exit 5, ErrVersionUnreadable). It runs with or
-# without --no-hooks.
+# version, no file is read or changed by this migration. An unreadable store
+# version stops the install in pre-flight (exit 5, ErrVersionUnreadable).
+# It runs with or without --no-hooks. Each migrated file's line warns that
+# its copy may hold tokens. Every install that gets past this migration step
+# also names all existing config.toml.pre-agent-rename.<YYYYmmdd-HHMMSS> and
+# templates/*.pre-agent-rename.<YYYYmmdd-HHMMSS> copies on one line, each path
+# shell-quoted, without reading their contents or deleting them. They may
+# hold tokens and can be deleted once the upgrade is confirmed.
 #
 # Exempt upgrades from schema v16 to below this release's schema, with no
 # directory move due, refuse live or unreadable agent rows before opening
@@ -440,6 +445,7 @@ tmp_sentinel=""
 stage_bin=""
 stage_admin=""
 migrate_tmp=""
+replace_tmp=""
 link_tmp=""
 version_out=""
 version_err=""
@@ -788,7 +794,8 @@ ad_restore_copies_remove() {
 # install made and has not moved into place (the staged binary copies, the
 # --from-release downloads, the binary and admin temp copies, a migration
 # sentinel's temp file that step 3 never moved into place, and a migration
-# write's temp file and the managed link's temp link), and the restore's
+# write's temp file, a settings/config replacement's temp file and the
+# managed link's temp link), and the restore's
 # copies unless RESTORE_KEEP_COPIES is 1: after a success, a refusal, a
 # post-swap failure and a failed move alike.
 # A SIGKILL leaves the copies, under their documented name pattern. Every
@@ -819,7 +826,7 @@ ad_exit_cleanup() {
         printf '%s' "$MOVE_NOTES_DEFERRED" 2>/dev/null || true
     fi
     for f in "${TMP:-}" "${ADMIN_TMP:-}" "${tmp_bin:-}" "${tmp_admin:-}" \
-        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}" "${migrate_tmp:-}" "${link_tmp:-}" \
+        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}" "${migrate_tmp:-}" "${replace_tmp:-}" "${link_tmp:-}" \
         "${version_out:-}" "${version_err:-}"; do
         if [[ -n "$f" ]]; then
             rm -f "$f"
@@ -6649,6 +6656,10 @@ fi
 # 077) and then given the target's mode, and mv puts them over the target.
 # A file that needs no change gets neither a write nor a backup, so a re-run
 # that crosses the rename again changes nothing already migrated.
+# Each migrated file's line warns that its copy may hold tokens. After this
+# conditional apply, every install that gets there names all matching copies,
+# including earlier runs', before the move's references and the store open.
+# Copies remain available for recovery until the upgrade is confirmed.
 #
 # A write that fails (a full disk, permissions changed since pre-flight)
 # leaves that file as it was, keeps every backup, removes its temp file and
@@ -6784,7 +6795,7 @@ ad_migrate_apply_file() {
         ad_migrate_fail_write "$file" "$err"
     fi
     migrate_tmp=""
-    echo "  migrate : $file migrated for the agent rename (copy: $bak)" || ad_cutover_write_failed
+    printf '  migrate : %q migrated for the agent rename (copy: %q); this copy may hold tokens and can be deleted once the upgrade is confirmed.\n' "$file" "$bak" || ad_cutover_write_failed
 }
 
 if [[ "$AGENT_RENAME_DUE" -eq 1 ]]; then
@@ -6805,6 +6816,22 @@ if [[ "$AGENT_RENAME_DUE" -eq 1 ]]; then
     if [[ "$migrate_changed" -eq 0 ]]; then
         echo "  migrate : config.toml and the templates need no agent-rename change" || ad_cutover_write_failed
     fi
+fi
+
+# Agent-rename copies may retain tokens after the live files change (b.mte).
+# Name only the timestamp form, as the settings.json inventory does, without
+# reading contents or deleting recovery evidence. Include dangling links and
+# quote each path with %q so the whole list stays shell-readable on one line.
+# Keep this inventory in step with uninstall.sh's, and before move references.
+agent_rename_copies=""
+for agent_rename_copy in \
+    "${DEFAULT_INSTALL_ROOT}"/config.toml.pre-agent-rename.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9] \
+    "${DEFAULT_INSTALL_ROOT}"/templates/*.pre-agent-rename.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
+    [[ -e "$agent_rename_copy" || -L "$agent_rename_copy" ]] || continue
+    printf -v agent_rename_copies '%s %q' "$agent_rename_copies" "$agent_rename_copy"
+done
+if [[ -n "$agent_rename_copies" ]]; then
+    echo "  copies  : agent-rename copies may hold tokens and can be deleted once the upgrade is confirmed:${agent_rename_copies}" || ad_cutover_write_failed
 fi
 
 # The move's other references into the old directory, printed after the
@@ -7219,10 +7246,13 @@ fi
 # (b.ojn): the new file is written owner-only (umask 077) and only then
 # given them, so no one who could not read the old contents can read the
 # new ones, even before the mv. A new <file> takes the umask's mode.
+# Register the temp before writing so EXIT removes even a partial copy
+# on a failed write, chmod, mv or interrupt (b.o4v).
 ad_replace_keeping_mode() {
     local target tmp
     target=$(ad_resolve_link "$1") || return
     tmp="${target}.new"
+    replace_tmp="$tmp"
     rm -f "$tmp"
     if [[ -f "$target" ]]; then
         (umask 077; printf '%s\n' "$2" >"$tmp")
@@ -7231,6 +7261,7 @@ ad_replace_keeping_mode() {
         printf '%s\n' "$2" >"$tmp"
     fi
     mv -f "$tmp" "$target"
+    replace_tmp=""
 }
 
 # The help hooks an earlier release's install.sh wrote name the old

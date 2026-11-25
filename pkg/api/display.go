@@ -126,7 +126,9 @@ func familyOf(row Spawn, families map[string]string) string {
 // a display of either state left by an earlier interval. A needs_intelligence
 // display an earlier release committed is never returned: the row's reported
 // state is, and a committing observation clears it. read.record, when set,
-// receives the returned display's record (displayRecord).
+// receives the returned display's record (displayRecord). The shared checker
+// applies projectReaderDisplay after its final stored refresh, so a reader
+// below its own timeout can hide a peer's display without changing it.
 func observeDisplay(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, map[string]string, *judgedRequestSet, bool) {
 	if checked := v.checked[row.InstanceID]; checked != nil {
 		d := checked.display
@@ -150,10 +152,10 @@ func observeDisplay(s any, v RelayView, settle store.SettleRead, row Spawn, read
 // one with the row's own record (read.record). A pane-observed row whose
 // sample a busy store prevented has that as its latest attempt.
 func observeRow(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, map[string]string, *judgedRequestSet, bool) {
-	read.noteRecord(row.DisplayEvidence, nil)
+	read.noteRecord(row.DisplayEvidence, nil, &row)
 	if read.storeBusy {
 		if row.PaneObservable() {
-			read.noteRecord(row.DisplayEvidence, displayAttempt(row, relayJudge{view: v}.now(), store.ReasonBusy))
+			read.noteRecord(row.DisplayEvidence, displayAttempt(row, relayJudge{view: v}.now(), store.ReasonBusy), &row)
 		}
 		return row.CommittedDisplay(), nil, read.requests, true
 	}
@@ -198,18 +200,68 @@ type permissionRead struct {
 // displayRecord is what an observation returns beside its display for the
 // displayed_state record: evidence, the display_evidence of the snapshot the
 // display comes from (an exact store's committed DisplayOutcome, else the
-// examined row's own), and attempt, this observation's unsuccessful attempt
-// when it committed none (response-only, never a durable record).
+// examined row's own), attempt, this observation's unsuccessful attempt,
+// reader, this invocation's successful pane capture, and observed, the facts
+// bound to the shared pair (nil when the observer supplies none).
 type displayRecord struct {
 	evidence string
 	attempt  *fieldAttempt
+	reader   *readerDisplayRecord
+	observed *Spawn
 }
 
-// noteRecord gives read's caller evidence and attempt as the display's
-// record; a read without a receiver notes nothing.
-func (read permissionRead) noteRecord(evidence string, attempt *fieldAttempt) {
+// readerDisplayRecord binds this invocation's successful matching capture
+// time, and any response-only no-display evidence, to the exact row whose
+// unchanged period it sampled. Neither the response clock nor an earlier
+// peer confirmation can substitute for that capture's observed span.
+type readerDisplayRecord struct {
+	row       Spawn
+	evidence  string
+	sha256    string
+	sampledAt int64
+}
+
+func (record *readerDisplayRecord) applies(row Spawn) bool {
+	return record != nil && record.row.Snapshot == row.Snapshot && record.row.Identity == row.Identity &&
+		record.row.Agent == row.Agent && record.row.LifeNumber == row.LifeNumber && record.row.State == row.State &&
+		record.row.PermissionEpoch == row.PermissionEpoch && record.row.ObservationVersion == row.ObservationVersion &&
+		record.row.DisplayObservation == row.DisplayObservation && record.row.DisplayEvidence == row.DisplayEvidence &&
+		record.row.PaneSHA256 == row.PaneSHA256 && record.row.PaneSinceMillis == row.PaneSinceMillis && record.row.PaneEpoch == row.PaneEpoch
+}
+
+// projectReaderDisplay filters only an ongoing idle finding on the committed
+// unchanged period. A shared exit still settles and retains its display as
+// before. Suppression alone establishes no evidence: only this invocation's
+// matching successful pane sample can confirm its no-display result.
+func projectReaderDisplay(checked *activeCheckedRow, view RelayView) {
+	// A narrow observer may return no bound projection facts. Keeping its
+	// pair is safer than interpreting an old candidate as its committed one.
+	if checked.displayRow == nil {
+		return
+	}
+	row := *checked.displayRow
+	if checked.display != row.CommittedDisplay() || checked.displayEvidence != row.DisplayEvidence {
+		return
+	}
+	var sampledAt int64
+	matching := checked.readerDisplay.applies(row) && checked.readerDisplay.sha256 == row.PaneSHA256
+	if matching {
+		sampledAt = checked.readerDisplay.sampledAt
+	}
+	if checked.display.State != StateIdleScreen || !row.IdleScreenObservedBeforeTimeout(sampledAt, idleScreenTimeout(view, row)) {
+		return
+	}
+	checked.display, checked.displayEvidence = store.DisplayDetail{State: row.ReportedState}, ""
+	if matching {
+		checked.displayEvidence = checked.readerDisplay.evidence
+	}
+}
+
+// noteRecord gives read's caller the pair's evidence, attempt and bound
+// observation facts; a read without a receiver notes nothing.
+func (read permissionRead) noteRecord(evidence string, attempt *fieldAttempt, observed *Spawn) {
 	if read.record != nil {
-		*read.record = displayRecord{evidence: evidence, attempt: attempt}
+		*read.record = displayRecord{evidence: evidence, attempt: attempt, observed: observed}
 	}
 }
 
@@ -285,7 +337,9 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 	if read.outcome != nil {
 		*read.outcome = outcome
 	}
-	read.noteRecord(observedEvidence(row, out, exact), nil)
+	// This observer returns no pane baseline/candidate snapshot. A final
+	// stored refresh can supply it; otherwise preserve its returned pair.
+	read.noteRecord(observedEvidence(row, out, exact), nil, nil)
 	return out.Display, out.Families, judged, false
 }
 
@@ -309,12 +363,7 @@ func observedEvidence(row Spawn, out store.DisplayOutcome, exact bool) string {
 // write found the store busy.
 func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, map[string]string, bool) {
 	sample := v.samplePane(row)
-	timeout := v.idleScreenTimeout
-	if row.IdleScreenTimeoutSeconds > 0 {
-		timeout = time.Duration(row.IdleScreenTimeoutSeconds) * time.Second
-	} else if timeout <= 0 {
-		timeout = config.DefaultIdleScreenTimeoutSeconds * time.Second
-	}
+	timeout := idleScreenTimeout(v, row)
 	var out store.DisplayOutcome
 	var err error
 	actual, exact := r.(*store.Store)
@@ -333,11 +382,40 @@ func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, ro
 		*read.outcome = outcome
 	}
 	if err != nil {
-		read.noteRecord(row.DisplayEvidence, displayAttempt(row, now, outcomeReason(outcome.Result)))
+		read.noteRecord(row.DisplayEvidence, displayAttempt(row, now, outcomeReason(outcome.Result)), &row)
+		read.notePaneSample(row, sample, now, "")
 		return row.CommittedDisplay(), nil, errors.Is(err, store.ErrStoreBusy)
 	}
-	read.noteRecord(observedEvidence(row, out, exact), nil)
+	observed := out.Observed
+	if exact && observed == nil {
+		observed = &row // A no-op returns the examined snapshot unchanged.
+	}
+	read.noteRecord(observedEvidence(row, out, exact), nil, observed)
+	if out.Observed != nil {
+		row = *out.Observed
+	}
+	read.notePaneSample(row, sample, now, out.ReaderEvidence)
 	return out.Display, out.Families, false
+}
+
+// notePaneSample keeps actual successful capture evidence for final reader
+// projection. applies binds it to the returned row even if a later refresh
+// fails or a successful refresh observes a concurrent writer's changes.
+func (read permissionRead) notePaneSample(row Spawn, sample store.PaneSample, at time.Time, evidence string) {
+	if read.record != nil && sample.SHA256 != "" {
+		read.record.reader = &readerDisplayRecord{row: row, evidence: evidence, sha256: sample.SHA256, sampledAt: at.UnixMilli()}
+	}
+}
+
+// idleScreenTimeout is shared by pane judgment and final reader projection.
+func idleScreenTimeout(view RelayView, row Spawn) time.Duration {
+	if row.IdleScreenTimeoutSeconds > 0 {
+		return time.Duration(row.IdleScreenTimeoutSeconds) * time.Second
+	}
+	if view.idleScreenTimeout > 0 {
+		return view.idleScreenTimeout
+	}
+	return config.DefaultIdleScreenTimeoutSeconds * time.Second
 }
 
 // stateDetail is d's Displayed State and detail as status, get and get-many report

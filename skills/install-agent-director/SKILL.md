@@ -897,11 +897,20 @@ The exempt script:
    - the file is first copied beside itself, with its mode, as
      `<file>.pre-agent-rename.<YYYYmmdd-HHMMSS>`, and then replaced
      whole, keeping its mode; a symlink is written through and kept;
-   - `  migrate : <file> migrated for the agent rename (copy: <backup>)`
+   - `  migrate : <file> migrated for the agent rename (copy: <backup>); this copy may hold tokens and can be deleted once the upgrade is confirmed.`
      is printed, or `  migrate : config.toml and the templates need no
      agent-rename change` when none changed. A file that needs no change
      gets no write and no copy, so a re-run changes nothing already
-     migrated.
+     migrated. Paths in migration output are shell-quoted.
+
+   After this block, every install that gets here names all existing
+   `config.toml.pre-agent-rename.<YYYYmmdd-HHMMSS>` and
+   `templates/*.pre-agent-rename.<YYYYmmdd-HHMMSS>` copies, including earlier
+   runs', on one stdout line starting
+   `  copies  : agent-rename copies may hold tokens and can be deleted once the upgrade is confirmed:`.
+   Each path is shell-quoted, ready to paste after `rm --`; no contents are
+   read and no copy is deleted. Tell the operator to keep them for recovery
+   until the upgrade is confirmed. With no copies, the line is absent.
 
    A write that fails (a full disk, a permission changed since
    pre-flight, a failed copy) stops the install with **exit 1** and no
@@ -952,7 +961,8 @@ The exempt script:
    the install adds a proper entry beside it (b.zbg). No copy of
    `settings.json` is kept, as its `env` can hold tokens (b.f3n): a file
    the merge cannot use is refused before any write (below), and the
-   write is atomic, so a failed one leaves the file as it was.
+   write is atomic, so a failed one leaves the file as it was. The
+   replacement temp is removed on failure or INT/TERM/HUP (b.o4v).
 
    An empty `settings.json`, or one holding only whitespace (a file
    made with `touch`, say), is merged as `{}` and gets both hooks
@@ -1573,7 +1583,8 @@ destructive *additions*.
   the same mode as the file it copies (b.ojn). A symlinked file is written
   through: the link is kept and the file it points to gets the edit
   (b.nw5). A link that points nowhere, or whose links loop, is left
-  alone.
+  alone. A failed write leaves the original file as it was; failure or
+  INT/TERM/HUP removes the replacement temp for either file (b.o4v).
 - It works out both edits before it changes anything. A symlinked file
   it must edit but cannot write through, because the directory of the
   file it points to cannot be written in (home-manager's read-only
@@ -1607,6 +1618,16 @@ destructive *additions*.
   on one stdout line starting
   `uninstall.sh: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:`.
   Tell the operator as for install.
+- Names the agent-rename copies described under "Before the six steps" in
+  step 5 of "What this skill does", without reading their contents, on one
+  stdout line starting
+  `uninstall.sh: agent-rename copies may hold tokens and can be deleted once the upgrade is confirmed:`.
+  Each path is shell-quoted. Tell the operator to delete them only once the
+  upgrade is confirmed. Plain uninstall keeps them; `--purge` names them
+  before removal but leaves copies in symlink targets. Follow the
+  [upgrade cleanup advice](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#upgrade)
+  for retained targets: printed paths may stop resolving after a parent link
+  is removed. With no copies, the line is absent.
 - Removes the binary at `~/.config/agent-director/bin/agent-director`
   and the `.prior` snapshot if one is present (the same files in the old
   directory on an old-only host).

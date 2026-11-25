@@ -57,8 +57,18 @@ type activeCheckedRow struct {
 	display store.DisplayDetail
 	// displayEvidence is display_evidence of the snapshot display comes from
 	// (the row's own, or the observation's commit), so the displayed_state
-	// record describes the display returned (mainFields).
+	// record describes the display returned (mainFields). Reader projection
+	// replaces it with matching response-only evidence, or none, when this
+	// reader's timeout hides the stored idle_screen episode.
 	displayEvidence string
+	// displayRow carries the observation's committed pane facts while row is
+	// still its pre-observation snapshot. A successful final refresh replaces
+	// both the display pair and these facts with the refreshed row. nil means
+	// a narrow observer supplied no facts bound to its returned pair.
+	displayRow *Spawn
+	// readerDisplay is response-only evidence from this invocation's pane
+	// capture: its actual sample time and any no-display confirmation.
+	readerDisplay *readerDisplayRecord
 	// state, process and displayAttempt are this invocation's unsuccessful or
 	// uncommitted attempts for those main fields (nil when none):
 	// response-only, never a durable record. A committed attempt, a failed
@@ -390,6 +400,7 @@ func checkActiveRows(ctx context.Context, source any, view RelayView, settle sto
 		missing: emptySweepResult(), delivery: delivery}
 	for _, row := range rows {
 		checked := &activeCheckedRow{row: row, display: row.CommittedDisplay(), displayEvidence: row.DisplayEvidence}
+		checked.displayRow = &checked.row
 		for _, adapter := range []string{"liveness", "cursor_gateway", "codex_turn", "transcript", "permission_read", "permission_repair", "display", "permission_fallback", "native_proof"} {
 			checked.record(activeCheckOutcome{Adapter: adapter, Result: "unattempted"})
 		}
@@ -467,6 +478,7 @@ func checkActiveRows(ctx context.Context, source any, view RelayView, settle sto
 					}
 					checked.row = row
 					checked.display, checked.displayEvidence = row.CommittedDisplay(), row.DisplayEvidence
+					checked.displayRow = &checked.row
 				}
 			}
 			for _, checked := range r.rows {
@@ -483,6 +495,9 @@ func checkActiveRows(ctx context.Context, source any, view RelayView, settle sto
 				checked.record(activeOutcome("projection", false, err))
 			}
 		}
+	}
+	for _, checked := range r.rows {
+		projectReaderDisplay(checked, r.view)
 	}
 	r.view.checked = r.byID
 	return r
@@ -504,6 +519,7 @@ func (r *activeReadStore) refreshRow(checked *activeCheckedRow) bool {
 	old := checked.row
 	checked.row = rows[0]
 	checked.display, checked.displayEvidence = rows[0].CommittedDisplay(), rows[0].DisplayEvidence
+	checked.displayRow = &checked.row
 	// A changed launch ends this row's pass. A later call can check it.
 	same := old.Identity.Token == rows[0].Identity.Token && old.LifeNumber == rows[0].LifeNumber
 	if !same {
@@ -841,6 +857,8 @@ func (r *activeReadStore) checkPermissionDisplay(checked *activeCheckedRow) {
 	var record displayRecord
 	display, families, judged, busy := observeDisplay(r.source, r.view, r.settle, row, permissionRead{requests: checked.judged, outcome: &displayOutcome, record: &record})
 	checked.display, checked.displayEvidence, checked.displayAttempt = display, record.evidence, record.attempt
+	checked.readerDisplay = record.reader
+	checked.displayRow = record.observed
 	if judged != nil {
 		checked.judged = judged
 	}

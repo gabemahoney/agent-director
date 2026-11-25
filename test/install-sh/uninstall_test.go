@@ -511,14 +511,14 @@ const (
 	uninstallOldCopies = "uninstall.sh: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:"
 )
 
-// oldCopiesNamed returns the paths out's line naming settings.json.bak copies
-// lists after phrase, split into words as bash reads them; nil with no such
-// line. A second such line, or one not starting with phrase, fails the case.
-func oldCopiesNamed(t *testing.T, out, phrase string) []string {
+// copiesNamed finds out's line containing marker and shell-parses its paths
+// after phrase; nil with no such line. A second such line, or one not starting
+// with phrase, fails the case.
+func copiesNamed(t *testing.T, out, phrase, marker string) []string {
 	t.Helper()
 	var lines []string
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "settings.json.bak") {
+		if strings.Contains(line, marker) {
 			lines = append(lines, line)
 		}
 	}
@@ -527,7 +527,7 @@ func oldCopiesNamed(t *testing.T, out, phrase string) []string {
 	}
 	list, ok := strings.CutPrefix(lines[0], phrase)
 	if len(lines) > 1 || !ok {
-		t.Errorf("lines naming settings.json.bak = %q; want one, starting %q", lines, phrase)
+		t.Errorf("lines containing %q = %q; want one, starting %q", marker, lines, phrase)
 		return nil
 	}
 	words, err := exec.Command("bash", "-c", `eval "set -- $1" && printf '%s\0' "$@"`, "bash", list).Output()
@@ -559,7 +559,7 @@ func TestAdviceFollow_J48_UninstallDeleteNamedCopiesAndRerun(t *testing.T) {
 		writeMode(t, p, text, 0o600)
 	}
 
-	named := oldCopiesNamed(t, string(runUninstall(t, home, "")), uninstallOldCopies)
+	named := copiesNamed(t, string(runUninstall(t, home, "")), uninstallOldCopies, "settings.json.bak")
 	if !slices.Equal(named, copies) {
 		t.Fatalf("the line names %q; want %q", named, copies)
 	}
@@ -577,6 +577,44 @@ func TestAdviceFollow_J48_UninstallDeleteNamedCopiesAndRerun(t *testing.T) {
 		if got, err := os.ReadFile(p); err != nil || string(got) != text {
 			t.Errorf("%s after the re-run = %q, %v; want it as it was", p, got, err)
 		}
+	}
+}
+
+// b.mte: confirmed purge must name migration copies before removing them,
+// without printing the credential bytes they may retain.
+func TestUninstallPurgeNamesMigrationCopies(t *testing.T) {
+	h := newMoveHome(t)
+	copies := []string{
+		filepath.Join(h.New, "config.toml.pre-agent-rename.20240101-000000"),
+		filepath.Join(h.New, "templates", "tok,o'q\"$x`y`.toml.pre-agent-rename.20250101-000000"),
+	}
+	const decoy = "decoy-purge-2222-not-a-real-token"
+	for _, path := range copies {
+		h.Write(path, decoy+"\n", 0o600)
+	}
+	// Observe the actual removal boundary, forwarding every rm to the real
+	// tool. The inventory must already be printed while both copies exist.
+	const removing = "test: removing migration copies"
+	h.WrapTool("rm", fmt.Sprintf(`if [[ "$#" -eq 2 && "$1" == -rf && "$2" == %s ]]; then
+    [[ -f %s && -f %s ]] || exit 91
+    printf '%%s\n' %s
+fi`, moveQuote(h.New), moveQuote(copies[0]), moveQuote(copies[1]), moveQuote(removing)))
+	out, code := uninstallExit(t, h.Home, "", "", []string{"--purge", "--force"}, h.Tools)
+	if code != 0 {
+		t.Fatalf("confirmed purge exited %d:\n%s", code, out)
+	}
+	text := string(out)
+	if got := copiesNamed(t, text, uninstallRenameCopies, "agent-rename copies"); !slices.Equal(got, copies) {
+		t.Errorf("purge inventory names %q; want %q", got, copies)
+	}
+	if warning, removal := strings.Index(text, uninstallRenameCopies), strings.Index(text, removing); warning < 0 || removal < 0 || warning >= removal {
+		t.Error("purge did not print the inventory before removing the copies")
+	}
+	if strings.Contains(text, decoy) {
+		t.Error("purge printed a decoy credential")
+	}
+	if _, err := os.Lstat(h.New); !os.IsNotExist(err) {
+		t.Errorf("purge left its install root: %v", err)
 	}
 }
 
@@ -644,7 +682,7 @@ func TestSettingsBackupNotKept(t *testing.T) {
 						t.Errorf("after %s: %s = %q (mode %v); want it kept as it was", step, p, got, mode)
 					}
 				}
-				if got := oldCopiesNamed(t, res.Stdout+"\n"+res.Stderr, phrase); !slices.Equal(got, named) {
+				if got := copiesNamed(t, res.Stdout+"\n"+res.Stderr, phrase, "settings.json.bak"); !slices.Equal(got, named) {
 					t.Errorf("%s: the old-copies line names %q; want %q\nstdout:\n%s\nstderr:\n%s", step, got, named, res.Stdout, res.Stderr)
 				}
 				raw, _ := ownedFileBytes(t, settings)
@@ -656,6 +694,95 @@ func TestSettingsBackupNotKept(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSettingsReplaceFailureLeavesNoCopy (b.o4v): a failed or interrupted
+// settings.json replacement keeps the original and removes its token-bearing temp.
+func TestSettingsReplaceFailureLeavesNoCopy(t *testing.T) {
+	const (
+		token = "PLACEHOLDER-TOKEN-not-a-secret-o4v"
+		text  = `{"env":{"GH_TOKEN":"` + token + `"}}` + "\n"
+	)
+	faults := []struct {
+		name, tool, action string
+		code               int
+		symlink            bool
+	}{
+		{name: "mv fails", tool: "mv", action: "exit 73", code: 73},
+		{name: "chmod fails", tool: "chmod", action: "exit 73", code: 73},
+		{name: "mv fails through symlink", tool: "mv", action: "exit 73", code: 73, symlink: true},
+		// The child returns success without renaming: only the signal can end
+		// the script. Bash handles it after this foreground child finishes.
+		{name: "TERM before mv", tool: "mv", action: `kill -TERM "$PPID"; exit 0`, code: 143},
+	}
+	for _, script := range []string{"install.sh", "uninstall.sh"} {
+		for _, fault := range faults {
+			t.Run(script+"/"+fault.name, func(t *testing.T) {
+				t.Parallel()
+				h := newMoveHome(t)
+				h.Flags = []string{"--no-symlink"}
+				settings := filepath.Join(h.Home, ".claude", "settings.json")
+				target := settings
+				link := filepath.Join("..", "dotfiles", "settings.json")
+				if fault.symlink {
+					target = filepath.Join(h.Home, "dotfiles", "settings.json")
+					h.Link(link, settings)
+				}
+				h.Write(target, text, 0o600)
+				if script == "uninstall.sh" {
+					if r := h.Install(); r.Code != 0 {
+						t.Fatalf("setup install: exit %d\n%s\n%s", r.Code, r.Stdout, r.Stderr)
+					}
+				}
+				before, err := os.ReadFile(target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				marker := "b.o4v: injected " + fault.name
+				h.WrapTool(fault.tool, `for a; do
+    if [[ "$a" -ef `+moveQuote(target+".new")+` ]]; then
+        [[ -f "$a" ]] || exit 74
+        printf '%s\n' `+moveQuote(marker)+` >&2
+        `+fault.action+`
+    fi
+done`)
+				var res moveResult
+				if script == "uninstall.sh" {
+					res = schedUninstall(t, h)
+				} else {
+					res = h.Install()
+				}
+				if !slices.Contains(strings.Split(res.Stderr, "\n"), marker) {
+					t.Fatalf("stand-in never intercepted the written temp file; exit %d\nstdout:\n%s\nstderr:\n%s", res.Code, res.Stdout, res.Stderr)
+				}
+				if res.Code != fault.code {
+					t.Errorf("%s exit = %d, want %d\nstderr:\n%s", script, res.Code, fault.code, res.Stderr)
+				}
+				got, err := os.ReadFile(target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != string(before) {
+					t.Error("failed replacement changed settings.json")
+				}
+				var decoded struct{ Env map[string]string }
+				if err := json.Unmarshal(got, &decoded); err != nil || !maps.Equal(decoded.Env, map[string]string{"GH_TOKEN": token}) {
+					t.Errorf("settings.json did not keep its env: %v", err)
+				}
+				if fault.symlink {
+					if got, err := os.Readlink(settings); err != nil || got != link {
+						t.Errorf("settings.json link = %q, %v; want %q", got, err, link)
+					}
+					if _, err := os.Lstat(settings + ".new"); !os.IsNotExist(err) {
+						t.Errorf("settings.json.new remains beside the link (%v)", err)
+					}
+				}
+				if _, err := os.Lstat(target + ".new"); !os.IsNotExist(err) {
+					t.Errorf("BUG b.o4v: settings.json.new remains beside the target after %s (%v)", fault.name, err)
+				}
+			})
+		}
 	}
 }
 

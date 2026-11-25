@@ -503,12 +503,12 @@ binary needs the matching release.
 - Makes no `--keep-prior` snapshot: the new `bin/` and `admin/` hold no earlier
   binary.
 
-**What the rename migration does.** An install that finds a store older than
-this release's schema also migrates `config.toml` and every template in
-`templates/`, once, whether or not the directory moves. With no store, or a
-store already at this release's schema, it reads and changes none of them. It
-runs with `--no-hooks` too, after the move and the binary swap and before the
-store is opened:
+**What the rename migration does.** Only an install whose existing store is
+below the agent-rename schema (9) migrates `config.toml` and every template in
+`templates/`, whether or not the directory moves. With no store, or a store
+at or above schema 9, that migration reads and changes neither kind of file.
+It runs with `--no-hooks` too, after the move and the binary swap and before
+the store is opened:
 
 - In `config.toml`, the question-tool key under `[defaults]` is renamed from its
   old name to `disable_ask_user`, in place.
@@ -541,8 +541,19 @@ agent selection to the caller.
   [Cursor input outcomes](caller-contract.md#cursor-input-outcomes) if input is held.
 - Check, then delete, any `~/.claude/settings.json.bak.<YYYYmmdd-HHMMSS>`
   files: they may hold your tokens. Install and uninstall keep no
-  copy of `settings.json` and delete none of these, but each names those it
-  finds on one line, each path shell-quoted, ready to paste after `rm --`.
+  copy of `settings.json`, including after a failed or interrupted write.
+  They delete none of these old copies, but each names those it finds on
+  one line, each path shell-quoted, ready to paste after `rm --`.
+- Once the upgrade is confirmed, delete the
+  `config.toml.pre-agent-rename.<YYYYmmdd-HHMMSS>` and
+  `templates/*.pre-agent-rename.<YYYYmmdd-HHMMSS>` copies: they may hold tokens.
+  Install and uninstall name those they find on one line, each path
+  shell-quoted, ready to paste after `rm --`, without reading their contents.
+  Neither script deletes them individually; `uninstall.sh --purge` removes
+  copies only inside directories it removes. Before uninstalling, record the
+  targets of any install-root or `templates` directory symlinks. Purge leaves
+  those targets and their copies intact; check them when cleaning up, since
+  the printed paths may no longer resolve after the links are removed.
 - A link `~/.agent-director` that points to `~/.config/agent-director` is allowed
   for scripts that still name the old path when the install does not cross the
   native-input cutover. For a crossing upgrade, follow the

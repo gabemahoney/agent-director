@@ -1112,6 +1112,11 @@ What confirms each field:
   candidate leaves the shown record unchanged. A non-sampling settle-out
   attempt also leaves it unchanged, even if the write fails; a committed
   exit without a pane sample clears it to `unknown`/`no_evidence`.
+  When this reader hides a shared idle episode below its own timeout, only
+  this call's successful matching pane sample can confirm no Displayed State,
+  at that sample's time. This response-only record never replaces the stored
+  episode's evidence. Without that sample, omission confirms nothing; the
+  hidden episode's record cannot confirm it or prove a longer capture span.
   With no applicable display evidence or attempt, both times and source are null.
   Cursor always reports `unknown`/`unsupported`, with null evidence.
 
@@ -1354,6 +1359,12 @@ agent-director 0.17.1 or later. A `needs_intelligence` display already in
 the store is never reported; the first check that commits an observation of
 the row ends it, with one exit trail record.
 
+An ongoing idle episode is shared, but visibility follows each reader's
+effective timeout. Omitting `displayed_state` and its detail leaves the
+shared episode and `since` intact. See **Clearing** below for a
+retained exit. A pre-upgrade binary still running, such as an MCP server,
+keeps its old behaviour until restarted.
+
 Every `status`, `get` and `list` row carries `idle_screen_availability`:
 `available` for Claude and Codex, `unavailable` for Cursor, which never shows
 `idle_screen`. It is a capability outcome, not a state. Why Cursor never
@@ -1381,13 +1392,16 @@ only while it shows `idle_screen`.
   `displayed_state` before `--limit` and recovery checks. `--state working`
   and `--state idle_screen` both match a stored working row showing
   `idle_screen`. Returned membership follows
-  [fixed selection](#bounded-recovery-on-state-reads).
+  [fixed selection](#bounded-recovery-on-state-reads): a selected stored
+  `idle_screen` row can omit `displayed_state` for this reader's timeout;
+  selection is never widened or refilled.
   `--state needs_intelligence` is accepted and matches only a row showing it.
 - **Detection happens on checks.** Nothing runs between your calls and
-  nothing changes on a timer. With settling off, a row shows `idle_screen`
-  from the first selected check after the timeout that commits the
-  observation. Your usual `status` polling is enough; you need not read
-  panes yourself. `sweep` also samples eligible rows.
+  nothing changes on a timer. With settling off, the shared `idle_screen`
+  episode starts at the check that commits its entry; see
+  [Unchanged panes](#unchanged-panes) for eligibility.
+  Your usual `status` polling is enough; you need not read panes yourself.
+  `sweep` also samples eligible rows.
   With a positive [settle time](configuration.md#settle-time-state), entry or
   exit starts its interval at the check that commits its candidate, not at
   the raw-state change. A later check must commit the change once that
@@ -1402,18 +1416,25 @@ only while it shows `idle_screen`.
   together. Even when the display, candidate and whole-minute detail are
   unchanged, a new pane attempt can update its confirmation record alone.
   Writes never wait for the store's lock. An unconfirmed observation returns
-  the earlier committed display and detail, with any applicable
-  [failed attempt](#confirmations). A later eligible check can try again.
+  the earlier committed display and detail, subject to this reader's timeout,
+  with any applicable [failed attempt](#confirmations). A below-timeout
+  matching sample preserves the shared candidate, episode and evidence;
+  its no-display confirmation is response-only. A later eligible check can
+  try again.
 - **Clearing.** When its pane changes or cannot be sampled, or the agent
-  moves on, the row keeps `displayed_state` until the exit candidate settles
-  and a check commits the exit. `ended`, `missing` and a state a command sets
+  moves on, every reader keeps the retained `displayed_state` until an
+  eligible check commits the exit after its candidate has held for the
+  settle interval. Missing checks or unavailable writes can retain it longer.
+  A longer reader timeout alone never clears an episode or cancels an entry
+  candidate. `ended`, `missing` and a state a command sets
   show at once. A shown `idle_screen` also ends at once on any Codex turn
   start or ownership change, including a `waiting` row retaining it.
-- **Trail.** Each entry and exit appends one
+- **Trail.** Each shared committed entry and exit appends one
   `ad.spawn.displayed_state_transition` trail record with `instance_id`,
   `prior_state`, `new_state`, `event` and `ts`; the trail is audit only and a
-  failed append changes nothing. Rarely, under heavy store load, a check whose
-  write is slow to commit may still show the previous display and detail and
+  failed append changes nothing. Hiding an episode for one reader or preserving
+  a peer's candidate emits no transition. Rarely, under heavy store load, a
+  check whose write is slow to commit may still show the previous display and detail and
   append no record for that change; a later read shows the committed
   display, with `since` from the earlier check.
 - **Attaching.** A Displayed State adds no verb and no automatic answer. For
@@ -1427,9 +1448,12 @@ as the `pane_sha256` a default `read-pane` returns. Only the fingerprint is
 kept; nothing reads what the pane says.
 
 - **The unchanged period.** At least two successful matching captures of the
-  current launch's own pane must span the effective timeout. The first starts
-  the period; matching captures keep its start. A different fingerprint
-  restarts it and begins clearing a shown `idle_screen` under settling.
+  current launch's own pane must span the reader's effective timeout. The
+  first starts the period; matching captures keep its start. The span ends at a successful
+  capture, including one recorded by another reader or one that updated only
+  confirmation evidence. Response time never extends it.
+  A different fingerprint restarts it and begins clearing a shown
+  `idle_screen` under settling.
   `check_permission`, `ask_user` and every other state never qualify.
   An intervening turn, launch or ownership change invalidates the baseline.
 - **Only during checks.** Nothing samples between calls. The period starts
@@ -1443,9 +1467,9 @@ kept; nothing reads what the pane says.
 - **Failed samples.** A sample that fails or cannot be trusted (the session
   gone or not this launch's, the pane not found, tmux not answering) resets
   the period: an entry not yet shown is dropped, and a shown row clears after
-  the settle time. It never fails the read or other rows. The next
-  successful sample starts a fresh period. A read that
-  cannot commit skips its sample, a reset included, so a later read may
+  settling when an eligible check commits the exit. It never fails the read
+  or other rows. The next successful sample starts a fresh period. A read
+  that cannot commit skips its sample, a reset included, so a later read may
   continue the committed period.
 - **Time.** A sample makes up to three tmux calls (a lookup, a pane listing
   and a capture), each bounded by
