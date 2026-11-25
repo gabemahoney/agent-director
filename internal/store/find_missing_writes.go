@@ -696,8 +696,9 @@ const repairNewStateSQL = `CASE WHEN idle_since IS NOT NULL AND agent <> '` + Ag
 // RepairCheckPermissionIfSameLife is find-missing's repair of a stale
 // check_permission row (b.146 rule 9, problem 3): one conditional statement
 // that moves the row out of check_permission, to waiting when idle_since is
-// set (the main agent's idle-prompt Notification landed and no hook since)
-// and to working otherwise; a Codex row (the row's own agent column, read in
+// set (the main agent's idle-prompt Notification landed, with no later hook
+// except a state-preserving SessionStart), and to working otherwise; a Codex
+// row (the row's own agent column, read in
 // the same statement) always goes to working whatever idle_since reads, since
 // Codex sends no idle-prompt Notification and a hand-set or stale idle_since
 // says nothing of its turn (SR-8.3). It writes only while the row is in check_permission with
@@ -713,9 +714,9 @@ const repairNewStateSQL = `CASE WHEN idle_since IS NOT NULL AND agent <> '` + Ag
 // In the same statement it NULLs launch_started_at, advances row_version by
 // one (SR-5.2) and writes the settle columns of an immediate write (b.3ie:
 // the new state reports at once). It writes no other own-state column:
-// idle_since is kept until the agent's next hook clears it, and last_seen_at
-// is not bumped, since no hook reported. The guarded repair and family-history
-// refresh commit together.
+// idle_since is kept until a later hook other than a state-preserving
+// SessionStart clears it, and last_seen_at is not bumped, since no hook
+// reported. The guarded repair and family-history refresh commit together.
 //
 // Whether a request's relay hook may still be alive is the caller's to check
 // before calling: a process check is no statement. A request recorded after

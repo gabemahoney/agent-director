@@ -885,7 +885,8 @@ func migrateV5toV6(db *sql.DB) error {
 //     (migrateV6toV7's backfill).
 //
 // On spawns (b.146 problem 3): idle_since, the time the main agent's
-// idle-prompt Notification last landed, NULLed by any later hook.
+// idle-prompt Notification last landed, NULLed by later hooks except a
+// state-preserving SessionStart.
 var v7Columns = []struct{ table, name, ddl string }{
 	{"permission_requests", "hook_pid", "ALTER TABLE permission_requests ADD COLUMN hook_pid INTEGER"},
 	{"permission_requests", "hook_starttime", "ALTER TABLE permission_requests ADD COLUMN hook_starttime TEXT"},

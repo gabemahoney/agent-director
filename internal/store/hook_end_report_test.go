@@ -232,14 +232,19 @@ func TestEndReportClearedBySessionStart(t *testing.T) {
 				t.Fatalf("SessionStart = %+v; want applied", got)
 			}
 			after := hgColumns(t, f, id)
-			if after.EndReportedAt != nil || after.State != store.StateWaiting || after.SessionID != c.session ||
+			wantState := store.StateWaiting
+			if c.session == "cx-old" {
+				wantState = store.StateWorking // b.hib: same-session activity is kept.
+			}
+			if after.EndReportedAt != nil || after.State != wantState || after.SessionID != c.session ||
 				after.RowVersion != reported.RowVersion.(int64)+1 {
-				t.Errorf("end_reported_at, state, session, version = %v, %v, %v, %v; want NULL, waiting, %s, %v+1",
-					after.EndReportedAt, after.State, after.SessionID, after.RowVersion, c.session, reported.RowVersion)
+				t.Errorf("end_reported_at, state, session, version = %v, %v, %v, %v; want NULL, %s, %s, %v+1",
+					after.EndReportedAt, after.State, after.SessionID, after.RowVersion, wantState, c.session, reported.RowVersion)
 			}
 			if lines := store.TrailEventsSince(t, mark, "ad.spawn.state_transition", id); len(lines) != 1 ||
-				lines[0]["prior_state"] != store.StateWorking || lines[0]["new_state"] != store.StateWaiting {
-				t.Errorf("transition lines = %v; want one working -> waiting", lines)
+				lines[0]["prior_state"] != store.StateWorking || lines[0]["new_state"] != wantState ||
+				lines[0]["soft_refresh"] != (wantState == store.StateWorking) {
+				t.Errorf("transition lines = %v; want one working -> %s, soft_refresh=%t", lines, wantState, wantState == store.StateWorking)
 			}
 			wantHistory := []apitest.HistoryEntry(nil)
 			if c.wantHistory > 0 {

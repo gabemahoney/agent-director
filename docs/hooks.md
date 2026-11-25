@@ -19,7 +19,7 @@ Use the Claude Code version in [Requirements](install.md#requirements).
 
 | Event | Reported state |
 | --- | --- |
-| `SessionStart` | `waiting`, except `source: "compact"` keeps `working`, `check_permission` or `ask_user`; records the current `session_id` |
+| `SessionStart` | `waiting`, except the [active-state preservation rule](#sessionstart-active-states); records the current `session_id` |
 | `UserPromptSubmit` | `working` |
 | `PreToolUse` | `working`, or `ask_user` for `AskUserQuestion` |
 | `PostToolUse`, `PostToolUseFailure` | `working` |
@@ -41,6 +41,31 @@ tracking continue. This includes `null`.
 
 State reads apply the configured [settle time](configuration.md#settle-time-state).
 `ended` is visible immediately.
+
+### SessionStart active states
+
+For Claude and Codex, a `SessionStart` from the current launch keeps `working`,
+`check_permission` or `ask_user` when its non-empty session id matches the
+row's recorded id, whatever its source. `source: "compact"` also keeps these
+states across a session-id change. A preserved state starts no new settle
+time and keeps the idle evidence used by permission recovery. Session identity
+and transcript updates, and Claude's watch path and startup wake, still apply.
+
+Other cases report `waiting`, including a new launch or a different session
+such as a real `/clear`. Activity under a new session id while the row still
+records the old one does not establish a match for a later `SessionStart`.
+
+### Startup ordering limit
+
+Only `SessionStart` waits for the launch's pane identity to be recorded.
+An ordinary hook such as `UserPromptSubmit` arriving before that write is
+dropped as `no_pane_recorded` and never replayed. `SessionStart` can then
+report `waiting` while the agent processes that prompt.
+
+Correctness in this window relies on assumption D1: ordinary hooks follow
+`SessionStart`'s write. Neither agent's hook documentation guarantees this
+ordering for `UserPromptSubmit`. For caller handling, see
+[Pending rows and startup screens](caller-contract.md#pending-rows-and-startup-screens).
 
 ### Store waits can lose hook reports
 
@@ -169,7 +194,7 @@ hooks to run; see [Codex hook configuration](operator-actions.md#a-codex-row-sta
 
 | Event | Reported state |
 | --- | --- |
-| `SessionStart` | `waiting`, except `source: "compact"` keeps `working`, `check_permission` or `ask_user`; records `session_id` |
+| `SessionStart` | `waiting`, except the [active-state preservation rule](#sessionstart-active-states); records `session_id` |
 | `UserPromptSubmit` | `working` |
 | `PreToolUse`, `PostToolUse` | `working`, subject to permission holds; a late hook from an ended main turn leaves state unchanged |
 | `Stop`, main-agent `Interrupt` | `waiting` |
@@ -200,9 +225,8 @@ Recovery of `waiting` is not proof that a permission dialog is gone; see
 ### The session
 
 Codex sends its first `SessionStart` at the first prompt, not when the screen
-opens. Until then the spawn stays `pending`. A `source: "compact"`
-SessionStart can also arrive mid-turn: it refreshes session information and
-keeps the active state shown above.
+opens. Until then the spawn stays `pending`. Later reports follow the
+[active-state preservation rule](#sessionstart-active-states).
 
 `/clear`, `/new`, `/fork` and `/resume` start another session in the same
 process. Its identity is recorded at the next prompt. Until then, including

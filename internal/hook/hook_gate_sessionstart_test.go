@@ -219,8 +219,8 @@ func TestSessionStartGateApplied(t *testing.T) {
 		{"live row, /clear", "clear", ssgLive(store.StateWorking), outgoing, "", ""},
 		{"live row, in-session /resume", "resume", ssgLive(store.StateWaiting), outgoing, "", ""},
 	}
-	// b.n9q: both agents preserve active states on compact, but still report in
-	// from pending/terminal states; startup on working remains an idle boundary.
+	// b.n9q/b.hib: compact and same-session startup/resume preserve active
+	// states; pending/terminal rows and a different session still report waiting.
 	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
 		for _, state := range []string{store.StateWorking, store.StateCheckPermission, store.StateAskUser, store.StateWaiting, store.StatePending, store.StateEnded, store.StateMissing} {
 			want := store.StateWaiting
@@ -239,10 +239,22 @@ func TestSessionStartGateApplied(t *testing.T) {
 				return st, db
 			}, outgoing, agent, want})
 		}
-		cases = append(cases, gateCase{agent + "/startup/working", "startup", func(t *testing.T, id string) (*store.Store, string) {
+		cases = append(cases, gateCase{agent + "/startup/new-session/working", "startup", func(t *testing.T, id string) (*store.Store, string) {
 			return ssgSeed(t, id, store.StateWorking, ssgOutgoing, apitest.WithAgent(agent),
 				apitest.WithLifeNumber(2), apitest.WithJsonlPath("/x/"+ssgOutgoing+".jsonl"), apitest.WithLaunchIdentity(ssgFreshPane))
 		}, outgoing, agent, store.StateWaiting})
+		for _, source := range []string{"startup", "resume"} {
+			for _, state := range []string{store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
+				cases = append(cases, gateCase{agent + "/" + source + "/" + state, source, func(t *testing.T, id string) (*store.Store, string) {
+					_, sid, path := ssgPayload(t, source)
+					if agent == store.AgentCodex {
+						_, sid, path = codexPayload(t, "session-start-"+source+".json", true, nil)
+					}
+					return ssgSeed(t, id, state, sid, apitest.WithAgent(agent), apitest.WithLifeNumber(2),
+						apitest.WithJsonlPath(path), apitest.WithLaunchIdentity(ssgFreshPane))
+				}, nil, agent, state})
+			}
+		}
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -260,7 +272,7 @@ func TestSessionStartGateApplied(t *testing.T) {
 			if wantState == "" {
 				wantState = store.StateWaiting
 			}
-			preserved := tc.source == "compact" && wantState != store.StateWaiting
+			preserved := wantState != store.StateWaiting
 			var permission store.PermissionRow
 			if preserved && prior.State == store.StateCheckPermission {
 				seed, err := apitest.SeedPermissionRequest(dbPath, id, "Bash")
@@ -305,14 +317,14 @@ func TestSessionStartGateApplied(t *testing.T) {
 				settled, stamp, err := apitest.ReadSettle(dbPath, id)
 				if err != nil || settled != settledBefore || stamp != stampBefore || row.PermissionEpoch != prior.PermissionEpoch ||
 					row.StateEvidence != prior.StateEvidence || row.SettledStateEvidence != prior.SettledStateEvidence {
-					t.Errorf("compact changed state metadata: settled %q/%d -> %q/%d, epoch %d -> %d, evidence %q -> %q, settled evidence %q -> %q (%v)",
+					t.Errorf("SessionStart changed state metadata: settled %q/%d -> %q/%d, epoch %d -> %d, evidence %q -> %q, settled evidence %q -> %q (%v)",
 						settledBefore, stampBefore, settled, stamp, prior.PermissionEpoch, row.PermissionEpoch,
 						prior.StateEvidence, row.StateEvidence, prior.SettledStateEvidence, row.SettledStateEvidence, err)
 				}
 				if prior.State == store.StateCheckPermission {
 					got, err := st.GetPermissionRequest(id, permission.RequestToken)
 					if err != nil || !reflect.DeepEqual(got, permission) {
-						t.Errorf("compact changed permission: got %+v, want %+v (%v)", got, permission, err)
+						t.Errorf("SessionStart changed permission: got %+v, want %+v (%v)", got, permission, err)
 					}
 				}
 			}
@@ -445,21 +457,24 @@ func TestSessionStartGateIgnored(t *testing.T) {
 	}
 }
 
-// ssgBumpingStore is the real store with a writer that advances id's
-// row_version right after each of Handle's first bumps reads of the row.
+// ssgBumpingStore runs afterRead (or bumps row_version by default) right
+// after each of Handle's first bumps reads of the real row.
 type ssgBumpingStore struct {
 	*store.Store
-	t      *testing.T
-	bumps  int
-	reads  int
-	bumped int
+	t         *testing.T
+	bumps     int
+	reads     int
+	bumped    int
+	afterRead func()
 }
 
 func (s *ssgBumpingStore) GetSpawn(id string) (store.Spawn, error) {
 	sp, err := s.Store.GetSpawn(id)
 	s.reads++
 	if s.reads <= s.bumps {
-		if cerr := bumpRowVersion(s.Store, id); cerr != nil {
+		if s.afterRead != nil {
+			s.afterRead()
+		} else if cerr := bumpRowVersion(s.Store, id); cerr != nil {
 			s.t.Fatalf("bump %q: %v", id, cerr)
 		}
 		s.bumped++

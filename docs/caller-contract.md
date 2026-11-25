@@ -1172,6 +1172,9 @@ that rule. Hook configuration diagnosis is in
 
 A first SessionStart can wait up to `pending_grace_seconds` (at most 540 s)
 for the launch to record its pane; Claude's first response waits for it.
+See the [startup ordering limit](hooks.md#startup-ordering-limit) for hooks
+that arrive before that write, and [active-state preservation](hooks.md#sessionstart-active-states)
+for a delayed SessionStart after activity is recorded.
 A caller whose store differs from the one its pane's hooks use (an alternate
 `HOME`, `--home` or `--store-path` on a shared tmux server) gets no error:
 the row stays `pending`, noted `unreported` while the agent runs, and goes

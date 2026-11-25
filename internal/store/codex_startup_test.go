@@ -31,7 +31,7 @@ func admitStartup(t *testing.T, s *Store, id string) Spawn {
 }
 
 func TestCodexStartupAdmission(t *testing.T) {
-	for _, name := range []string{"fresh", "already bound", "unqualified source", "another event", "another agent", "foreign parent", "wrong parent start", "stale snapshot"} {
+	for _, name := range []string{"fresh", "already bound", "early UserPromptSubmit", "unqualified source", "another event", "another agent", "foreign parent", "wrong parent start", "stale snapshot"} {
 		t.Run(name, func(t *testing.T) {
 			s, _, id := startupRow(t)
 			g := agentGate("SessionStart", "fresh-session")
@@ -39,6 +39,18 @@ func TestCodexStartupAdmission(t *testing.T) {
 			switch name {
 			case "already bound":
 				mustExec(t, s.db, `UPDATE spawns SET session_id='existing-session'`)
+			case "early UserPromptSubmit":
+				// b.hib: a prompt can bind this same session before its delayed
+				// startup; keeping working must not infer fresh-writer origin.
+				a, err := s.ApplyHookTransition(id, agentGate("UserPromptSubmit", "fresh-session"), StateWorking,
+					false, "UserPromptSubmit", "/tmp/fresh-session.jsonl", true)
+				if err != nil || !a.Applied {
+					t.Fatalf("early prompt: %+v %v; want applied", a, err)
+				}
+				bound, err := s.GetSpawn(id)
+				if err != nil || bound.State != StateWorking || bound.SessionID != "fresh-session" {
+					t.Fatalf("early prompt row: %+v %v; want working, fresh-session", bound, err)
+				}
 			case "unqualified source":
 				g.CodexStartup = false
 			case "another event":

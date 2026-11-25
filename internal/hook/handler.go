@@ -252,9 +252,10 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // SessionStart (SR-22.9, SR-5.3): the row is read for the snapshot the write
 // is conditioned on, and one gated RecordSessionStartIdentity records the
 // payload's session id and transcript path and the parent as pid and
-// proc_starttime, and sets waiting unless a compact SessionStart preserves
-// working/check_permission/ask_user. When only the snapshot changed, the row is
-// re-read and the write retried once; a second change logs one line and
+// proc_starttime, and sets waiting unless a Claude/Codex compact or
+// same-session SessionStart preserves working/check_permission/ask_user.
+// When only the snapshot changed, the row is re-read and the write retried
+// once; a second change logs one line and
 // writes no ad.hook.ignored (decision A3). A SessionStart that arrives before
 // its launch's identity write (the write does not apply because the row
 // records no pane) logs nothing yet: while the row is pending with no pane
@@ -956,7 +957,12 @@ const sessionStartWaitInterval = 250 * time.Millisecond
 // looks (read-pane) and only a caller that looked types (send-keys
 // with allow_pending). The agent's next applied hook clears the note: a
 // SessionStart that writes later still records the session identity and
-// moves the row to waiting, and a UserPromptSubmit moves it to working.
+// reports waiting unless it preserves an active state; a UserPromptSubmit
+// moves it to working. D1 (ordinary hooks follow SessionStart's write) is an
+// ordering assumption, not a harness guarantee: an ordinary hook arriving
+// before the pane is recorded is dropped, so SessionStart can then report
+// waiting while that prompt runs. Only SessionStart waits; this pane-less
+// residual is documented in docs/hooks.md and docs/architecture.md.
 const sessionStartWaitCap = 540 * time.Second
 
 // recordSessionStart is Handle's SessionStart write (SR-22.9, SR-5.3): the

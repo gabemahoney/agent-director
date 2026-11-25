@@ -54,9 +54,9 @@ func hgHistory(t *testing.T, f *v5Store, id string) []apitest.HistoryEntry {
 }
 
 // TestHookGateSessionStartOneWrite pins SR-22.9's applied SessionStart: one
-// statement (row_version + 1) that sets waiting whatever the prior state and
-// records the session id, path, pid and proc_starttime as the parent, the pane
-// start time when NULL, and clears launch_started_at, ended_at and liveness.
+// statement (row_version + 1) that reports non-active/new-session rows waiting,
+// records session, path and parent identity (including a NULL pane start),
+// and clears launch_started_at, ended_at and liveness.
 func TestHookGateSessionStartOneWrite(t *testing.T) {
 	cases := []hgRow{
 		{state: store.StatePending},
@@ -101,6 +101,126 @@ func TestHookGateSessionStartOneWrite(t *testing.T) {
 				t.Errorf("transition lines = %v; want one %s -> waiting", lines, r.state)
 			}
 		})
+	}
+}
+
+// b.hib: the store preserves active state and idle evidence for both refresh
+// routes, including compact across a session-id change.
+func TestHookGateSessionStartKeepsActiveRecords(t *testing.T) {
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+		for _, state := range []string{store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
+			for _, compact := range []bool{false, true} {
+				name, priorSession := "same-session", hgHookSession
+				if compact {
+					name, priorSession = "compact", "sess-before-compact"
+				}
+				t.Run(agent+"/"+state+"/"+name, func(t *testing.T) {
+					f := newV5Store(t)
+					id := hgSeed(t, f, hgRow{state: state, session: priorSession, noPaneStart: true,
+						opts: []apitest.SpawnOption{apitest.WithAgent(agent), apitest.WithPermissionEpoch(7),
+							apitest.WithDisplayObservation(storedIdleScreen), apitest.WithLaunchStartedAt(123),
+							apitest.WithIdleSince(rvIdleSince)}})
+					// A distinct base and clock catch a false settle stamp even if
+					// the implementation restores the raw state after writing waiting.
+					setSettle(t, f, id, store.StateWaiting, 456)
+					before := rvExamine(t, f, id)
+					p := hgAgentParent(t, f, id)
+					gate := hgGate("SessionStart", p, hgHookSession)
+					gate.SessionStart, gate.Examined, gate.SessionStartSoftRefresh = true, before.Snapshot, compact
+					got, changed, err := f.s.RecordSessionStartIdentity(id, gate, hgHookPath, true)
+					if err != nil || changed || !got.Applied {
+						t.Fatalf("SessionStart = %+v, changed %v, %v; want applied", got, changed, err)
+					}
+					after := rvExamine(t, f, id)
+					settled, stamp := settleOf(t, f, id)
+					if after.State != state || settled != store.StateWaiting || stamp != 456 {
+						t.Errorf("raw/settled/stamp = %s/%s/%d; want %s/waiting/456", after.State, settled, stamp, state)
+					}
+					if after.PermissionEpoch != before.PermissionEpoch || after.StateEvidence != before.StateEvidence ||
+						after.SettledStateEvidence != before.SettledStateEvidence || after.DisplayObservation != before.DisplayObservation ||
+						after.ObservationVersion != before.ObservationVersion {
+						t.Errorf("SessionStart changed active records:\n before %+v\n after %+v", before, after)
+					}
+					if after.IdleSince != rvIdleSince {
+						t.Errorf("idle_since = %q; want kept %q", after.IdleSince, rvIdleSince)
+					}
+					columns := hgColumns(t, f, id)
+					if columns.RowVersion != before.RowVersion+1 || columns.PID != int64(p.pid) || columns.ProcStarttime != p.start ||
+						columns.PaneStarttime != p.start || columns.JSONLPath != hgHookPath || columns.LaunchStartedAt != nil ||
+						columns.LivenessNote != nil || columns.LivenessUnverifiedSince != nil {
+						t.Errorf("preserved state did not record SessionStart identity/clear launch markers: %+v", columns)
+					}
+				})
+			}
+		}
+	}
+}
+
+// b.hib: refreshing a held, idle Claude row must retain the observation that
+// makes permission recovery choose waiting once an outside answer releases it.
+func TestHookGateSessionStartKeepsIdlePermissionRecovery(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		name := "same-session"
+		if compact {
+			name = "compact"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newV5Store(t)
+			id := hgSeed(t, f, hgRow{state: store.StateCheckPermission, session: hgHookSession,
+				opts: []apitest.SpawnOption{apitest.WithRelayMode("on")}})
+			request, err := apitest.SeedPermissionRequest(f.path, id, "Bash")
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := hgAgentParent(t, f, id)
+			_, applied, err := f.s.ApplyHookWaitingIfWorking(id, hgGate("Notification", p, hgHookSession), "Notification", "", false)
+			if err != nil || !applied.Applied {
+				t.Fatalf("idle Notification = %+v, %v; want applied", applied, err)
+			}
+			idle := rvExamine(t, f, id)
+			if idle.State != store.StateCheckPermission || idle.IdleSince == "" {
+				t.Fatalf("held idle setup = state %s, idle %q; want check_permission, set", idle.State, idle.IdleSince)
+			}
+			gate := hgGate("SessionStart", p, hgHookSession)
+			gate.SessionStart, gate.Examined, gate.SessionStartSoftRefresh = true, idle.Snapshot, compact
+			got, changed, err := f.s.RecordSessionStartIdentity(id, gate, hgHookPath, true)
+			if err != nil || changed || !got.Applied {
+				t.Fatalf("SessionStart = %+v, changed %v, %v; want applied", got, changed, err)
+			}
+			refreshed := rvExamine(t, f, id)
+			if refreshed.State != store.StateCheckPermission || refreshed.IdleSince != idle.IdleSince {
+				t.Errorf("refreshed state/idle = %s/%q; want check_permission/%q", refreshed.State, refreshed.IdleSince, idle.IdleSince)
+			}
+			if ok, err := f.s.RecordPaneOutside(id, request.RequestToken, "allow", store.DefaultLockWait, nil); err != nil || !ok {
+				t.Fatalf("outside answer = %v, %v; want recorded", ok, err)
+			}
+			row := rvExamine(t, f, id)
+			requests, err := f.s.PermissionRequestsForSpawn(id)
+			if err != nil || len(requests) != 1 || requests[0].AwaitsAnswer() || row.State != store.StateCheckPermission {
+				t.Fatalf("outside answer did not release hold for repair: state %s, requests %+v, %v", row.State, requests, err)
+			}
+			state, result, err := f.s.RepairCheckPermissionSample(row, requests)
+			after := rvExamine(t, f, id)
+			if err != nil || result != store.CondApplied || state != store.StateWaiting || after.State != store.StateWaiting || after.IdleSince != idle.IdleSince {
+				t.Errorf("repair = %s/%v/%v, raw %s, idle %q; want applied waiting with idle %q", state, result, err, after.State, after.IdleSince, idle.IdleSince)
+			}
+		})
+	}
+}
+
+// b.hib leaves Cursor's SessionStart idle boundary unchanged.
+func TestHookGateSessionStartCursorBoundary(t *testing.T) {
+	e, row, gate := rotationStore(t)
+	if row.State != store.StateWorking || row.SessionID != gate.SessionID {
+		t.Fatalf("Cursor setup state/session = %s/%s; want working/%s", row.State, row.SessionID, gate.SessionID)
+	}
+	gate.SessionStart, gate.Examined = true, row.Snapshot
+	got, changed, err := e.f.s.RecordSessionStartIdentity(row.InstanceID, gate, hgHookPath, true)
+	if err != nil || changed || !got.Applied {
+		t.Fatalf("SessionStart = %+v, changed %v, %v; want applied", got, changed, err)
+	}
+	if after := hgColumns(t, e.f, row.InstanceID); after.State != store.StateWaiting {
+		t.Errorf("Cursor same-session startup state = %v; want waiting", after.State)
 	}
 }
 
@@ -154,8 +274,9 @@ func TestHookGateSessionStartStaleSnapshot(t *testing.T) {
 
 // TestHookGateSessionStartRotation pins SR-5.9 inside the gated write: a new
 // session id archives the outgoing pair in the life the write read, moving an
-// entry of another life; the same id archives nothing. With writefailfix's
-// ReuseArchive the archive fails open and the identity still commits.
+// entry of another life; the same id archives nothing and keeps working
+// (b.hib). With writefailfix's ReuseArchive the archive fails open and the
+// identity still commits.
 func TestHookGateSessionStartRotation(t *testing.T) {
 	const (
 		oldPath = "/tmp/hg/old.jsonl"
@@ -179,7 +300,7 @@ func TestHookGateSessionStartRotation(t *testing.T) {
 	f := newV5Store(t)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			opts := []apitest.SpawnOption{apitest.WithJsonlPath(oldPath), apitest.WithLifeNumber(life)}
+			opts := []apitest.SpawnOption{apitest.WithJsonlPath(oldPath), apitest.WithLifeNumber(life), apitest.WithIdleSince(rvIdleSince)}
 			if c.priorEntry {
 				opts = append(opts, apitest.WithSessionHistory(apitest.SessionHistorySeed{
 					SessionID: "sess-old", JSONLPath: "/tmp/hg/life1.jsonl", Life: 1}))
@@ -194,10 +315,21 @@ func TestHookGateSessionStartRotation(t *testing.T) {
 				t.Fatalf("SessionStart = %+v, changed %v, %v; want applied", got, changed, err)
 			}
 			after := hgColumns(t, f, id)
-			if after.State != store.StateWaiting || after.SessionID != c.hookSession ||
+			wantState := store.StateWaiting
+			if c.hookSession == "sess-old" {
+				wantState = store.StateWorking
+			}
+			var wantIdle any
+			if wantState == store.StateWorking {
+				wantIdle = rvIdleSince
+			}
+			if after.IdleSince != wantIdle {
+				t.Errorf("idle_since = %v; want %v (state %s)", after.IdleSince, wantIdle, wantState)
+			}
+			if after.State != wantState || after.SessionID != c.hookSession ||
 				after.RowVersion != before.RowVersion.(int64)+1 || after.PID != int64(apitest.TestPanePID) {
-				t.Errorf("state, session, version, pid = %v, %v, %v, %v; want waiting, %s, %v+1, %d",
-					after.State, after.SessionID, after.RowVersion, after.PID, c.hookSession, before.RowVersion, apitest.TestPanePID)
+				t.Errorf("state, session, version, pid = %v, %v, %v, %v; want %s, %s, %v+1, %d",
+					after.State, after.SessionID, after.RowVersion, after.PID, wantState, c.hookSession, before.RowVersion, apitest.TestPanePID)
 			}
 			var h []apitest.HistoryEntry
 			for _, e := range hgHistory(t, f, id) {

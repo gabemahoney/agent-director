@@ -1,0 +1,97 @@
+# group	spec	cfg	cap_s	expect	tier	what	props
+hib-base-0	Hold36hCx	rx_eq_live	1800	pass	fast	existing rx_eq_live	-
+hib-same-0	Hold36hCx	hib_same_rx_eq_live	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_eq_live	-
+hib-new-0	Hold36hCx	hib_new_rx_eq_live	1800	pass	fast	one different-id non-compact boundary: rx_eq_live	-
+hib-base-1	Hold36hCx	rx_safe	1800	pass	fast	existing rx_safe	-
+hib-same-1	Hold36hCx	hib_same_rx_safe	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_safe	-
+hib-new-1	Hold36hCx	hib_new_rx_safe	1800	pass	fast	one different-id non-compact boundary: rx_safe	-
+hib-base-2	Hold36hCx	rx_keys	1800	pass	fast	existing rx_keys	-
+hib-same-2	Hold36hCx	hib_same_rx_keys	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_keys	-
+hib-new-2	Hold36hCx	hib_new_rx_keys	1800	pass	fast	one different-id non-compact boundary: rx_keys	-
+hib-base-3	Hold36hCx	rx_live	1800	pass	fast	existing rx_live	-
+hib-same-3	Hold36hCx	hib_same_rx_live	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_live	-
+hib-new-3	Hold36hCx	hib_new_rx_live	1800	pass	fast	one different-id non-compact boundary: rx_live	-
+hib-base-4	Hold36hCx	rx_C_intnoend	1800	violation	fast	existing rx_C_intnoend	KeysSettle
+hib-same-4	Hold36hCx	hib_same_rx_C_intnoend	1800	violation	fast	one preserving-eligible commit (same id or compact): rx_C_intnoend	KeysSettle
+hib-new-4	Hold36hCx	hib_new_rx_C_intnoend	1800	violation	fast	one different-id non-compact boundary: rx_C_intnoend	KeysSettle
+hib-base-5	Hold36hCx	rx_C_subproof	1800	violation	fast	existing rx_C_subproof	KeysSafe
+hib-same-5	Hold36hCx	hib_same_rx_C_subproof	1800	violation	fast	one preserving-eligible commit (same id or compact): rx_C_subproof	KeysSafe
+hib-new-5	Hold36hCx	hib_new_rx_C_subproof	1800	violation	fast	one different-id non-compact boundary: rx_C_subproof	KeysSafe
+hib-base-6	Hold36hCx	rx_C_subint	1800	violation	fast	existing rx_C_subint	KeysSafe
+hib-same-6	Hold36hCx	hib_same_rx_C_subint	1800	violation	fast	one preserving-eligible commit (same id or compact): rx_C_subint	KeysSafe
+hib-new-6	Hold36hCx	hib_new_rx_C_subint	1800	violation	fast	one different-id non-compact boundary: rx_C_subint	KeysSafe
+hib-base-7	Hold36hCx	rx_lim_rowsettles	1800	violation	fast	existing rx_lim_rowsettles	RowSettles
+hib-same-7	Hold36hCx	hib_same_rx_lim_rowsettles	1800	violation	fast	one preserving-eligible commit (same id or compact): rx_lim_rowsettles	RowSettles
+hib-new-7	Hold36hCx	hib_new_rx_lim_rowsettles	1800	violation	fast	one different-id non-compact boundary: rx_lim_rowsettles	RowSettles
+hib-base-8	Hold36hCx	rx_V_subheld	1800	violation	fast	existing rx_V_subheld	NeverSubAllowHeld
+hib-same-8	Hold36hCx	hib_same_rx_V_subheld	1800	violation	fast	one preserving-eligible commit (same id or compact): rx_V_subheld	NeverSubAllowHeld
+hib-new-8	Hold36hCx	hib_new_rx_V_subheld	1800	violation	fast	one different-id non-compact boundary: rx_V_subheld	NeverSubAllowHeld
+hib-base-9	B146R5Cx	r5x_time	1800	pass	fast	existing r5x_time	-
+hib-same-9	B146R5Cx	hib_same_r5x_time	1800	pass	fast	one preserving-eligible commit (same id or compact): r5x_time	-
+hib-new-9	B146R5Cx	hib_new_r5x_time	1800	pass	fast	one different-id non-compact boundary: r5x_time	-
+hib-base-10	B146R5Cx	r5x_t	1800	pass	fast	existing r5x_t	-
+hib-same-10	B146R5Cx	hib_same_r5x_t	1800	pass	fast	one preserving-eligible commit (same id or compact): r5x_t	-
+hib-new-10	B146R5Cx	hib_new_r5x_t	1800	pass	fast	one different-id non-compact boundary: r5x_t	-
+hib-base-11	B146R5Cx	r5x_eq	1800	pass	fast	existing r5x_eq	-
+hib-same-11	B146R5Cx	hib_same_r5x_eq	1800	pass	fast	one preserving-eligible commit (same id or compact): r5x_eq	-
+hib-new-11	B146R5Cx	hib_new_r5x_eq	1800	pass	fast	one different-id non-compact boundary: r5x_eq	-
+hib-base-12	Hold36hCx	rx_V_intproof	1800	violation	fast	existing rx_V_intproof	NeverHit
+hib-same-12	Hold36hCx	hib_same_rx_V_intproof	1800	violation	fast	one preserving-eligible commit (same id or compact): rx_V_intproof	NeverHit
+hib-new-12	Hold36hCx	hib_new_rx_V_intproof	1800	violation	fast	one different-id non-compact boundary: rx_V_intproof	NeverHit
+hib-base-13	Hold36hCx	rx_claude_keys	1800	pass	fast	existing rx_claude_keys	-
+hib-same-13	Hold36hCx	hib_same_rx_claude_keys	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_claude_keys	-
+hib-new-13	Hold36hCx	hib_new_rx_claude_keys	1800	pass	fast	one different-id non-compact boundary: rx_claude_keys	-
+hib-base-14	Hold36hCx	rx_eq_live_g	1800	pass	fast	existing rx_eq_live_g	-
+hib-same-14	Hold36hCx	hib_same_rx_eq_live_g	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_eq_live_g	-
+hib-new-14	Hold36hCx	hib_new_rx_eq_live_g	1800	pass	fast	one different-id non-compact boundary: rx_eq_live_g	-
+hib-base-15	B146R5Cx	r5x_eq_g	1800	pass	fast	existing r5x_eq_g	-
+hib-same-15	B146R5Cx	hib_same_r5x_eq_g	1800	pass	fast	one preserving-eligible commit (same id or compact): r5x_eq_g	-
+hib-new-15	B146R5Cx	hib_new_r5x_eq_g	1800	pass	fast	one different-id non-compact boundary: r5x_eq_g	-
+hib-base-16	Hold36hCx	rx_safe_k0	1800	pass	fast	existing rx_safe_k0	-
+hib-same-16	Hold36hCx	hib_same_rx_safe_k0	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_safe_k0	-
+hib-new-16	Hold36hCx	hib_new_rx_safe_k0	1800	pass	fast	one different-id non-compact boundary: rx_safe_k0	-
+hib-base-17	Hold36hCx	rx_keys_k0	1800	pass	fast	existing rx_keys_k0	-
+hib-same-17	Hold36hCx	hib_same_rx_keys_k0	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_keys_k0	-
+hib-new-17	Hold36hCx	hib_new_rx_keys_k0	1800	pass	fast	one different-id non-compact boundary: rx_keys_k0	-
+hib-base-18	Hold36hCx	rx_live_k0	1800	pass	fast	existing rx_live_k0	-
+hib-same-18	Hold36hCx	hib_same_rx_live_k0	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_live_k0	-
+hib-new-18	Hold36hCx	hib_new_rx_live_k0	1800	pass	fast	one different-id non-compact boundary: rx_live_k0	-
+hib-base-19	B146R5Cx	r5x_time_k0	1800	pass	fast	existing r5x_time_k0	-
+hib-same-19	B146R5Cx	hib_same_r5x_time_k0	1800	pass	fast	one preserving-eligible commit (same id or compact): r5x_time_k0	-
+hib-new-19	B146R5Cx	hib_new_r5x_time_k0	1800	pass	fast	one different-id non-compact boundary: r5x_time_k0	-
+hib-base-20	B146R5Cx	r5x_t_k0	1800	pass	fast	existing r5x_t_k0	-
+hib-same-20	B146R5Cx	hib_same_r5x_t_k0	1800	pass	fast	one preserving-eligible commit (same id or compact): r5x_t_k0	-
+hib-new-20	B146R5Cx	hib_new_r5x_t_k0	1800	pass	fast	one different-id non-compact boundary: r5x_t_k0	-
+hib-base-21	Hold36hCx	rx_safe_rv	1800	pass	fast	existing rx_safe_rv	-
+hib-same-21	Hold36hCx	hib_same_rx_safe_rv	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_safe_rv	-
+hib-new-21	Hold36hCx	hib_new_rx_safe_rv	1800	pass	fast	one different-id non-compact boundary: rx_safe_rv	-
+hib-base-22	Hold36hCx	rx_keys_rv	1800	pass	fast	existing rx_keys_rv	-
+hib-same-22	Hold36hCx	hib_same_rx_keys_rv	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_keys_rv	-
+hib-new-22	Hold36hCx	hib_new_rx_keys_rv	1800	pass	fast	one different-id non-compact boundary: rx_keys_rv	-
+hib-base-23	Hold36hCx	rx_live_rv	1800	pass	fast	existing rx_live_rv	-
+hib-same-23	Hold36hCx	hib_same_rx_live_rv	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_live_rv	-
+hib-new-23	Hold36hCx	hib_new_rx_live_rv	1800	pass	fast	one different-id non-compact boundary: rx_live_rv	-
+hib-base-24	Hold36hCx	rx_V_review	1800	violation	fast	existing rx_V_review	NeverHit
+hib-same-24	Hold36hCx	hib_same_rx_V_review	1800	violation	fast	one preserving-eligible commit (same id or compact): rx_V_review	NeverHit
+hib-new-24	Hold36hCx	hib_new_rx_V_review	1800	violation	fast	one different-id non-compact boundary: rx_V_review	NeverHit
+hib-base-25	B146R5Cx	r5x_time_rv	1800	pass	fast	existing r5x_time_rv	-
+hib-same-25	B146R5Cx	hib_same_r5x_time_rv	1800	pass	fast	one preserving-eligible commit (same id or compact): r5x_time_rv	-
+hib-new-25	B146R5Cx	hib_new_r5x_time_rv	1800	pass	fast	one different-id non-compact boundary: r5x_time_rv	-
+hib-base-26	B146R5Cx	r5x_t_rv	1800	pass	fast	existing r5x_t_rv	-
+hib-same-26	B146R5Cx	hib_same_r5x_t_rv	1800	pass	fast	one preserving-eligible commit (same id or compact): r5x_t_rv	-
+hib-new-26	B146R5Cx	hib_new_r5x_t_rv	1800	pass	fast	one different-id non-compact boundary: r5x_t_rv	-
+hib-base-27	B146R5Cx	r5x_lim_rowsettles_rv	1800	violation	fast	existing r5x_lim_rowsettles_rv	RowSettles
+hib-same-27	B146R5Cx	hib_same_r5x_lim_rowsettles_rv	1800	violation	fast	one preserving-eligible commit (same id or compact): r5x_lim_rowsettles_rv	RowSettles
+hib-new-27	B146R5Cx	hib_new_r5x_lim_rowsettles_rv	1800	violation	fast	one different-id non-compact boundary: r5x_lim_rowsettles_rv	RowSettles
+hib-base-28	B146R5Cx	r5x_V_review	1800	violation	fast	existing r5x_V_review	NeverHit
+hib-same-28	B146R5Cx	hib_same_r5x_V_review	1800	violation	fast	one preserving-eligible commit (same id or compact): r5x_V_review	NeverHit
+hib-new-28	B146R5Cx	hib_new_r5x_V_review	1800	violation	fast	one different-id non-compact boundary: r5x_V_review	NeverHit
+hib-base-29	Hold36hCx	rx_U_null_safe	1800	pass	fast	existing rx_U_null_safe	-
+hib-same-29	Hold36hCx	hib_same_rx_U_null_safe	1800	pass	fast	one preserving-eligible commit (same id or compact): rx_U_null_safe	-
+hib-new-29	Hold36hCx	hib_new_rx_U_null_safe	1800	pass	fast	one different-id non-compact boundary: rx_U_null_safe	-
+hib-base-30	Hold36hCx	rx_U_null_control	1800	violation	fast	existing rx_U_null_control	KeysSafe
+hib-same-30	Hold36hCx	hib_same_rx_U_null_control	1800	violation	fast	one preserving-eligible commit (same id or compact): rx_U_null_control	KeysSafe
+hib-new-30	Hold36hCx	hib_new_rx_U_null_control	1800	violation	fast	one different-id non-compact boundary: rx_U_null_control	KeysSafe
+hib-red-r5x_time	B146R5Cx	hib_red_r5x_time	1800	violation	fast	relaxed order with keep-active disabled	HibActivePreserved
+hib-red-rx_live	Hold36hCx	hib_red_rx_live	1800	violation	fast	relaxed order with keep-active disabled	HibActivePreserved
+hib-red-idle	Hold36hCx	hib_red_idle	1800	violation	fast	R1 idle-clear rule: kept post-turn SessionStart destroys recovery evidence	RowSettles

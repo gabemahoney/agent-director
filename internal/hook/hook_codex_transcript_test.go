@@ -114,7 +114,8 @@ func TestCodexStartupDeferredRollout(t *testing.T) {
 }
 
 func TestCodexStartupInvalidatedByLaterSessionStart(t *testing.T) {
-	// b.n9q: compaction invalidates startup provenance without ending the turn.
+	// b.n9q/b.hib: each same-session refresh invalidates startup provenance
+	// without ending the turn, regardless of source.
 	for _, source := range []string{"startup", "resume", "fork", "clear", "compact"} {
 		t.Run(source, func(t *testing.T) {
 			const id = "cx-startup-invalidated"
@@ -132,12 +133,8 @@ func TestCodexStartupInvalidatedByLaterSessionStart(t *testing.T) {
 			later, _, _ := codexPayload(t, "session-start-"+source+".json", false, map[string]any{"session_id": sid, "transcript_path": path})
 			cxFire(t, st, id, cxOwn(t, st, id), later)
 			row := mustGetSpawn(t, st, id)
-			wantState := store.StateWaiting
-			if source == "compact" {
-				wantState = store.StateWorking
-			}
-			if row.State != wantState {
-				t.Errorf("later %s state = %q; want %q", source, row.State, wantState)
+			if row.State != store.StateWorking {
+				t.Errorf("later same-session %s state = %q; want working", source, row.State)
 			}
 			if row.SessionID != sid || row.JSONLPath != path || row.CodexStartup != nil {
 				t.Errorf("later %s did not invalidate origin while preserving session/path: %+v", source, row)
@@ -290,9 +287,10 @@ func TestCodexSessionStartRotation(t *testing.T) {
 
 		cxFire(t, st, id, cxOwn(t, st, id), payload)
 
+		// b.hib: an already-active same session remains working.
 		row := mustGetSpawn(t, st, id)
-		if row.State != store.StateWaiting || row.SessionID != sid || row.JSONLPath != path {
-			t.Errorf("state/session/path = %q/%q/%q; want waiting and kept %q/%q", row.State, row.SessionID, row.JSONLPath, sid, path)
+		if row.State != store.StateWorking || row.SessionID != sid || row.JSONLPath != path {
+			t.Errorf("state/session/path = %q/%q/%q; want working and kept %q/%q", row.State, row.SessionID, row.JSONLPath, sid, path)
 		}
 		if got := ssgHistory(t, dbPath, id); len(got) != 0 {
 			t.Errorf("session_history = %+v; want none (the same id archives nothing)", got)
