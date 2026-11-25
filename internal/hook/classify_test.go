@@ -207,8 +207,8 @@ func TestClassifyEventTranscriptPath(t *testing.T) {
 	}
 }
 
-// TestClassifyEventAgentID pins SR-22.9: only a non-empty agent_id marks a subagent
-// SessionStart/SessionEnd; agent_id and agent_type never change the classification itself.
+// TestClassifyEventAgentID pins SR-22.9 and b.xfc: a non-empty agent_id marks
+// subagent lifecycle events and forbids healing, but keeps the state classification.
 func TestClassifyEventAgentID(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -233,7 +233,7 @@ func TestClassifyEventAgentID(t *testing.T) {
 			if res.AgentID != tc.wantAgentID || res.SubagentLifecycle() != tc.wantLifecycle {
 				t.Errorf("AgentID/SubagentLifecycle = %q/%v; want %q/%v", res.AgentID, res.SubagentLifecycle(), tc.wantAgentID, tc.wantLifecycle)
 			}
-			// Apart from AgentID, the result equals the same payload without agent fields.
+			// Only AgentID and heal eligibility differ from the unmarked result.
 			plain := map[string]any{}
 			for k, v := range tc.payload {
 				if k != "agent_id" && k != "agent_type" {
@@ -242,6 +242,9 @@ func TestClassifyEventAgentID(t *testing.T) {
 			}
 			want := classifyMap(t, plain)
 			want.AgentID = res.AgentID
+			if tc.wantAgentID != "" {
+				want.HealsTranscript = false
+			}
 			if res != want {
 				t.Errorf("result = %+v; want %+v", res, want)
 			}
