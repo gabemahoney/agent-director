@@ -455,7 +455,7 @@ An accepted Message has no age timeout. Read its Result's `wait`, or
 | Wait reason | Next step |
 |---|---|
 | `turn_running`, `compaction` | Wait for the agent's next eligible boundary. |
-| `dialog` | Inspect the request; use [permission handling](permissions.md#answering-at-the-pane). Ordinary delivery never answers it. |
+| `dialog` | Inspect the request; use [permission handling](permissions.md#answering-at-the-pane). Ordinary delivery never answers it. A [Claude pane denial](#claude-pane-denial-without-a-turn-end) can leave this wait indefinitely. |
 | `earlier_message`, `handover_in_progress`, `input_unresolved`, `awaiting_proof` | Observe the earlier hand-over; never resend. |
 | `agent_starting` | Wait for startup; `allow_pending` does not bypass it. |
 | `launch_ended` | Follow [Launch end, resume and reuse](#launch-end-resume-and-reuse). |
@@ -2213,19 +2213,18 @@ Limits:
 
 - A turn the agent starts itself in the instant before it exits, such as
   from input typed at its terminal, cannot be detected or prevented.
-- A turn interrupted with Esc ends with no main-agent turn end, so the row
-  stays `working` and input handed into that turn stays counted in
+- A Claude turn interrupted with Esc ends with no main-agent turn end, so the
+  row stays `working` or, after a permission dialog, `check_permission`.
+  Input handed into that turn stays counted in
   `awaiting_turn_start`. So does input whose output was recorded too late to
   count at a turn end ([Busy-send coverage](#busy-send-coverage)).
   `not_waiting` or `turn_pending` then repeats until the agent's next turn
   ends or its launch ends. A prompt the [sighting limits](#sighting-limits)
   hide keeps `turn_pending` until launch end.
 
-After an Esc interruption, type a prompt at the terminal that starts and ends
-a new turn, or use a plain keyless `pause` followed by `resume`. A plain pause
-ends the agent in any live state and still honours a standing claim. For other
-repeating refusals, retry after the agent's next completed turn or use that
-same pause/resume path.
+After an Esc interruption, use the [Claude interruption recovery](#claude-pane-denial-without-a-turn-end).
+For other repeating refusals, retry after the agent's next completed turn or
+use a plain keyless `pause` followed by `resume`.
 
 #### Standing pause claims
 
@@ -2748,6 +2747,28 @@ fields. Apart from a Cursor turn's end (below), completing or interrupting the
 main turn does not release a child or unknown-origin request, even when its
 child id is null. See [The dialog hold](permissions.md#the-dialog-hold).
 Nothing is sent. Keep the keys and retry later, or use inspected input below.
+
+### Claude pane denial without a turn end
+
+At a Claude Code permission dialog, `Escape` or "No" denies the tool and
+interrupts the turn. Claude sends no hook afterward: the row can stay
+`check_permission` with no time limit, even though the pane shows an empty
+input prompt. Busy send keeps later Messages Held with blocking wait reason
+`dialog`; Messages behind an earlier one can report `earlier_message`.
+This affects relay off and relay on when the dialog is answered at the pane.
+Relay-on `decide --decision deny` and the relay-timeout deny do not interrupt
+the turn and are unaffected.
+
+On relay-on rows, recording the pane answer can let a
+[recovery check](#lost-end-of-turn-reports) move the row to `working`.
+That still supplies no turn end; Messages then wait for the turn to finish.
+
+For a Covered Agent, use a plain [keyless `pause`](#keyless-pause-of-a-covered-agent)
+without `only_if_waiting`, then `resume` after verified shutdown. This works
+in `check_permission` with Held Messages: it types nothing, ends the agent
+and keeps those Messages Held for `resume`. Alternatively, type a prompt at
+the terminal that starts and ends a new turn, or wait for the next main-agent
+turn end. A busy-send Message cannot start that recovery turn while held.
 
 ### Inspected input past a dialog hold
 

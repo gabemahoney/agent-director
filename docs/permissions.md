@@ -412,7 +412,9 @@ For Cursor turn-end recovery and gateway refusals, follow
 
 A delivery acknowledgement or pane-answer record does not prove the dialog
 gone. On covered Claude it holds ordinary Messages; keyless `pause` remains
-available. On uncovered relay-on rows, it holds plain input without a
+available. A [Claude pane denial without a turn end](caller-contract.md#claude-pane-denial-without-a-turn-end)
+can leave that hold in place indefinitely, even at an empty input prompt.
+On uncovered relay-on rows, it holds plain input without a
 pane hash and holds waiting `pause`.
 [Busy Codex pause](caller-contract.md#keyless-pause-of-busy-uncovered-codex) bypasses
 that hold. Cursor requests from an earlier launch are
@@ -464,7 +466,9 @@ tmux -u -S '<socket>' send-keys -t '<verified pane id>' Escape
 ```
 
 `Escape` is only an example: send the key you just judged appropriate for
-that exact request. If ownership is uncertain, stop for a human to
+that exact request. For Claude's `Escape` or "No" interruption and recovery,
+see [Claude pane denial without a turn end](caller-contract.md#claude-pane-denial-without-a-turn-end).
+If ownership is uncertain, stop for a human to
 [inspect the session](operator-actions.md#inspect-and-end-a-session-by-hand).
 Direct tmux has no hash guard; recheck if the pane changes and never replay
 an uncertain key. After the outside answer, take a fresh normal `read-pane`

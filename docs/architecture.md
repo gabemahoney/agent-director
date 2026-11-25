@@ -16524,11 +16524,13 @@ Residuals, accepted:
   `SubagentStop` for that subagent, the request holds until
   `record-pane-answer` or the row's end, as a Codex row's subagent request
   always does, allowed or denied.
-- **A turn interrupted by a pane deny.** Claude Code sends no `Stop` on a
-  user interrupt, so after a deny at the pane that interrupts the turn the
-  hold lasts until the idle-prompt Notification, once the agent idles, or
-  the next turn's `Stop`. A Codex row has no such residual: its `Interrupt`
-  is the turn end.
+- **A turn interrupted by a pane deny.** After `Escape` or "No", Claude Code
+  sends neither `Stop` nor an idle-prompt Notification. The row and ordinary
+  Messages can remain held indefinitely at an empty prompt. Recording a
+  relay-on pane answer can let recovery move the row to `working`, but
+  supplies no turn end. See [Claude pane denial without a turn end](caller-contract.md#claude-pane-denial-without-a-turn-end)
+  for recovery. A Codex row has no such residual: its `Interrupt` is the
+  turn end.
 - **An allow.** With no `tool_ran` proof (Claude's and Codex's requests
   carry no `tool_use_id`; b.wbs), a request allowed at the pane outside
   agent-director holds the row's moves to `working` until the turn ends,
@@ -21475,11 +21477,11 @@ the section that describes it in detail.
   Must use entry under
   [v11 proof eligibility](#v11-columns-durable-main-turn-proof-eligibility)),
   which costs:
-  - after a deny of an eligible main request at the pane made outside agent-director, the row stays in
-    `check_permission` while the agent works on, until the main agent's
-    turn ends; when that deny interrupts the turn (Claude Code sends no
-    `Stop` on a user interrupt), until the idle-prompt Notification, once
-    the agent idles, or the next turn's `Stop`;
+  - after an unrecorded pane deny of an eligible main request, the row stays
+    `check_permission` until the main turn ends. If the deny interrupts a
+    Claude turn, neither end hook arrives and the row and ordinary Messages
+    can remain held indefinitely. See [Claude pane denial without a turn end](caller-contract.md#claude-pane-denial-without-a-turn-end)
+    for recovery and the relay-on recorded-answer qualification;
   - a subagent's request (`agent_id` set) answered at the pane outside
     agent-director is never proven by the main turn's end, so it holds the
     row's moves to `working` until `record-pane-answer`, its subagent's
