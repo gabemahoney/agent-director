@@ -13,8 +13,45 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// b.cqr: one errored Codex row through the built CLI's read and error envelopes.
+func TestCLICodexTurnErroredReadAndSendEnvelopes(t *testing.T) {
+	h := newGateHome(t)
+	const id = "cli-turn-errored"
+	turn := codexfix.ErroredTurn
+	path := codexfix.TempRolloutPath(t, turn.SessionID, true, turn.Ended())
+	if _, err := apitest.SeedSpawn(stateDB(h.home), id, store.StateWaiting, t.TempDir(), "on", turn.SessionID, true,
+		withTestProcessPane(t), apitest.WithAgent(store.AgentCodex), apitest.WithJsonlPath(path)); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"get", "--instance-id", id}, {"get-many", id}, {"list"}} {
+		stdout, stderr, code := runSpawnCLI(t, h.home, h.fakeDir, args...)
+		var row map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(stdout), &row); err != nil || code != 0 || stderr != "" {
+			t.Fatalf("%v: exit=%d stdout=%q stderr=%q err=%v", args, code, stdout, stderr, err)
+		}
+		if args[0] != "get" {
+			var rows []map[string]json.RawMessage
+			if err := json.Unmarshal(row["spawns"], &rows); err != nil || len(rows) != 1 {
+				t.Fatalf("%s spawns=%s err=%v; want one row", args[0], row["spawns"], err)
+			}
+			row = rows[0]
+		}
+		if string(row["instance_id"]) != `"`+id+`"` || string(row["last_turn_errored"]) != "true" || string(row["state"]) != `"waiting"` {
+			t.Errorf("%s: instance_id=%s last_turn_errored=%s state=%s; want %s, true, waiting",
+				args[0], row["instance_id"], row["last_turn_errored"], row["state"], id)
+		}
+	}
+	mark := len(fakeTmuxInvocations(t, h.home))
+	stdout, stderr, code := runSpawnCLI(t, h.home, h.fakeDir, "send-keys", "--instance-id", id, "--text", "2")
+	assertOnlyEnvelope(t, stdout, stderr, code, "ErrCodexTurnErrored")
+	if calls := fakeTmuxInvocations(t, h.home)[mark:]; len(calls) != 0 {
+		t.Errorf("refused send called tmux: %q; want no input or other tmux calls", calls)
+	}
+}
 
 // TestCLICodexDialogHeldUntilAnInterruptProvesItGone: `hook --agent codex`
 // relays a Codex PermissionRequest (tool_name and tool_input recorded, no

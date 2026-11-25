@@ -178,7 +178,7 @@ func TestListShowsRowAgent(t *testing.T) {
 	}
 }
 
-// TestListRowKeySetUnchanged pins the list row's exact JSON key set with every
+// TestListRowKeySet pins the list row's exact JSON key set with every
 // optional field present: jsonl_path and extra_env, seeded on the row, are
 // dropped; permission_requests (b.146 rule 15) is always there.
 func TestListRowKeySet(t *testing.T) {
@@ -210,7 +210,7 @@ func TestListRowKeySet(t *testing.T) {
 	}
 	sort.Strings(got)
 	// The row is Claude's, which busy send covers: it carries agent_defaults.
-	want := []string{"agent", "agent_defaults", "confirmations", "cwd", "ended_at", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at", "liveness_note",
+	want := []string{"agent", "agent_defaults", "confirmations", "cwd", "ended_at", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at", "last_turn_errored", "liveness_note",
 		"liveness_unverified_since", "parent_id", "permission_requests", "process_liveness", "relay_mode", "started_at", "state", "state_changed_at", "tmux_session_name"}
 	if !equalStrings(got, want) {
 		t.Errorf("ListRow keys = %v; want exactly %v", got, want)

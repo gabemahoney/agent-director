@@ -5,6 +5,22 @@ import { ErrInvalidFlags, ErrTooManyIds, type GetManyResult } from "../../src/in
 import { withTempHome } from "../internal/tempHome.js";
 import { homeStore, openClient, rejection, runHelper } from "../internal/helper.js";
 
+// b.cqr: each batch row retains its explicit error observation through the real CLI.
+test("get-many: an errored Codex row carries true and a non-Codex row carries null", async () => {
+  await withTempHome(async (home) => {
+    const store = homeStore(home);
+    runHelper("seed-spawn", { store, id: "many-claude", state: "ended", "create-store": true });
+    runHelper("seed-spawn", { store, id: "many-codex", state: "waiting", "codex-errored-turn": true,
+      "writer-pid": String(process.pid) });
+    using client = await openClient(store);
+    const result = await client.getMany({ instance_ids: ["many-claude", "many-codex"] });
+    expect(result.not_found).toEqual([]);
+    expect(result.spawns.map((row) => [row.instance_id, row.last_turn_errored])).toEqual([
+      ["many-claude", null], ["many-codex", true],
+    ]);
+  });
+}, 10_000);
+
 test("get-many: typed rows, missing ids, empty arrays and next-call config", async () => {
   await withTempHome(async (home) => {
     const store = homeStore(home);

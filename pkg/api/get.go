@@ -54,6 +54,12 @@ type PermissionRequestInfo struct {
 // cross-reference against the schema doc without translation.
 type SpawnRow struct {
 	StateDetail
+	// LastTurnErrored observes Codex's latest rollout task boundary: true for
+	// task_complete with payload.error present, false for a clean completion
+	// or a new task_started, null for other agents or unavailable evidence.
+	// It follows live evidence, not state settling, and does not establish
+	// whether a menu exists.
+	LastTurnErrored *bool `json:"last_turn_errored"`
 	// BusySend is the published current Launch's recorded coverage, retained
 	// during pending resume/reuse until successful creation publishes its candidate.
 	BusySend BusySendCoverage `json:"busy_send,omitempty"`
@@ -479,6 +485,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		return emptySpawnRow(), err
 	}
 	out := SpawnRow{
+		LastTurnErrored:         codexLastTurnErrored(row),
 		BusySend:                row.BusySend,
 		Context:                 contextOf(row.ContextEvidence()),
 		InstanceID:              row.InstanceID,

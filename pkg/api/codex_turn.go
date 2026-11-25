@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // The turn-end read examines a rollout's end backward, first its last
@@ -34,21 +36,54 @@ const (
 // the tail, and any line that does not parse, records nothing. Any failure
 // reads false.
 func codexRolloutEndsTurn(session, path, turn string) bool {
-	if session == "" || turn == "" || !filepath.IsAbs(path) || !strings.Contains(filepath.Base(path), session) {
+	if turn == "" {
 		return false
+	}
+	last := codexRolloutLastTurn(session, path)
+	return last != nil && last.kind == "task_complete" && last.turn == turn
+}
+
+// codexTurnObservation retains only structural task facts, never error contents.
+type codexTurnObservation struct {
+	kind    string
+	turn    string
+	errored bool
+}
+
+// codexLastTurnErrored is a live observation, independent of state settling.
+// A new task_started clears it; sending input or answering a menu does not.
+// Unsupported agents and unavailable evidence return unknown, not success.
+func codexLastTurnErrored(row Spawn) *bool {
+	if row.Agent != store.AgentCodex {
+		return nil
+	}
+	last := codexRolloutLastTurn(row.SessionID, row.JSONLPath)
+	if last == nil {
+		return nil
+	}
+	return &last.errored
+}
+
+// codexRolloutLastTurn shares the lifecycle reader's bounded, safe file access.
+// It observes the latest task boundary even when no turn hook was recorded.
+// Future task-boundary observations must reuse this bounded reader instead of
+// adding another rollout scanner.
+func codexRolloutLastTurn(session, path string) *codexTurnObservation {
+	if session == "" || !filepath.IsAbs(path) || !strings.Contains(filepath.Base(path), session) {
+		return nil
 	}
 	before, err := os.Lstat(path)
 	if err != nil || !before.Mode().IsRegular() || before.Size() <= 0 {
-		return false
+		return nil
 	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return false
+		return nil
 	}
 	defer f.Close()
 	opened, err := f.Stat()
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
-		return false
+		return nil
 	}
 	size := opened.Size()
 	end := size
@@ -58,12 +93,12 @@ func codexRolloutEndsTurn(session, path, turn string) bool {
 		data := make([]byte, end-start, end-start+int64(len(carry)))
 		m, err := f.ReadAt(data, start)
 		if err != nil && !errors.Is(err, io.EOF) {
-			return false
+			return nil
 		}
 		if m < len(data) {
 			// A short read before the carried line leaves a gap in the window.
 			if end < size {
-				return false
+				return nil
 			}
 			data = data[:m]
 		}
@@ -76,20 +111,19 @@ func codexRolloutEndsTurn(session, path, turn string) bool {
 				carry, data = data, nil
 			}
 		}
-		if ended, decided := lastTurnEvent(data, turn); decided {
-			return ended
+		if last := lastTurnEvent(data); last != nil {
+			return last
 		}
 		if start == 0 || n == maxTurnEndTail {
-			return false
+			return nil
 		}
 	}
 }
 
 // lastTurnEvent scans data's lines from the last for the first event_msg
-// record of type task_started or task_complete. decided is whether it found
-// one, and ended whether that is turn's task_complete. A line that does not
-// parse decides nothing.
-func lastTurnEvent(data []byte, turn string) (ended, decided bool) {
+// record of type task_started or task_complete. A line that does not parse
+// decides nothing. Error presence is an exact key lookup: null counts too.
+func lastTurnEvent(data []byte) *codexTurnObservation {
 	for len(data) > 0 {
 		line := data
 		if i := bytes.LastIndexByte(data, '\n'); i >= 0 {
@@ -101,21 +135,26 @@ func lastTurnEvent(data []byte, turn string) (ended, decided bool) {
 			continue
 		}
 		var r struct {
-			Type    string `json:"type"`
-			Payload struct {
-				Type   string `json:"type"`
-				TurnID string `json:"turn_id"`
-			} `json:"payload"`
+			Type    string                     `json:"type"`
+			Payload map[string]json.RawMessage `json:"payload"`
 		}
 		if json.Unmarshal(line, &r) != nil || r.Type != "event_msg" {
 			continue
 		}
-		switch r.Payload.Type {
+		var kind, turn string
+		if json.Unmarshal(r.Payload["type"], &kind) != nil {
+			continue
+		}
+		if raw, ok := r.Payload["turn_id"]; ok && json.Unmarshal(raw, &turn) != nil {
+			continue
+		}
+		switch kind {
 		case "task_started":
-			return false, true
+			return &codexTurnObservation{kind: kind, turn: turn}
 		case "task_complete":
-			return r.Payload.TurnID == turn, true
+			_, errored := r.Payload["error"]
+			return &codexTurnObservation{kind: kind, turn: turn, errored: errored}
 		}
 	}
-	return false, false
+	return nil
 }

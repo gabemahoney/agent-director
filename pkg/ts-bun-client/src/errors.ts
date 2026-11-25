@@ -580,6 +580,12 @@ export class ErrClaimTooSoon extends AgentDirectorError {}
  * judged, never from an automatic flow.
  */
 export class ErrDialogMaybeOpen extends AgentDirectorError {}
+/**
+ * Ordinary Codex text plus Enter refused before input: the latest observed turn errored.
+ * Inspect readPane; answer menus with key or use the inspected pane hash for intentional text.
+ * Other guards still apply. Input alone does not clear the error observation.
+ */
+export class ErrCodexTurnErrored extends AgentDirectorError {}
 /** Mirrors ErrInvalidDecision (package: api) */
 export class ErrInvalidDecision extends AgentDirectorError {}
 /** Mirrors ErrNoOpenPermissionRequest (package: store) */
@@ -706,6 +712,7 @@ const ERROR_TABLE = {
   ErrPaneAnswerInProgress,
   ErrClaimTooSoon,
   ErrDialogMaybeOpen,
+  ErrCodexTurnErrored,
   ErrInvalidDecision,
   ErrMissingRequestToken,
   ErrInvalidFlags,

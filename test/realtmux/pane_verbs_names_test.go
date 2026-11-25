@@ -43,8 +43,8 @@ type paneCall struct {
 	Err  error
 }
 
-// Cancel only after the real transport successfully sends Enter. Cancelling
-// before Pause now correctly prevents admission and cannot stand in for a wait.
+// Cancel only after the real transport successfully sends Enter, including
+// the Enter inside a paste. Earlier cancellation would prevent admission.
 type cancelAfterEnterTmux struct {
 	*tmux.Client
 	cancel context.CancelFunc
@@ -53,6 +53,22 @@ type cancelAfterEnterTmux struct {
 func (c cancelAfterEnterTmux) SendKeyPane(socket, pane, key string) error {
 	err := c.Client.SendKeyPane(socket, pane, key)
 	if err == nil && key == "Enter" {
+		c.cancel()
+	}
+	return err
+}
+
+func (c cancelAfterEnterTmux) PasteKeysPane(socket, pane, text string) error {
+	err := c.Client.PasteKeysPane(socket, pane, text)
+	if err == nil {
+		c.cancel()
+	}
+	return err
+}
+
+func (c cancelAfterEnterTmux) PasteKeysPaneGuarded(socket, pane, text string, beforeWrite func(enter bool) error) error {
+	err := c.Client.PasteKeysPaneGuarded(socket, pane, text, beforeWrite)
+	if err == nil {
 		c.cancel()
 	}
 	return err

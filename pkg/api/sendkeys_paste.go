@@ -5,14 +5,12 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// PasteKeysTmux is the optional paste transport for ordinary Codex fallback
-// input. Existing SendKeysTmux implementations remain source-compatible, but
-// must implement this capability to deliver that input. Manual operations and
-// native delivery keep using SendKeysPane/SendKeyPane.
+// PasteKeysTmux retains the unguarded paste capability for source compatibility.
+// Every ordinary Codex fallback adapter must implement GuardedPasteKeysTmux;
+// this capability alone is insufficient. Manual operations and native delivery
+// keep using SendKeysPane/SendKeyPane.
 type PasteKeysTmux interface {
 	// PasteKeysPane preserves literal text and LF in one paste, followed by
 	// exactly one Enter only after the paste succeeds. It never retries text
@@ -20,8 +18,9 @@ type PasteKeysTmux interface {
 	PasteKeysPane(socket, paneID, text string) error
 }
 
-// GuardedPasteKeysTmux retains SQLite input admission across buffer preparation,
-// paste and Enter. Adapters used with an input journal must provide this method.
+// GuardedPasteKeysTmux retains input admission and rollout checks across buffer
+// preparation, paste and Enter. Every ordinary Codex fallback adapter must
+// provide this method, with or without a SQLite input journal.
 type GuardedPasteKeysTmux interface {
 	PasteKeysTmux
 	// Before each irreversible dispatch, call beforeWrite with false for paste
@@ -63,36 +62,29 @@ func codexPasteRefusal(text string) string {
 }
 
 func (r *sendKeysRun) pasteText(paneID, text string) error {
-	var err error
 	refused := false
-	if guarded, ok := r.paste.(GuardedPasteKeysTmux); ok {
-		err = guarded.PasteKeysPaneGuarded(r.socket, paneID, text, func(enter bool) error {
-			if enter {
-				r.found.TextSent = true
-			}
-			if r.beforeWrite != nil {
-				if err := r.beforeWrite(); err != nil {
-					refused = true
-					return err
-				}
-			}
-			if r.env.Context != nil && r.env.Context.Err() != nil {
+	err := r.paste.PasteKeysPaneGuarded(r.socket, paneID, text, func(enter bool) error {
+		if enter {
+			r.found.TextSent = true
+		}
+		if r.beforeWrite != nil {
+			if err := r.beforeWrite(); err != nil {
 				refused = true
-				return r.env.Context.Err()
+				return err
 			}
-			r.found.Sent, r.found.BytesAttempted = true, len(text)
-			r.found.EnterAttempted = enter
-			return nil
-		})
-	} else {
-		// Journal-backed calls are refused before reaching this compatibility
-		// branch; an older adapter cannot bypass an installed admission guard.
+		}
+		if r.env.Context != nil && r.env.Context.Err() != nil {
+			refused = true
+			return r.env.Context.Err()
+		}
 		r.found.Sent, r.found.BytesAttempted = true, len(text)
-		err = r.paste.PasteKeysPane(r.socket, paneID, text)
-		var call *tmux.CallError
-		r.found.EnterAttempted = err == nil || !errors.As(err, &call) || call.Call != tmux.CallSendText
-	}
+		r.found.EnterAttempted = enter
+		return nil
+	})
 	if err != nil {
+		if refused && !r.found.Sent && errors.Is(err, ErrCodexTurnErrored) {
+			return err
+		}
 		if !refused && !r.found.Sent {
 			// Preserve fallback's conservative transport-failure contract even
 			// when preparation failed before its first dispatch callback.

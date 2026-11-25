@@ -51,8 +51,10 @@ var ErrSpawnNotInteractive = errors.New("ErrSpawnNotInteractive")
 // RowState. Partial or uncertain input may still submit later; never replay
 // text or Enter automatically.
 // Only native attempts support passive reconciliation by repeating the original
-// delivery_request_id after the state, relay and dialog guards pass. For fallback,
-// inspect hook-derived get or status and escalate if submission remains unknown.
+// delivery_request_id after the state, relay, dialog and ordinary-Codex error
+// guards pass. An errored Codex row returns ErrCodexTurnErrored instead of
+// reconciling. For fallback, inspect hook-derived get or status and escalate
+// if submission remains unknown.
 //
 // gateway_refused means a Cursor row's gateway recorded that it refused the
 // submission the call's Enter made (b.bqd): nothing reached Cursor and the
@@ -266,6 +268,13 @@ var ErrPaneChanged = errors.New("ErrPaneChanged")
 // with its delivery facts, pane_answer and unproven_since, the Spawn's state
 // and the Spawn's other requests that hold the dialog.
 var ErrDialogMaybeOpen = errors.New("ErrDialogMaybeOpen")
+
+// ErrCodexTurnErrored refuses ordinary nonempty Codex text plus Enter while
+// the latest observed rollout task boundary is a task_complete with
+// payload.error present.
+// Nothing was sent. Inspect read-pane; answer menus with Key, or pass that
+// read's ExpectPaneSHA256 for intentional text. All other guards still apply.
+var ErrCodexTurnErrored = errors.New("ErrCodexTurnErrored")
 
 // ErrPaneAnswerInProgress is returned by send-keys with a request token, and
 // by record-pane-answer, while another pane answer through send-keys on that

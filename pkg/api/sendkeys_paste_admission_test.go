@@ -3,15 +3,87 @@ package api_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// b.cqr: a rollout append changes no SQLite revision. Check it again before
+// paste and Enter, including adapters that supply no native input journal.
+func TestSendKeysCodexTurnErrorDuringPastePreparation(t *testing.T) {
+	t.Parallel()
+	for _, noJournal := range []bool{false, true} {
+		for _, afterText := range []bool{false, true} {
+			t.Run(fmt.Sprintf("no_journal=%v/after_text=%v", noJournal, afterText), func(t *testing.T) {
+				e := newSubmissionEnv(t)
+				turn := codexfix.ErroredTurn
+				path := codexfix.TempRolloutPath(t, turn.SessionID, true, turn.Started())
+				spec := codexSpec(store.StateWaiting, agentAlive, false)
+				spec.SessionID = turn.SessionID
+				spec.Opts = append(spec.Opts, apitest.WithJsonlPath(path))
+				if noJournal {
+					e.env.Input = noJournalDeliveryBackend{}
+				}
+				r := e.seedRow(t, spec)
+				at := tmux.CallListPanes
+				if afterText {
+					at = tmux.CallSendText
+				}
+				e.rec.AfterCall(at, func(tmuxfix.SocketCall, error) {
+					if err := os.WriteFile(path, turn.Ended(), 0600); err != nil {
+						t.Fatal(err)
+					}
+				})
+				err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: "2"})
+				if afterText {
+					assertDeliveryError(t, err, "partial_input_unconfirmed", 1, false)
+					if strings.Contains(err.Error(), "nothing was sent") {
+						t.Fatalf("refusal denied the preceding paste: %v", err)
+					}
+					if calls := e.rec.SocketCallsOf(tmux.CallSendText); len(calls) != 1 || !calls[0].Paste {
+						t.Fatalf("paste calls=%+v; want one", calls)
+					}
+				} else {
+					assertOneName(t, err, "ErrCodexTurnErrored")
+					e.assertNothingSent(t)
+				}
+				e.assertNoCalls(t, tmux.CallSendEnter, tmux.CallSendKey)
+			})
+		}
+	}
+}
+
+// An injected adapter may supply no journal; keep the normal owned tmux target.
+type noJournalDeliveryBackend struct{}
+
+func (noJournalDeliveryBackend) Open(api.InputDeliveryIdentity) (api.InputDeliverySession, error) {
+	return nil, nil
+}
+
+// b.cqr: tokenless rows cannot own a target session, but an observed error
+// still refuses ordinary text before lookup or any input-adapter call.
+func TestSendKeysCodexTurnErroredTokenlessRow(t *testing.T) {
+	t.Parallel()
+	e := newSubmissionEnv(t)
+	turn := codexfix.ErroredTurn
+	path := codexfix.TempRolloutPath(t, turn.SessionID, true, turn.Ended())
+	spec := codexSpec(store.StateWaiting, agentAlive, false)
+	spec.SessionID, spec.NoSession = turn.SessionID, true
+	spec.Opts = append(spec.Opts, apitest.WithJsonlPath(path), apitest.WithNoLaunchToken())
+	r := e.seedRow(t, spec)
+	assertOneName(t, e.send(api.SendKeysParams{InstanceID: r.ID, Text: "2"}), "ErrCodexTurnErrored")
+	e.assertNothingSent(t)
+	e.assertNoCalls(t, tmux.CallLookup)
+}
 
 // The merged fallback must retain the SQLite admission across the paste call.
 func TestSendKeysCodexPasteFencesEnterAfterAdmissionLoss(t *testing.T) {

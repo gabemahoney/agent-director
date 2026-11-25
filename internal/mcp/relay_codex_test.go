@@ -16,8 +16,61 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// b.cqr: one errored Codex row through real tools/call read and refusal envelopes.
+func TestMCPCodexTurnErroredReadAndSendEnvelopes(t *testing.T) {
+	e := newEnv(t)
+	const id = "mcp-turn-errored"
+	turn := codexfix.ErroredTurn
+	path := codexfix.TempRolloutPath(t, turn.SessionID, true, turn.Ended())
+	writer, err := apitest.ContextWriter(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateWaiting, t.TempDir(), "on", turn.SessionID, false,
+		apitest.WithLaunchIdentity(writer), apitest.WithAgent(store.AgentCodex), apitest.WithJsonlPath(path)); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"get", map[string]any{"instance_id": id}},
+		{"get_many", map[string]any{"instance_ids": []string{id}}},
+		{"list", map[string]any{}},
+	} {
+		row := callToolText(t, e.d, tc.tool, paramJSON(t, tc.args))
+		if tc.tool != "get" {
+			var rows []map[string]json.RawMessage
+			if err := json.Unmarshal(row["spawns"], &rows); err != nil || len(rows) != 1 {
+				t.Fatalf("%s spawns=%s err=%v; want one row", tc.tool, row["spawns"], err)
+			}
+			row = rows[0]
+		}
+		if string(row["instance_id"]) != `"`+id+`"` || string(row["last_turn_errored"]) != "true" || string(row["state"]) != `"waiting"` {
+			t.Errorf("%s: instance_id=%s last_turn_errored=%s state=%s; want %s, true, waiting",
+				tc.tool, row["instance_id"], row["last_turn_errored"], row["state"], id)
+		}
+	}
+	e.rec.Reset()
+	data := toolErrorData(t, callTool(t, e.d, "send-keys", paramJSON(t, map[string]any{"instance_id": id, "text": "2"})))
+	if data.ErrName != "ErrCodexTurnErrored" {
+		t.Errorf("send-keys err_name=%q (%s); want ErrCodexTurnErrored", data.ErrName, data.ErrDescription)
+	}
+	for _, call := range e.rec.SocketCalls() {
+		switch call.Call {
+		case tmux.CallSendText, tmux.CallSendKey, tmux.CallSendEnter:
+			t.Errorf("refused send dispatched input: %+v", call)
+		}
+	}
+	if calls := e.rec.Calls(); len(calls) != 0 {
+		t.Errorf("refused send made name-based tmux calls: %+v", calls)
+	}
+}
 
 // seedAgentRelayRequest is seedRelayRequest for a row of agent.
 func (e *mcpEnv) seedAgentRelayRequest(t *testing.T, id, agent string) apitest.PermissionRequestSeed {

@@ -121,6 +121,7 @@ var packageOf = map[string]string{
 	"ErrPaneAnswerInProgress":    "api",
 	"ErrClaimTooSoon":            "api",
 	"ErrDialogMaybeOpen":         "api",
+	"ErrCodexTurnErrored":        "api",
 	"ErrInvalidDecision":         "api",
 	"ErrInvalidFlags":            "api",
 	"ErrTooManyIds":              "api",

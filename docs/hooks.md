@@ -210,7 +210,10 @@ the row even though Codex subagent records are not tracked.
 `Interrupt` report `waiting`; late tool hooks from an ended main turn do not
 return it to `working`.
 
-For a turn that sends no end hook, follow
+`get`, `get-many` and `list` independently observe `last_turn_errored` from
+the current rollout; the next observed turn start clears it, not a hook or
+menu answer. For that signal, the ordinary-text hold and recovery of a turn
+that sends no end hook, follow
 [A Codex turn that ends in an error](caller-contract.md#a-codex-turn-that-ends-in-an-error).
 Recovery of `waiting` is not proof that a permission dialog is gone; see
 [the Codex dialog hold](permissions.md#how-the-hold-differs-on-codex-rows).

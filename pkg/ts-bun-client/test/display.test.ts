@@ -23,7 +23,7 @@ const realState: Record<string, string> = {
   ordinary: "working",
   "ordinary-cursor": "working",
 };
-const LIST_KEYS = ["agent", "confirmations", "cwd", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at",
+const LIST_KEYS = ["agent", "confirmations", "cwd", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at", "last_turn_errored",
   "permission_requests", "process_liveness", "relay_mode", "started_at", "state", "state_changed_at", "tmux_session_name"];
 /** Every status result's main-field keys beside context and family_state. */
 const MAIN_KEYS = ["confirmations", "context", "failure_reason", "family_state", "process_liveness"];
