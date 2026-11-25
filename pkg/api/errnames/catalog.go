@@ -107,6 +107,7 @@ var Catalog = []Entry{
 	{Name: "ErrPaneAnswerInProgress", Err: api.ErrPaneAnswerInProgress},
 	{Name: "ErrClaimTooSoon", Err: api.ErrClaimTooSoon},
 	{Name: "ErrDialogMaybeOpen", Err: api.ErrDialogMaybeOpen},
+	{Name: "ErrCodexTurnErrored", Err: api.ErrCodexTurnErrored},
 	{Name: "ErrInvalidDecision", Err: api.ErrInvalidDecision},
 	{Name: "ErrInvalidFlags", Err: api.ErrInvalidFlags},
 	{Name: "ErrTooManyIds", Err: api.ErrTooManyIds},

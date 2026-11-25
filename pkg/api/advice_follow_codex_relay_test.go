@@ -5,14 +5,62 @@ package api_test
 // pane_answer_fixture_test.go.
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// b.cqr: E42 "inspect read-pane; answer a menu with send-keys --key" and
+// "for intentional text input pass that read's pane_sha256 as --expect-pane-sha256".
+func TestAdviceFollow_E42_CodexTurnErroredInspectKeyThenHash(t *testing.T) {
+	t.Parallel()
+	e, r, _ := erroredTurnSendEnv(t, true)
+	c, _ := e.client(t)
+	_, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "2"})
+	if !errors.Is(err, api.ErrCodexTurnErrored) {
+		t.Fatalf("plain send: %v; want ErrCodexTurnErrored", err)
+	}
+	adviceAssertPhrase(t, err, "have a person or agent inspect read-pane; answer a menu with send-keys --key, or for intentional text input pass that read's pane_sha256 as --expect-pane-sha256; other input guards still apply")
+	e.assertNothingSent(t)
+
+	// Pane contents are opaque to the product and test; the caller chooses 2.
+	e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, "pane before the caller's choice\n")
+	if _, err := c.ReadPane(api.ReadPaneParams{InstanceID: r.ID}); err != nil {
+		t.Fatalf("inspect before key: %v", err)
+	}
+	e.rec.Reset()
+	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Key: "2"}); err != nil {
+		t.Fatalf("answer with key: %v", err)
+	}
+	assertTextSent(t, e.rec, r.Socket, r.Spawn.Identity.PaneID, "2")
+	e.assertNoCalls(t, tmux.CallSendKey, tmux.CallSendEnter)
+	if e.rec.SocketCallsOf(tmux.CallSendText)[0].Paste {
+		t.Error("key was pasted; want a literal character")
+	}
+
+	e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, "pane after the caller's choice\n")
+	pane, err := c.ReadPane(api.ReadPaneParams{InstanceID: r.ID})
+	if err != nil {
+		t.Fatalf("inspect again before text: %v", err)
+	}
+	e.rec.Reset()
+	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "next task", ExpectPaneSHA256: pane.PaneSHA256}); err != nil {
+		t.Fatalf("intentional text with inspected hash: %v", err)
+	}
+	assertTextSent(t, e.rec, r.Socket, r.Spawn.Identity.PaneID, "next task")
+	assertEnterSent(t, e.rec, r.Socket, r.Spawn.Identity.PaneID)
+	e.assertNoCalls(t, tmux.CallSendEnter, callClearLine)
+	got, err := c.Get(r.ID)
+	if err != nil || got.LastTurnErrored == nil || !*got.LastTurnErrored {
+		t.Fatalf("after manual input: last_turn_errored=%v err=%v; want true until a new turn starts", got.LastTurnErrored, err)
+	}
+}
 
 // advCodexProofs is ErrDialogMaybeOpen's Codex wording of what proves the
 // request gone (b.146 step 2c; a Codex request has no tool_use_id).

@@ -43,7 +43,7 @@ const TIMEOUT_S = 1;
 const STATUS_KEYS = ['confirmations', 'context', 'failure_reason', 'family_state', 'idle_screen_availability', 'process_liveness', 'state'];
 const DETAIL_KEYS = ['displayed_state', 'since', 'request_token', 'tool_name', 'unchanged_minutes', 'stuck_reason'];
 // A list row's keys present on every row, and those present only on some.
-const LIST_KEYS = ['agent', 'confirmations', 'cwd', 'family_state', 'idle_screen_availability', 'instance_id', 'labels', 'last_seen_at', 'permission_requests', 'process_liveness', 'relay_mode', 'started_at', 'state', 'state_changed_at', 'tmux_session_name'];
+const LIST_KEYS = ['agent', 'confirmations', 'cwd', 'family_state', 'idle_screen_availability', 'instance_id', 'labels', 'last_seen_at', 'last_turn_errored', 'permission_requests', 'process_liveness', 'relay_mode', 'started_at', 'state', 'state_changed_at', 'tmux_session_name'];
 const LIST_OPTIONAL = ['ended_at', 'launch_started_at', 'liveness_note', 'liveness_unverified_since', 'parent_id'];
 const q = value => "'" + String(value).replaceAll("'", "''") + "'";
 const availability = agent => agent === 'cursor' ? 'unavailable' : 'available';

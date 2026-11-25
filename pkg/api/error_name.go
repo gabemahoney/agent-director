@@ -149,6 +149,8 @@ func errorName(err error) string {
 		return "ErrPaneChanged"
 	case errors.Is(err, ErrDialogMaybeOpen):
 		return "ErrDialogMaybeOpen"
+	case errors.Is(err, ErrCodexTurnErrored):
+		return "ErrCodexTurnErrored"
 	case errors.Is(err, ErrPaneAnswerInProgress):
 		return "ErrPaneAnswerInProgress"
 	case errors.Is(err, ErrInvalidFlags):

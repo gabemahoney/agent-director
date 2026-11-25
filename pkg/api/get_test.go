@@ -43,7 +43,7 @@ func openDB(t *testing.T, dbPath string) *store.Store {
 // every other field zero (b.4nt); confirmations keeps its three records, each
 // with all five keys.
 const emptyConfirmationJSON = `{"status":"","confirmed_at":null,"source":null,"checked_at":null,"reason":null}`
-const emptyGetJSON = `{"context":` + contextfix.UnknownJSON + `,"instance_id":"","parent_id":"","state":"","failure_reason":null,"family_state":"",` +
+const emptyGetJSON = `{"last_turn_errored":null,"context":` + contextfix.UnknownJSON + `,"instance_id":"","parent_id":"","state":"","failure_reason":null,"family_state":"",` +
 	`"process_liveness":"","confirmations":{"state":` + emptyConfirmationJSON + `,"process_liveness":` + emptyConfirmationJSON +
 	`,"displayed_state":` + emptyConfirmationJSON + `},"cwd":"","agent":"","tmux_session_name":"",` +
 	`"agent_args":[],"relay_mode":"","jsonl_path":"","session_id":"","labels":{},` +

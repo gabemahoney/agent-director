@@ -240,9 +240,9 @@ func (r *sendKeysRun) reconcileOrdinary(row Spawn, id inputdelivery.Identity, te
 	return false, nil
 }
 
-// After the state, relay and dialog guards pass, passive proof reconciliation
-// needs no pane. Proof must still belong to the row's exact launch, including
-// any native session mapping.
+// After the state, relay, dialog and ordinary-Codex error guards pass,
+// passive proof reconciliation needs no pane. Proof must still belong to the
+// row's exact launch, including any native session mapping.
 func (r *sendKeysRun) useReconciledProof(row Spawn, a *inputdelivery.Attempt) error {
 	current, err := r.s.GetSpawnWithin(row.InstanceID, time.Second)
 	if err != nil {
@@ -262,6 +262,9 @@ func (r *sendKeysRun) beginOrdinary(id inputdelivery.Identity, paneID, text stri
 		return deliveryNotStarted(row, "ordinary input exceeds 1 MiB")
 	}
 	if err := r.waitInputReady(id, paneID, params); err != nil {
+		if errors.Is(err, ErrCodexTurnErrored) {
+			return err
+		}
 		return deliveryNotStarted(row, err.Error())
 	}
 	deadline := r.j.now().Add(inputDeliveryTimeout)
@@ -299,7 +302,7 @@ func (r *sendKeysRun) beginOrdinary(id inputdelivery.Identity, paneID, text stri
 		return err
 	}
 	if err = r.revalidateInput(id, paneID, params, deadline); err != nil {
-		return r.stopDelivery(a, err.Error())
+		return r.stopInputValidation(a, err)
 	}
 	if !r.j.now().Before(deadline) {
 		return r.stopDelivery(a, "overall input deadline exhausted before Enter")
@@ -309,7 +312,7 @@ func (r *sendKeysRun) beginOrdinary(id inputdelivery.Identity, paneID, text stri
 		return r.stopDelivery(a, "cannot persist Enter intent")
 	}
 	if err = r.revalidateInput(id, paneID, params, deadline); err != nil {
-		return r.stopDelivery(a, err.Error())
+		return r.stopInputValidation(a, err)
 	}
 	if !r.j.now().Before(deadline) {
 		return r.stopDelivery(a, "input deadline exhausted after Enter intent commit")
@@ -329,7 +332,7 @@ func (r *sendKeysRun) writeOrdinaryChunks(a *inputdelivery.Attempt, parts []stri
 			return r.stopDelivery(a, "overall input deadline exhausted")
 		}
 		if err = r.revalidateInput(id, paneID, params, deadline); err != nil {
-			return r.stopDelivery(a, err.Error())
+			return r.stopInputValidation(a, err)
 		}
 		if !r.j.now().Before(deadline) {
 			return r.stopDelivery(a, "overall input deadline exhausted before write")
@@ -340,7 +343,7 @@ func (r *sendKeysRun) writeOrdinaryChunks(a *inputdelivery.Attempt, parts []stri
 			return r.stopDelivery(a, "cannot persist text intent")
 		}
 		if err = r.revalidateInput(id, paneID, params, deadline); err != nil {
-			return r.stopDelivery(a, err.Error())
+			return r.stopInputValidation(a, err)
 		}
 		if !r.j.now().Before(deadline) {
 			return r.stopDelivery(a, "input deadline exhausted after text intent commit")
@@ -351,7 +354,7 @@ func (r *sendKeysRun) writeOrdinaryChunks(a *inputdelivery.Attempt, parts []stri
 			return r.stopDelivery(a, "literal text write failed or timed out")
 		}
 		if err = r.drainInput(a, paneID, params, deadline); err != nil {
-			return r.stopDelivery(a, err.Error())
+			return r.stopInputValidation(a, err)
 		}
 	}
 	return nil
@@ -375,6 +378,26 @@ func (r *sendKeysRun) stopDelivery(a *inputdelivery.Attempt, reason string) erro
 		reason += "; journal update failed"
 	}
 	return deliveryError(r.row, a, unresolvedOutcome(a), reason)
+}
+
+// A persisted intent is not a dispatch. Preserve the named pre-input refusal
+// only while this call has attempted no keys; after input, report uncertainty
+// without repeating advice that claims nothing was sent. Committed text/Enter
+// intents stay monotonic and unresolved even when a later check prevented I/O.
+func (r *sendKeysRun) stopInputValidation(a *inputdelivery.Attempt, err error) error {
+	if errors.Is(err, ErrCodexTurnErrored) {
+		if !r.found.Sent {
+			if a.BytesAttempted == 0 && !a.EnterAttempted {
+				a.Phase = "not_started"
+				if saveErr := r.input.Save(a); saveErr != nil {
+					return deliveryError(r.row, a, "not_started", "Codex turn errored before input; journal update failed")
+				}
+			}
+			return err
+		}
+		return r.stopDelivery(a, "Codex turn errored after input; remaining input was not sent; inspect read-pane before proceeding")
+	}
+	return r.stopDelivery(a, err.Error())
 }
 
 // errInputDeadline is a validation phase reaching its original deadline.
@@ -486,7 +509,7 @@ func (r *sendKeysRun) revalidateInputPane(s SendKeysStore, row Spawn, paneID str
 	if err != nil || guard.refusal != nil {
 		return fmt.Errorf("permission or dialog guard no longer permits ordinary input")
 	}
-	return nil
+	return codexTurnErrorGuard(row, true)
 }
 
 func (r *sendKeysRun) waitInputReady(id inputdelivery.Identity, paneID string, params SendKeysParams) error {

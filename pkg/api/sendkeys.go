@@ -378,8 +378,9 @@ type sendKeysGuard struct {
 // identical native turns with fresh ids. Supported native composers reject unsafe
 // framing before input. Ordinary unsupported Codex input uses a literal paste
 // then one Enter, refusing unsafe controls and a final dollar token before any
-// input. It requires a PasteKeysTmux adapter. Other launches and manual calls
-// retain the established pane input path. Fallback claims neither exact
+// input. Every ordinary Codex fallback adapter must implement
+// GuardedPasteKeysTmux, with or without an input journal. Other launches and
+// manual calls retain the established pane input path. Fallback claims neither exact
 // transcript proof nor native request deduplication.
 // Ordinary unsupported Claude input on a pending row first waits, reading
 // every 100 ms for up to 12 s, for the agent's terminal to take raw input
@@ -412,7 +413,8 @@ type sendKeysGuard struct {
 // Pending Codex and Claude fallback input gets bounded hook observation. An
 // unresolved native attempt blocks fallback resends. Manual operations below
 // retain their separate contract and serialize with ordinary delivery. State,
-// relay and dialog guards precede native setup and proof reconciliation.
+// relay, dialog and ordinary-Codex error guards precede the unusable-name
+// check, native setup and proof reconciliation.
 //
 // On a Cursor row a plain text with Enter, an Enter-only send included, then
 // reads its gateway's verdict on that Enter from the row's protected gateway
@@ -482,8 +484,8 @@ type sendKeysGuard struct {
 // has none (a writing verb always does, b.146 rule 8), waiting for the
 // store's write lock as any write does; that write is fail-open.
 //
-// After the state and relay guards, a row whose recorded name is unusable
-// (SR-3.2) is ErrInternal with no tmux call; a pending row with no launch
+// After the state, relay, dialog and ordinary-Codex error guards, a row
+// whose recorded name is unusable (SR-3.2) is ErrInternal with no tmux call; a pending row with no launch
 // start or token has already been refused by the state guard.
 //
 // Then the row's socket (SR-3.3; a resolution refusal is
@@ -600,6 +602,7 @@ type sendKeysFacts struct {
 // with send-keys' pending-row Leftover refusal, its own tmux surface (the
 // named key and the capture), its environment and the facts the call keeps.
 type sendKeysRun struct {
+	ordinary bool
 	keysRun
 	s              SendKeysStore
 	t              SendKeysTmux
@@ -608,7 +611,7 @@ type sendKeysRun struct {
 	facts          sendKeysFacts
 	input          InputDeliverySession
 	automatic      bool
-	paste          PasteKeysTmux
+	paste          GuardedPasteKeysTmux
 	terminal       PaneTerminalTmux
 	deliveryResult SendKeysResult
 	// terminalState carries the last row state read during pending Claude
@@ -678,6 +681,7 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 	// ordinary is plain nonempty text with Enter and no pane hash, the only
 	// input native delivery and the agent-specific fallback paths below take.
 	ordinary := !plan.answer && plan.key == nil && plan.hash == "" && plan.enter && plan.text != ""
+	r.ordinary = ordinary
 	paneOnly := spawn.IsPaneOnly(row.Agent)
 	if paneOnly && params.DeliveryRequestID != "" {
 		return spawn.PaneOnlyCapabilityError(row.Agent, "send-keys delivery_request_id")
@@ -698,6 +702,9 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 	}
 	if guard.refusal != nil {
 		return guard.refusal
+	}
+	if err := codexTurnErrorGuard(row, ordinary); err != nil {
+		return err
 	}
 
 	if err := unusableNameError(row.TmuxSessionName); err != nil {
@@ -749,12 +756,15 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 		}
 		paste, ok := r.t.(PasteKeysTmux)
 		if !ok {
-			return deliveryNotStarted(row, "the tmux adapter does not support Codex fallback paste; use a paste-capable adapter")
+			return deliveryNotStarted(row, "the tmux adapter does not support Codex fallback paste; use a paste-capable adapter implementing the guarded method")
 		}
-		if _, guarded := paste.(GuardedPasteKeysTmux); r.input != nil && !guarded {
-			return deliveryNotStarted(row, "the tmux adapter does not support guarded Codex fallback paste; use a journal-aware paste adapter")
+		// Every ordinary Codex fallback adapter must guard paste and Enter,
+		// even when this call has no SQLite input journal.
+		guarded, ok := paste.(GuardedPasteKeysTmux)
+		if !ok {
+			return deliveryNotStarted(row, "the tmux adapter does not support guarded Codex fallback paste; use an adapter that rechecks admission before paste and Enter")
 		}
-		r.paste = paste
+		r.paste = guarded
 	}
 	if reason := pacedTextTooLong(row.Agent, plan.text); !r.automatic && reason != "" {
 		return deliveryNotStarted(row, reason)
@@ -837,7 +847,7 @@ func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 			if guard.refusal != nil {
 				return guard.refusal
 			}
-			return nil
+			return codexTurnErrorGuard(current, r.ordinary)
 		}); err != nil {
 			return r.terminalRefusal(err)
 		}
@@ -848,6 +858,7 @@ func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 			return nil
 		}
 	}
+	r.guardCodexTurnBeforeWrite(params)
 	if r.automatic {
 		return r.deliverOrdinary(paneID, launch, plan, params)
 	}
@@ -1234,8 +1245,9 @@ func isInteractiveState(state string) bool {
 // err_details [PaneKeySentDetails] (key_sent true): the key reached the pane,
 // so read it before anything else is sent.
 //
-// After the state and relay refusals, a row whose recorded tmux session name
-// cannot be used (it is empty, contains a control character, or contains a
+// After the state, relay, dialog and ordinary-Codex error refusals, a row
+// whose recorded tmux session name cannot be used (it is empty, contains a
+// control character, or contains a
 // character tmux stores differently) gets ErrInternal (an error matching no
 // catalogued sentinel) with no tmux call; removing the row is a human's
 // decision (see "Operator actions" in agent-director's docs/operator-actions.md).
@@ -1293,6 +1305,11 @@ func isInteractiveState(state string) bool {
 //     earlier launch of the row does not hold
 //     (store.PermissionRow.HoldsDialog). A plain call whose ExpectPaneSHA256
 //     matches the pane is not refused with it.
+//   - [ErrCodexTurnErrored]: ordinary nonempty Codex text plus Enter while
+//     the latest observed rollout task boundary is a task_complete with
+//     payload.error present. Nothing was sent. Inspect ReadPane; answer menus
+//     with Key, or pass its hash as ExpectPaneSHA256 for intentional text.
+//     AllowPending is no bypass.
 //   - [ErrNoOpenPermissionRequest]: a pane answer whose request is not one
 //     of the Spawn's, or is closed with its row or by find-missing; nothing
 //     was sent.
@@ -1344,7 +1361,8 @@ func isInteractiveState(state string) bool {
 //     retain attempted input facts; failed hook observation carries only
 //     keys_sent, submission_confirmed and row_state. Never replay uncertain
 //     text, Enter or permission keys. Only native attempts support passive
-//     reconciliation with the original delivery_request_id. For fallback,
+//     reconciliation with the original delivery_request_id after the guards
+//     above pass, including the ordinary-Codex error hold. For fallback,
 //     inspect hook-derived get or status and escalate if submission remains
 //     unknown. On gateway_refused nothing reached Cursor and the gateway
 //     discarded the text: read the pane and get, answer or clear what holds the

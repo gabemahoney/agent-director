@@ -164,15 +164,108 @@ func TestHookCLISteerBrokenPipe(t *testing.T) {
 			if err != nil {
 				t.Fatalf("hook = %v (%v); want exit 0 with its output recorded\nstderr=%s", err, cmd.ProcessState, stderr.String())
 			}
-			if got := steerTransports(t, db, id); !slices.Equal(got, []string{tc.want}) {
+			if got := issuedPromptTransports(t, db, id); !slices.Equal(got, []string{tc.want}) {
 				t.Errorf("issued prompts' transport = %q; want [%s]", got, tc.want)
 			}
 
 			if out := h.hook(t, id, "", payload); out != "" {
 				t.Errorf("a later parent boundary wrote %q; want nothing while the ambiguous prompt keeps its barrier", out)
 			}
-			if got := steerTransports(t, db, id); !slices.Equal(got, []string{tc.want}) {
+			if got := issuedPromptTransports(t, db, id); !slices.Equal(got, []string{tc.want}) {
 				t.Errorf("after a later boundary, issued prompts' transport = %q; want [%s] and no retry", got, tc.want)
+			}
+			assertNoTmuxCall(t, h.home)
+		})
+	}
+}
+
+// TestHookCLIWakeBrokenPipe (Bug b.7oo): a wake whose stderr reader closes
+// before or during its write exits 0 and records uncertain or partial output.
+// A later wake writes nothing and issues no retry while that prompt is unresolved.
+func TestHookCLIWakeBrokenPipe(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		during bool
+		want   string
+	}{
+		{name: "reader closed before the write", want: "uncertain"},
+		{name: "reader closed during a larger write", during: true, want: "partial"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newGateHome(t)
+			const id, session = "id-gate-wake-7oo", "6a5b4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2d"
+			db := stateDB(h.home)
+			if _, err := apitest.SeedSpawn(db, id, store.StateWaiting, "", "off", session, true, withTestProcessPane(t)); err != nil {
+				t.Fatalf("SeedSpawn: %v", err)
+			}
+			wake := filepath.Join(h.home, "busy-send-wake")
+			if err := apitest.SeedBusySendCoverage(db, id, store.BusySendCovered, store.BusySendCovered); err != nil {
+				t.Fatal(err)
+			}
+			if err := apitest.SeedBusySendRoute(db, id, string(store.BusySendRouteClaudeHooks), wake); err != nil {
+				t.Fatal(err)
+			}
+			text := bytes.Repeat([]byte("w"), 7_900)
+			if _, err := openDBForRead(t, h.home).AdmitBusySend(store.BusySendAdmissionRequest{InstanceID: id, Text: text}); err != nil {
+				t.Fatalf("AdmitBusySend: %v", err)
+			}
+			payload, err := json.Marshal(map[string]string{"hook_event_name": "FileChanged", "session_id": session,
+				"transcript_path": "/x/" + session + ".jsonl", "cwd": "/x", "file_path": wake, "event": "change"})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			defer w.Close()
+			if tc.during {
+				if size, err := unix.FcntlInt(w.Fd(), unix.F_SETPIPE_SZ, 4096); err != nil || size >= len(text) {
+					t.Skipf("pipe size %d, %v: cannot hold the write below the prompt's size", size, err)
+				}
+			} else if err := r.Close(); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), gateHookDeadline)
+			defer cancel()
+			cmd := h.hookCmd(ctx, t, id, "", string(payload))
+			var stdout strings.Builder
+			cmd.Stdout, cmd.Stderr = &stdout, w
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			_ = w.Close()
+			if tc.during {
+				if _, err := io.ReadFull(r, make([]byte, 1024)); err != nil {
+					t.Errorf("read the prompt's start: %v", err)
+				}
+				_ = r.Close()
+			}
+			err = cmd.Wait()
+			if ctx.Err() != nil {
+				t.Fatalf("hook still running after %s", gateHookDeadline)
+			}
+			if err != nil || stdout.Len() != 0 {
+				t.Errorf("hook = %v (%v), stdout %q; want exit 0 with its output recorded and no stdout", err, cmd.ProcessState, stdout.String())
+			}
+			if got := issuedPromptTransports(t, db, id); !slices.Equal(got, []string{tc.want}) {
+				t.Errorf("issued prompts' transport = %q; want [%s]", got, tc.want)
+			}
+
+			// A later wake, with an ordinary blocking stderr pipe that is read.
+			ctx2, cancel2 := context.WithTimeout(context.Background(), gateHookDeadline)
+			defer cancel2()
+			cmd2 := h.hookCmd(ctx2, t, id, "", string(payload))
+			var out2, err2 strings.Builder
+			cmd2.Stdout, cmd2.Stderr = &out2, &err2
+			runErr := cmd2.Run()
+			if runErr != nil || out2.Len() != 0 || err2.Len() != 0 {
+				t.Errorf("later wake = %v, stdout %q, stderr %q; want exit 0 and nothing written while the ambiguous prompt keeps its barrier", runErr, out2.String(), err2.String())
+			}
+			if got := issuedPromptTransports(t, db, id); !slices.Equal(got, []string{tc.want}) {
+				t.Errorf("after a later wake, issued transports = %q; want [%s] and no retry", got, tc.want)
 			}
 			assertNoTmuxCall(t, h.home)
 		})
@@ -207,9 +300,9 @@ func steerPayload(t *testing.T, session string) string {
 	return string(payload)
 }
 
-// steerTransports reads the transport of every issued prompt of id's
+// issuedPromptTransports reads the transport of every issued prompt of id's
 // hand-overs ("" while none is recorded).
-func steerTransports(t *testing.T, dbPath, id string) []string {
+func issuedPromptTransports(t *testing.T, dbPath, id string) []string {
 	t.Helper()
 	return queryStrings(t, dbPath, `SELECT COALESCE(p.transport, '') FROM busy_send_prompts p
 	    JOIN busy_send_handovers h ON h.handover_id = p.handover_id

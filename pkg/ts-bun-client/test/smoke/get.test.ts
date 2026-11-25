@@ -13,8 +13,8 @@ import { test, expect } from "bun:test";
 import { expectedContext } from "../internal/contextFixture.js";
 import * as path from "path";
 import { withTempHome } from "../internal/tempHome.js";
-import { runHelper, homeStore, openClient } from "../internal/helper.js";
-import { ErrAgentCapabilityUnsupported, ErrSpawnNotFound } from "../../src/index.js";
+import { runHelper, homeStore, openClient, rejection } from "../internal/helper.js";
+import { ErrAgentCapabilityUnsupported, ErrCodexTurnErrored, ErrSpawnNotFound } from "../../src/index.js";
 import type { GetResult } from "../../src/index.js";
 
 /** RFC3339 UTC as Go encodes a ms-precision time.Time: `Z`, 0-3 fraction digits. */
@@ -36,6 +36,8 @@ test("get: happy path — returns full spawn row fields", async () => {
     }
     expect(result.launch_started_at).toBeUndefined();
     expect(result.agent).toBe("claude");
+    // b.cqr: unsupported agents carry explicit null through the CLI envelope.
+    expect(result.last_turn_errored).toBeNull();
     // Busy send covers claude (SR-9.1): get shows its out-of-the-box Agent Defaults, an empty inbox and
     // the capability table, never the core's own columns (SR-5.6).
     expect(result.busy_send).toBe("covered");
@@ -63,9 +65,19 @@ test("get: happy path — returns full spawn row fields", async () => {
   });
 }, 10_000);
 
-test("get: a codex row shows agent codex", async () => {
+// b.cqr: the real CLI carries the read field and constructs the typed send refusal.
+test("get: an errored Codex turn is visible and plain send returns ErrCodexTurnErrored", async () => {
   await withTempHome(async (homeDir) => {
-    expect((await seedAndGet(homeDir, "smoke-get-codex-id", { state: "ended", agent: "codex" })).agent).toBe("codex");
+    const store = homeStore(homeDir);
+    const id = "smoke-get-codex-id";
+    runHelper("seed-spawn", { store, id, state: "waiting", "codex-errored-turn": true,
+      "writer-pid": String(process.pid), "create-store": true });
+    using client = await openClient(store);
+    const result = await client.get({ instance_id: id });
+    expect(result).toMatchObject({ agent: "codex", state: "waiting", last_turn_errored: true });
+    const err = await rejection(client.sendKeys({ instance_id: id, text: "2" }));
+    expect(err).toBeInstanceOf(ErrCodexTurnErrored);
+    expect((err as ErrCodexTurnErrored).errName).toBe("ErrCodexTurnErrored");
   });
 }, 10_000);
 

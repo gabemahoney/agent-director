@@ -228,6 +228,12 @@ Stores without evidence report unknown records. On error, the zero result's
 `StateChangedAt time.Time` (JSON `state_changed_at`); see
 [State change time](../../docs/caller-contract.md#state-change-time).
 
+`SpawnRow` (`Get` and each `GetMany` row) and `ListRow` also expose
+`LastTurnErrored *bool` (JSON `last_turn_errored`, always present; nil encodes
+as `null`). It is absent from `StatusResult`. See
+[Codex turn errors](../../docs/caller-contract.md#a-codex-turn-that-ends-in-an-error)
+for observation semantics and the ordinary-send hold.
+
 `Client.Status`, `Client.Get`, `Client.GetMany` and `Client.List` use the config
 loaded at construction for [state and family settling](../../docs/configuration.md#settle-time-state).
 The package-level `api.Status`, `api.Get` and `api.List` functions use no
@@ -388,8 +394,8 @@ For those agents CR is stripped, LF preserved and one Enter appended unless
 `ExpectPaneSHA256`, with the inspected `ReadPane`'s `NLines`, guards that
 exact screen. A supported native Codex send returns `Outcome: "submitted"`
 and receipt fields; fallback and manual success return an empty result.
-Their errors include `ErrSubmissionUnconfirmed`, state, relay and dialog
-refusals. See [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission),
+Their errors include `ErrSubmissionUnconfirmed`, `ErrCodexTurnErrored`, state,
+relay and dialog refusals. See [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission),
 [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership)
 and [Permission relay](../../docs/caller-contract.md#permission-relay).
 
@@ -455,28 +461,18 @@ output through unchanged (history plus the whole screen) breaks `n_lines`.
 They also need these optional capabilities for the corresponding fallback
 paths:
 
-- `PasteKeysTmux` supports ordinary Codex fallback:
+- `PasteKeysTmux` defines paste framing:
   `PasteKeysPane(socket, paneID, text string) error`. It preserves text and LF in
   one paste, sends one Enter only after paste succeeds, and never retries input.
   Failures use `*TmuxCallError` with the failed text or Enter call.
-- `GuardedPasteKeysTmux` is also required for journal-backed Codex fallback:
+- `GuardedPasteKeysTmux` is required for every ordinary Codex fallback send,
+  with or without an input journal:
   `PasteKeysPaneGuarded(socket, paneID, text string, beforeWrite func(enter bool) error) error`.
   It invokes the guard immediately before paste and Enter and stops on refusal,
   with the same framing and error rules as `PasteKeysTmux`.
 Adapters without a needed paste capability receive a pre-input `not_started`
 refusal on that fallback path. The default client provides both.
 See their godoc for each field's contract.
-
-```go
-_, err := c.SendKeys(api.SendKeysParams{
-    InstanceID:   "codex_example",
-    Text:         "",       // press Enter to dismiss the prompt
-    AllowPending: true,
-})
-if err != nil {
-    log.Fatal(err)
-}
-```
 
 ---
 
@@ -735,6 +731,7 @@ Common sentinels across verbs:
 | `ErrSendKeysWhileRelayed` | A permission relay may still answer |
 | `ErrRelayFallenBack` | The relay settled without acknowledgement or a recorded pane answer |
 | `ErrDialogMaybeOpen` | A permission dialog is not proven gone |
+| `ErrCodexTurnErrored` | Ordinary Codex text refused before input; see [Codex turn errors](../../docs/caller-contract.md#a-codex-turn-that-ends-in-an-error) |
 | `ErrStoreBusy` | A bounded store operation did not finish in time |
 | `ErrAlreadyDecided` | The request already has a verdict or completed pane answer |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |

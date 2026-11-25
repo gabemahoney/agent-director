@@ -2,17 +2,68 @@ package api_test
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// b.cqr: native readiness and committed input intents must not hide a rollout
+// error, and a refusal after text must retain conservative delivery facts.
+func TestSendKeysCodexTurnErrorDuringNativePreparation(t *testing.T) {
+	t.Parallel()
+	for _, at := range []string{"readiness", "text intent", "after text"} {
+		t.Run(at, func(t *testing.T) {
+			e := newNativeSubmissionEnv(t)
+			turn := codexfix.ErroredTurn
+			path := codexfix.TempRolloutPath(t, turn.SessionID, true, turn.Started())
+			spec := codexSpec(store.StateWaiting, agentAlive, false)
+			spec.SessionID = turn.SessionID
+			spec.Opts = append(spec.Opts, apitest.WithJsonlPath(path))
+			r := e.seedRow(t, spec)
+			complete := func() {
+				if err := os.WriteFile(path, turn.Ended(), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch at {
+			case "readiness":
+				e.b.ready = func() (bool, error) { complete(); return true, nil }
+			case "text intent":
+				e.b.save = func(a *api.InputDeliveryAttempt) error {
+					if a.Phase == "text_attempted" {
+						complete()
+					}
+					return nil
+				}
+			case "after text":
+				e.rec.AfterCall(tmux.CallSendText, func(tmuxfix.SocketCall, error) { complete() })
+			}
+			_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: "2"})
+			if at == "after text" {
+				assertDeliveryError(t, err, "partial_input_unconfirmed", 1, false)
+				if strings.Contains(err.Error(), "nothing was sent") {
+					t.Fatalf("false pre-input claim: %v", err)
+				}
+			} else {
+				assertOneName(t, err, "ErrCodexTurnErrored")
+				e.assertNothingSent(t)
+			}
+			if at == "text intent" && (e.b.current.Phase != "text_attempted" || e.b.current.BytesAttempted != 1) {
+				t.Fatalf("committed intent was rolled back: %+v", e.b.current)
+			}
+			e.assertNoCalls(t, tmux.CallSendKey, tmux.CallSendEnter)
+		})
+	}
+}
 
 func TestSendKeysChunkDrainExactSubmission(t *testing.T) {
 	t.Parallel()

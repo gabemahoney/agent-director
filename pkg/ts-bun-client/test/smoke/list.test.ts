@@ -20,14 +20,19 @@ test("list: happy path — returns seeded spawns array", async () => {
     expect(typeof row?.cwd).toBe("string");
     expect(row?.permission_requests).toEqual([]);
     expect(row?.agent).toBe("claude");
+    // b.cqr: the CLI preserves an explicit null for an unsupported agent.
+    expect(row?.last_turn_errored).toBeNull();
   });
 }, 10_000);
 
-test("list: a codex row shows agent codex", async () => {
+// b.cqr: the selected Codex row's error observation survives the real CLI envelope.
+test("list: an errored Codex row carries last_turn_errored true", async () => {
   await withTempHome(async (homeDir) => {
-    runHelper("seed-spawn", { store: homeStore(homeDir), state: "ended", id: "smoke-list-codex-id", agent: "codex", "create-store": true });
+    runHelper("seed-spawn", { store: homeStore(homeDir), state: "waiting", id: "smoke-list-codex-id",
+      "codex-errored-turn": true, "writer-pid": String(process.pid), "create-store": true });
     using client = await openClient(homeStore(homeDir));
-    expect((await client.list({})).spawns.find((r) => r.instance_id === "smoke-list-codex-id")?.agent).toBe("codex");
+    expect((await client.list({})).spawns.find((r) => r.instance_id === "smoke-list-codex-id"))
+      .toMatchObject({ agent: "codex", state: "waiting", last_turn_errored: true });
   });
 }, 10_000);
 

@@ -265,6 +265,11 @@
     "description": ""
   },
   {
+    "name": "ErrCodexTurnErrored",
+    "package": "api",
+    "description": ""
+  },
+  {
     "name": "ErrInvalidDecision",
     "package": "api",
     "description": ""
