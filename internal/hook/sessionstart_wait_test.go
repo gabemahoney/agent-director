@@ -22,6 +22,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/internal/trail"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -317,6 +318,13 @@ func runSessionStartWait(t *testing.T, id string, kind swKind, tc swCase) {
 		}
 	case <-time.After(swDeadline):
 		t.Fatalf("Handle did not return within %v (%d sleeps)", swDeadline, len(clock.Sleeps()))
+	}
+	// b.9iw: a cancelled context lets Handle return with trail events queued.
+	// A fresh context makes this sentinel wait behind them on the FIFO worker.
+	drainCtx, stopDrain := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopDrain()
+	if err := trail.Default().Emit(drainCtx, "ad.test.sessionstart_wait_drained", nil); err != nil {
+		t.Fatalf("trail worker FIFO barrier failed (5s timeout) after Handle returned: %v", err)
 	}
 
 	// Sleeps: 250 ms each, the last cut short at the bound; the virtual time waited.
