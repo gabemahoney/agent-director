@@ -101,22 +101,37 @@ func TestCodexValidatedRolloutConfirmsAfterProcessExit(t *testing.T) {
 	}
 }
 
-func TestCodexConfirmFirstDescriptorRequiresPostSnapshotSession(t *testing.T) {
+func TestCodexConfirmFirstDescriptorRequiresPostSnapshotRollout(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"older session", "equal timestamp", "missing snapshot", "fresh session"} {
+	// b.k7w: Codex 0.159.2 starts the session before SnapshotAt, but writes
+	// session_meta (outer timestamp and ordinal 0) only after the first prompt.
+	for _, mode := range []string{"older rollout", "older rollout with newer payload", "missing outer timestamp", "invalid outer timestamp", "non-string outer timestamp", "equal timestamp", "missing snapshot", "lazy rollout"} {
 		t.Run(mode, func(t *testing.T) {
-			s, a, path, meta, record := codexEvidence(t, "first-turn")
+			s, a, path, _, record := codexEvidence(t, "first-turn")
+			started := a.SnapshotAt.Add(-time.Second)
+			s.manifest.Created = started.Add(-time.Second)
+			var written any = a.SnapshotAt.Add(-time.Millisecond).Format(time.RFC3339Nano)
 			switch mode {
+			case "older rollout with newer payload":
+				started = a.SnapshotAt.Add(time.Millisecond)
+			case "missing outer timestamp":
+				written = ""
+			case "invalid outer timestamp":
+				written = "not-a-timestamp"
+			case "non-string outer timestamp":
+				written = 123
 			case "equal timestamp":
-				meta = codexMetadataRecord(t, a, a.SnapshotAt)
+				written = a.SnapshotAt.Format(time.RFC3339Nano)
 			case "missing snapshot":
+				written = a.SnapshotAt.Add(76 * time.Millisecond).Format(time.RFC3339Nano)
 				a.SnapshotAt = time.Time{}
-			case "fresh session":
-				meta = codexMetadataRecord(t, a, a.SnapshotAt.Add(time.Millisecond))
+			case "lazy rollout":
+				written = a.SnapshotAt.Add(76 * time.Millisecond).Format(time.RFC3339Nano)
 			}
+			meta := codexMetadataRecord(t, a, started, written)
 			a.NativeSessionID = ""
-			writeEvidence(t, path, append(meta, record...))
-			// The rollout is not in the owned FD set at the request's snapshot.
+			// The file does not exist at the request's snapshot. An older rollout
+			// discovered later must still refuse its exact matching user record.
 			var err error
 			a.Watermark, err = s.Watermark(a.Identity)
 			if err != nil {
@@ -125,6 +140,7 @@ func TestCodexConfirmFirstDescriptorRequiresPostSnapshotSession(t *testing.T) {
 			if len(a.Watermark) != 0 {
 				t.Fatalf("unexpected initial watermark: %+v", a.Watermark)
 			}
+			writeEvidence(t, path, append(meta, record...))
 			f, err := os.Open(path)
 			if err != nil {
 				t.Fatal(err)
@@ -139,10 +155,10 @@ func TestCodexConfirmFirstDescriptorRequiresPostSnapshotSession(t *testing.T) {
 					t.Fatal(err)
 				}
 				proof, err := s.Confirm(a)
-				if err != nil || (proof != nil) != (mode == "fresh session") {
-					t.Fatalf("confirmation %d: proof=%+v err=%v", i, proof, err)
+				if err != nil || (proof != nil) != (mode == "lazy rollout") {
+					t.Fatalf("confirmation %d: proof=%+v err=%v; want proof=%t", i, proof, err, mode == "lazy rollout")
 				}
-				if proof != nil && (proof.RecordID != "first-turn" || proof.Path != path || proof.Offset != int64(len(meta)) || proof.RawSHA256 != Hash(proof.Raw)) {
+				if proof != nil && (proof.RecordID != "first-turn" || proof.Path != path || proof.SessionID != a.NativeSessionID || proof.Offset != int64(len(meta)) || string(proof.Raw)+"\n" != string(record) || proof.RawSHA256 != Hash(record[:len(record)-1])) {
 					t.Fatalf("first rollout lost exact provenance: %+v", proof)
 				}
 			}
@@ -204,26 +220,34 @@ func TestCodexWatermarkRetainsPriorAttemptAfterWriterRestart(t *testing.T) {
 
 func TestCodexConfirmRetainsValidatedDescriptor(t *testing.T) {
 	t.Parallel()
-	s, a, path, meta, record := codexEvidence(t, "new-turn")
-	writeEvidence(t, path, meta)
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	a.Watermark, err = s.Watermark(a.Identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p, err := s.Confirm(a); err != nil || p != nil {
-		t.Fatalf("empty rollout confirmed: %+v, %v", p, err)
-	}
-	if err = f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	writeEvidence(t, path, append(meta, record...))
-	proof, err := s.Confirm(a)
-	if err != nil || proof == nil || proof.RecordID != "new-turn" || proof.SessionID != a.NativeSessionID {
-		t.Fatalf("lost validated descriptor: %+v, %v", proof, err)
+	// b.k7w/TR1: a known rollout never interprets its outer timestamp.
+	for _, mode := range []string{"valid timestamp", "non-string outer timestamp"} {
+		t.Run(mode, func(t *testing.T) {
+			s, a, path, meta, record := codexEvidence(t, "new-turn")
+			if mode == "non-string outer timestamp" {
+				meta = codexMetadataRecord(t, a, s.manifest.Created.Add(time.Second), 123)
+			}
+			writeEvidence(t, path, meta)
+			f, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			a.Watermark, err = s.Watermark(a.Identity)
+			if err != nil || a.Watermark[path].SessionID != a.NativeSessionID || a.Watermark[path].Size != int64(len(meta)) {
+				t.Fatalf("rollout not watermarked: %+v, %v", a.Watermark, err)
+			}
+			if p, err := s.Confirm(a); err != nil || p != nil {
+				t.Fatalf("empty rollout confirmed: %+v, %v", p, err)
+			}
+			if err = f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			writeEvidence(t, path, append(meta, record...))
+			proof, err := s.Confirm(a)
+			if err != nil || proof == nil || proof.RecordID != "new-turn" || proof.SessionID != a.NativeSessionID || proof.Path != path || proof.Offset != int64(len(meta)) || string(proof.Raw)+"\n" != string(record) || proof.RawSHA256 != Hash(record[:len(record)-1]) {
+				t.Fatalf("lost validated descriptor: %+v, %v", proof, err)
+			}
+		})
 	}
 }

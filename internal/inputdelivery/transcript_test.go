@@ -90,12 +90,19 @@ func codexRollout(t *testing.T, s *nativeSession, a *Attempt, recordID string) (
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(dir, "rollout.jsonl"), codexMetadataRecord(t, a, s.manifest.Created.Add(time.Second)), codexRecord(t, recordID, a.Payload)
+	started := s.manifest.Created.Add(time.Second)
+	return filepath.Join(dir, "rollout.jsonl"), codexMetadataRecord(t, a, started, started.Format(time.RFC3339Nano)), codexRecord(t, recordID, a.Payload)
 }
 
-func codexMetadataRecord(t *testing.T, a *Attempt, created time.Time) []byte {
+// codexMetadataRecord separates session start from the first rollout write.
+// written is the outer JSON value; an empty string omits the field.
+func codexMetadataRecord(t *testing.T, a *Attempt, started time.Time, written any) []byte {
 	t.Helper()
-	meta, err := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]any{"id": a.NativeSessionID, "cwd": a.Identity.CWD, "cli_version": "0.159.2", "timestamp": created.Format(time.RFC3339Nano)}})
+	r := map[string]any{"ordinal": 0, "type": "session_meta", "payload": map[string]any{"id": a.NativeSessionID, "cwd": a.Identity.CWD, "cli_version": "0.159.2", "timestamp": started.Format(time.RFC3339Nano)}}
+	if written != "" {
+		r["timestamp"] = written
+	}
+	meta, err := json.Marshal(r)
 	if err != nil {
 		t.Fatal(err)
 	}
