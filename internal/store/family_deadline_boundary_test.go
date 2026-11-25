@@ -63,13 +63,18 @@ func TestFamilyRefreshAvoidsCorrelatedAggregateScans_BMPV(t *testing.T) {
 }
 
 func TestLifecycleFamilyRefreshAbsoluteDeadline(t *testing.T) {
+	// b.sym: end the context at the refresh, independent of connection-open time.
 	for _, phase := range []string{"family refresh deadline", "family refresh cancellation"} {
 		t.Run(phase, func(t *testing.T) {
 			s, path := newRelayRow(t, "on", StateWaiting)
 			b := installDeadlineBoundary(t, s, path)
-			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-			defer cancel()
+			ctx := newBoundaryDeadline()
+			defer ctx.end(context.Canceled)
 			deadline, _ := ctx.Deadline()
+			wantCause := context.DeadlineExceeded
+			if phase == "family refresh cancellation" {
+				wantCause = context.Canceled
+			}
 			var reached, commits atomic.Int32
 			b.before = func(sqlCtx context.Context, q string) error {
 				if got, ok := sqlCtx.Deadline(); !ok || got.After(deadline) {
@@ -80,27 +85,30 @@ func TestLifecycleFamilyRefreshAbsoluteDeadline(t *testing.T) {
 				}
 				if strings.HasPrefix(q, familyAggregateSQL) {
 					reached.Add(1)
-					if phase == "family refresh cancellation" {
-						cancel()
-					}
+					ctx.end(wantCause)
 					<-sqlCtx.Done()
 					return sqlCtx.Err()
 				}
 				return nil
 			}
-			start := time.Now()
-			_, applied, err := s.WithContext(ctx).InsertRelayRequest(relayID, agentGate("PermissionRequest", ""), relayReq(tokenA), 0, 5*time.Second)
-			if elapsed := time.Since(start); elapsed > 150*time.Millisecond+time.Second {
-				t.Errorf("deadline overrun: %v", elapsed)
+			type result struct {
+				applied HookApplied
+				err     error
 			}
+			done := make(chan result, 1)
+			go func() {
+				_, applied, err := s.WithContext(ctx).InsertRelayRequest(relayID, agentGate("PermissionRequest", ""), relayReq(tokenA), 0, 2*time.Hour)
+				done <- result{applied, err}
+			}()
+			var got result
+			select {
+			case got = <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("family refresh did not return after boundary expiry")
+			}
+			applied, err := got.applied, got.err
 			if reached.Load() != 1 {
 				t.Fatalf("actual %s boundary reached %d times", phase, reached.Load())
-			}
-			// The operation's independent deadline timer can fire before ctx's.
-			// Assert the phase's cause without depending on timer delivery order.
-			wantCause := context.DeadlineExceeded
-			if phase == "family refresh cancellation" {
-				wantCause = context.Canceled
 			}
 			if applied.Applied || !errors.Is(err, ErrStoreBusy) || !errors.Is(err, wantCause) {
 				t.Errorf("family refresh lost precommit cancellation contract: applied=%+v err=%v", applied, err)

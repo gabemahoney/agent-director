@@ -374,6 +374,7 @@ func TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait(t *testing.T) {
 }
 
 func TestDecisionLateAcquisitionRetainsOriginalSQLDeadline(t *testing.T) {
+	// b.sym: scheduling decides when acquisition is late, not whether SQL is reached.
 	s, path := newRelayRow(t, "on", StateWorking)
 	insertRelay(t, s, relayReq(tokenA))
 	b := installDeadlineBoundary(t, s, path)
@@ -382,47 +383,87 @@ func TestDecisionLateAcquisitionRetainsOriginalSQLDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lease.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
+	ctx := newBoundaryDeadline()
+	defer ctx.end(context.Canceled)
 	deadline, _ := ctx.Deadline()
 	var reached atomic.Bool
+	var commits atomic.Int32
 	b.before = func(sqlCtx context.Context, q string) error {
 		if got, ok := sqlCtx.Deadline(); !ok || got.After(deadline) {
 			t.Errorf("late acquisition renewed SQL deadline: %v", got)
 		}
+		if q == "COMMIT" {
+			commits.Add(1)
+		}
 		if strings.Contains(q, "UPDATE permission_requests") {
 			reached.Store(true)
+			ctx.end(context.DeadlineExceeded)
 			<-sqlCtx.Done()
 			return sqlCtx.Err()
 		}
 		return nil
 	}
 	done := make(chan error, 1)
-	go func() { _, err := boundedDecision(s, ctx, 5*time.Second); done <- err }()
+	go func() { _, err := boundedDecision(s, ctx, 2*time.Hour); done <- err }()
 	// Pool statistics prove the actual caller is waiting before acquisition is released.
 	poll := time.NewTicker(time.Millisecond)
 	defer poll.Stop()
+	watchdog := time.NewTimer(10 * time.Second)
+	defer watchdog.Stop()
 	for s.db.Stats().WaitCount == 0 {
 		select {
 		case <-poll.C:
-		case <-ctx.Done():
+		case <-watchdog.C:
 			t.Fatal("caller did not reach pool acquisition")
 		}
 	}
-	late := time.NewTimer(time.Until(deadline.Add(-75 * time.Millisecond)))
-	defer late.Stop()
-	<-late.C
 	_ = lease.Close()
 	select {
 	case err := <-done:
-		if !errors.Is(err, ErrStoreBusy) || !reached.Load() {
+		if !errors.Is(err, ErrStoreBusy) || !errors.Is(err, context.DeadlineExceeded) || !reached.Load() {
 			t.Errorf("late acquired SQL=%v, reached=%v", err, reached.Load())
 		}
-	case <-time.After(time.Second):
-		t.Fatal("late acquisition renewed total wait")
+	case <-watchdog.C:
+		t.Fatal("late acquisition did not return after boundary expiry")
 	}
 	b.stopObservingAfterCleanup(t, s)
+	if commits.Load() != 0 {
+		t.Error("COMMIT attempted after precommit expiry")
+	}
 	assertDeadlineDatabaseReusable(t, s, path, "")
+}
+
+// boundaryDeadline (b.sym) ends only at the observed SQL boundary. Its nominal
+// hour is shorter than the call's two-hour wait, so renewing SQL's deadline
+// still fails; short watchdogs catch hangs without making readiness spend it.
+type boundaryDeadline struct {
+	context.Context
+	at   time.Time
+	done chan struct{}
+	once sync.Once
+	mu   sync.Mutex
+	err  error
+}
+
+func newBoundaryDeadline() *boundaryDeadline {
+	return &boundaryDeadline{Context: context.Background(), at: time.Now().Add(time.Hour), done: make(chan struct{})}
+}
+
+func (c *boundaryDeadline) Deadline() (time.Time, bool) { return c.at, true }
+func (c *boundaryDeadline) Done() <-chan struct{}       { return c.done }
+func (c *boundaryDeadline) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *boundaryDeadline) end(err error) {
+	c.once.Do(func() {
+		c.mu.Lock()
+		c.err = err
+		c.mu.Unlock()
+		close(c.done)
+	})
 }
 
 func TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance(t *testing.T) {
