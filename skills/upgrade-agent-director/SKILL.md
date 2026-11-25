@@ -147,10 +147,15 @@ if [ -n "${AGENT_DIRECTOR_INSTANCE_ID:-}" ]; then echo "started by agent-directo
 ```
 
 If it prints `started by agent-director`, stop here and hand the upgrade to the
-user or to a session agent-director did not start, saying why: your own row is
-live, so the install refuses, and your own hooks would run the new binary
-mid-upgrade. Do the same if this session has agent-director's MCP tools: their
+user or to a session agent-director did not start, saying why: schema upgrades
+refuse live rows, and your own hooks would run the new binary mid-upgrade.
+Do the same if this session has agent-director's MCP tools: their
 `agent-director serve` must stop too.
+
+For an exempt schema v16–v20 upgrade with no directory move due, the refusal
+is `ErrUpgradeRefused`, reason `agents_live` or `agent_rows_unreadable`.
+Pre-flight changes nothing. File-only upgrades follow the earlier branch and
+require no agent stops.
 
 ### Read the store schema
 
