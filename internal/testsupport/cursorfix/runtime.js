@@ -32,7 +32,9 @@ if(process.argv[2]===workerArgs[0]) {
   fs.renameSync(SETTINGS.workerPID+'.result.json.tmp',SETTINGS.workerPID+'.result.json');
  },10);
 } else {
-fs.writeFileSync(SETTINGS.pid, String(process.pid));
+// b.ckn: cleanup must never see a truncated PID during runtime replacement.
+fs.writeFileSync(SETTINGS.pid+'.tmp', String(process.pid));
+fs.renameSync(SETTINGS.pid+'.tmp', SETTINGS.pid);
 fs.writeFileSync(SETTINGS.pid+'.selection.json',JSON.stringify(Object.fromEntries(
  ['CURSOR_CONFIG_DIR','CURSOR_DATA_DIR','CURSOR_API_KEY','AGENT_CLI_CREDENTIAL_STORE'].map(key=>[key,process.env[key] ?? null]))));
 if(SETTINGS.worker) require('child_process').spawn(process.execPath,[__filename,...workerArgs],{stdio:SETTINGS.workerStdio || 'ignore',detached:true}).unref();

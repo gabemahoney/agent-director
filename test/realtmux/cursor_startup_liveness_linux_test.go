@@ -123,6 +123,8 @@ func TestCursorAsyncCapabilityFailureAndSyntheticLoginRepair(t *testing.T) {
 			f, r, launch := newCursorPane(t, false)
 			caller := newPaneCaller(t, f, "CLI", filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director"))
 			caller.must("pause", map[string]any{"instance_id": launch.ID})
+			// b.ckn / SR-6.1: wait for the private server after its last session.
+			waitPidGone(t, int(launch.Row.TmuxServerPID.(int64)))
 			r.Configure(t, cursorfix.Scenario{InitializeReply: json.RawMessage(tc.reply)})
 			id := newInstanceID("capability-failure")
 			caller.must("spawn", map[string]any{"instance_id": id, "agent": "cursor", "cwd": f.CWD, "no_pre_trust": false, "agent_args": []string{"never admitted"}})
@@ -131,6 +133,8 @@ func TestCursorAsyncCapabilityFailureAndSyntheticLoginRepair(t *testing.T) {
 				pid, ok := row.PanePID.(int64)
 				return ok && pidGone(int(pid))
 			}, nil)
+			// b.ckn: failed startup also ends the last session on this server.
+			waitPidGone(t, int(readRow(t, f.DBPath, id).TmuxServerPID.(int64)))
 			failures := hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.failed", id)
 			raw, err := json.Marshal(failures)
 			if err != nil || len(failures) != 1 || !strings.Contains(string(raw), tc.want) || strings.Contains(string(raw), "SYNTHETIC-SECRET") {
