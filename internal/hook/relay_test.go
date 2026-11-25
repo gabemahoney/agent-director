@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -407,11 +408,57 @@ func (c *realSleepAt) Sleep(ctx context.Context, d time.Duration) {
 	hook.DefaultPollClock().Sleep(ctx, d)
 }
 
+// relayResponseStore observes real response writes without counting later logging.
+type relayResponseStore struct {
+	*store.Store
+	writes []relayResponseWrite
+}
+
+type relayResponseWrite struct {
+	kind              string
+	entered, returned time.Time
+	wait              time.Duration
+}
+
+func (s *relayResponseStore) AckRelayDecision(id, token string, at time.Time, maxWait time.Duration, check func() error) (string, string, bool, error) {
+	w := relayResponseWrite{kind: "ack", entered: time.Now(), wait: maxWait}
+	decision, reason, acked, err := s.Store.AckRelayDecision(id, token, at, maxWait, check)
+	w.returned = time.Now()
+	s.writes = append(s.writes, w)
+	return decision, reason, acked, err
+}
+
+func (s *relayResponseStore) DenyRelayTimeout(id, token string, at time.Time, maxWait time.Duration, check func() error) (bool, error) {
+	w := relayResponseWrite{kind: "deny", entered: time.Now(), wait: maxWait}
+	denied, err := s.Store.DenyRelayTimeout(id, token, at, maxWait, check)
+	w.returned = time.Now()
+	s.writes = append(s.writes, w)
+	return denied, err
+}
+
+func (s *relayResponseStore) assertDeadline(t *testing.T, ackBy time.Time, verdict string) {
+	t.Helper()
+	kind := "deny"
+	if verdict != "" {
+		kind = "ack"
+	}
+	if len(s.writes) != 1 || s.writes[0].kind != kind {
+		t.Fatalf("response writes = %+v; want one %s", s.writes, kind)
+	}
+	w := s.writes[0]
+	if w.wait <= 0 || w.entered.Add(w.wait).After(ackBy) {
+		t.Errorf("%s budget %v ends at %v; want positive and no later than ackBy %v", kind, w.wait, w.entered.Add(w.wait), ackBy)
+	}
+	if w.returned.After(ackBy) {
+		t.Errorf("%s returned at %v; want no later than ackBy %v", kind, w.returned, ackBy)
+	}
+}
+
 // TestRelayAckKeepsItsReserve (rule 4; the b.146 property): with the write
 // lock taken while the hook polls and held past its kill, its ack of a verdict
 // and its timeout deny each wait only until 2 s before the kill, whatever
 // [store] busy_timeout_ms is; the hook then exits with nothing on stdout and
-// nothing acked, before Claude Code would kill it.
+// nothing acked. The response write returns by ackBy, before logging or exit.
 func TestRelayAckKeepsItsReserve(t *testing.T) {
 	const timeout = 4 * time.Second
 	for i, tc := range []struct {
@@ -426,37 +473,39 @@ func TestRelayAckKeepsItsReserve(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			id := "relay-reserve-real-" + string(rune('a'+i))
-			seeded, dbPath := seedAgentRow(t, id, store.StateWorking)
-			st, err := store.OpenWithBusyTimeout(dbPath, tc.busyMs)
-			if err != nil {
-				t.Fatalf("OpenWithBusyTimeout: %v", err)
-			}
-			defer st.Close()
-			hc := relayHC(id, agentParent(t, seeded, id), timeout)
-			var release func()
-			hc.Now, hc.Start = time.Now, time.Now()
-			hc.Clock = &realSleepAt{fn: func() {
-				if tc.verdict != "" {
-					decideOnly(t, st, id, tc.verdict)
+			// b.4v7: virtualize Store timers too; scheduler stalls must not spend the reserve.
+			synctest.Test(t, func(t *testing.T) {
+				id := "relay-reserve-real-" + string(rune('a'+i))
+				seeded, dbPath := seedAgentRow(t, id, store.StateWorking)
+				realStore, err := store.OpenWithBusyTimeout(dbPath, tc.busyMs)
+				if err != nil {
+					t.Fatalf("OpenWithBusyTimeout: %v", err)
 				}
-				release = apitest.HoldWriteLock(t, dbPath, time.Minute)
-			}}
+				defer realStore.Close()
+				st := &relayResponseStore{Store: realStore}
+				hc := relayHC(id, agentParent(t, seeded, id), timeout)
+				var release func()
+				hc.Now, hc.Start = time.Now, time.Now()
+				hc.Clock = &realSleepAt{fn: func() {
+					if tc.verdict != "" {
+						decideOnly(t, realStore, id, tc.verdict)
+					}
+					release = apitest.HoldWriteLock(t, dbPath, time.Minute)
+				}}
 
-			out, took := fireRelay(t, st, hc, relayPayload)
-			if release != nil {
-				release()
-			}
+				out, _ := fireRelay(t, st, hc, relayPayload)
+				if release != nil {
+					release()
+				}
 
-			if out != "" {
-				t.Errorf("stdout = %q; want nothing (the ack could not commit with its reserve)", out)
-			}
-			if limit := timeout - 2*time.Second + 500*time.Millisecond; took > limit {
-				t.Errorf("the hook exited after %v; want within %v, its reserve before its %v kill", took, limit, timeout)
-			}
-			if req := onlyRequest(t, st, id); req.Decision != tc.verdict || !req.DeliveredAt.IsZero() {
-				t.Errorf("request = decision %q, delivered_at %v; want %q, none", req.Decision, req.DeliveredAt, tc.verdict)
-			}
+				if out != "" {
+					t.Errorf("stdout = %q; want nothing (the ack could not commit with its reserve)", out)
+				}
+				st.assertDeadline(t, hc.Start.Add(timeout-2*time.Second), tc.verdict)
+				if req := onlyRequest(t, realStore, id); req.Decision != tc.verdict || !req.DeliveredAt.IsZero() {
+					t.Errorf("request = decision %q, delivered_at %v; want %q, none", req.Decision, req.DeliveredAt, tc.verdict)
+				}
+			})
 		})
 	}
 }
