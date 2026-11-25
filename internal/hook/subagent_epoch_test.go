@@ -20,10 +20,10 @@ const epochIdle = `{"hook_event_name":"Notification","notification_type":"idle_p
 const epochAsk = `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}`
 
 // epochMainHook shares the relay's injected clock and parent evidence, with
-// a start beyond the request's whole-second proof cutoff.
+// a start beyond the request's real whole-second proof cutoff.
 func epochMainHook(t *testing.T, st *store.Store, hc hook.HandleConfig, payload string) {
 	t.Helper()
-	hc.Start = hc.Now()
+	hc.Start = onlyRequest(t, st, hc.Env("AGENT_DIRECTOR_INSTANCE_ID")).CreatedAt.Add(time.Second)
 	hc.RelayHookGone = func(store.PermissionRow) bool { return false }
 	if out, _ := fireRelay(t, st, hc, payload); out != "" {
 		t.Fatalf("main hook output = %q; want empty", out)
@@ -133,6 +133,40 @@ func TestSubagentEpochRelayAcrossMainHooks(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// b.m3k: a slow real insert must not invalidate the main Stop proof fixture.
+func TestSubagentEpochMainStopProofAfterLateInsert(t *testing.T) {
+	const id = "epoch-late-insert"
+	st, _ := cxRelayRow(t, id, store.AgentClaude, store.StateWorking)
+	parent := agentParent(t, st, id)
+
+	// SQLite uses the real clock. Put the relay clock behind it so the real
+	// insert lands beyond the old virtual Stop cutoff without waiting.
+	hc := relayHC(id, parent, 10*time.Second)
+	clock := hookClock(t, hc)
+	clock.Advance(-2 * time.Second)
+	base := hc.Now()
+
+	atSleep(t, hc, 1, func() {
+		admitted := onlyRequest(t, st, id)
+		clock.Advance(time.Second)
+		oldCutoff := hc.Now().Truncate(time.Second)
+		if !admitted.CreatedAt.After(base.Truncate(time.Second)) || admitted.CreatedAt.Before(oldCutoff) {
+			t.Fatalf("late insert did not reproduce clock mismatch: base=%s created_at=%s old_cutoff=%s", base, admitted.CreatedAt, oldCutoff)
+		}
+		epochMainHook(t, st, hc, `{"hook_event_name":"Stop"}`)
+		pr := onlyRequest(t, st, id)
+		if !pr.ProvenGone() || pr.ProvenGoneHow != store.ProvenGoneTurnEnd {
+			t.Fatalf("Stop did not prove late-inserted main request gone: %+v", pr)
+		}
+	})
+	if out, _ := fireRelay(t, st, hc, relayPayload); out != "" {
+		t.Errorf("retired request emitted %q; want no bytes", out)
+	}
+	if pr := onlyRequest(t, st, id); pr.ProvenGoneHow != store.ProvenGoneTurnEnd {
+		t.Fatalf("relay did not retain turn_end proof: %+v", pr)
 	}
 }
 
