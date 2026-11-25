@@ -318,8 +318,8 @@ func Expire(s ExpireStore, t ExpireTmux, pc ProcChecker, retentionDays int, olde
 		if lg != nil {
 			lg.Printf("expire: ExpireBusySendRetention: %v", err)
 		}
-		// %v, never %w: expire names no error (manifest ErrorNames), so a
-		// store sentinel such as ErrStoreBusy must not reach errnames.Classify.
+		// %v, never %w: store sentinels such as ErrStoreBusy are not declared
+		// expire errors and must not leak through errnames.Classify.
 		return failed, fmt.Errorf("expire: retention pass: %v", err)
 	}
 
@@ -550,8 +550,11 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 //
 // CLI: agent-director expire
 //
-// Errors: none on the CLI, MCP or TypeScript client. A negative olderThan,
-// which only a Go caller can pass, is refused with ErrInvalidFlags (above).
+// Errors:
+//   - [ErrInvalidFlags]: CLI flag or MCP argument validation failed, or
+//     older_than failed ParseOlderThan, before Expire ran. The CLI also
+//     rejects words left after flag parsing. A Go caller's negative
+//     olderThan is refused by Expire itself before anything runs (above).
 //
 // Nondeterminism: none.
 func (c *Client) Expire(olderThan *time.Duration) (ExpireResult, error) {

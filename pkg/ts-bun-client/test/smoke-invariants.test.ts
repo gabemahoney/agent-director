@@ -10,11 +10,11 @@ import * as path from "path";
 import * as fs from "fs";
 import { VERBS } from "../src/internal/verbs.js";
 
-// Verbs with no deterministically triggerable verb-level error: version and
-// expire declare no ErrorNames; sweep's and find-missing's ErrProbeUnsupported
-// is never returned (SR-1.7), and the smoke suite has no deterministic
-// ErrStoreBusy fixture.
-const NO_ERROR_CASE_ALLOWLIST = new Set(["version", "expire", "find-missing", "sweep"]);
+// version has no ErrorNames. sweep/find-missing emit valid zero-parameter TS
+// calls: MCP parameter validation and CLI leftover-word refusals are separate
+// paths. ErrProbeUnsupported is never returned (SR-1.7), and this suite has
+// no deterministic ErrStoreBusy fixture. expire's duration error is covered.
+const NO_ERROR_CASE_ALLOWLIST = new Set(["version", "find-missing", "sweep"]);
 
 const smokeDir = path.resolve(import.meta.dir, "smoke");
 const read = (file: string) => fs.readFileSync(path.join(smokeDir, file), "utf-8");

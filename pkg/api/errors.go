@@ -297,12 +297,13 @@ var ErrPaneAnswerInProgress = errors.New("ErrPaneAnswerInProgress")
 // hook is seen running).
 var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 
-// ErrInvalidFlags is returned when a flag or parameter value fails basic
+// ErrInvalidFlags is returned when CLI arguments or parameters fail basic
 // validation. It has four sources:
-//   - CLI flag parsing, for every verb: when a required flag is absent or a
-//     flag value fails basic validation (empty string, unrecognised enum
-//     member, etc.), the handlers in cmd/agent-director/*.go write it as the
-//     err_name string literal in the JSON error envelope via
+//   - CLI argument checking: an unknown flag, a missing required flag, an
+//     invalid flag value (empty string, unrecognised enum member, etc.), or
+//     words left after parsing a flag-only verb's flags, or spawn agent
+//     arguments not preceded by --. The handlers in cmd/agent-director/*.go
+//     write its name as a string literal in the JSON error envelope via
 //     writeApiErrorAndDispatch("ErrInvalidFlags", …).
 //   - MCP argument checking, for every tool, before anything runs
 //     (internal/mcp): an `arguments` key that is not one of the verb's
@@ -349,9 +350,10 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 //     older_than with ParseOlderThan, which refuses a negative value first
 //     (the CLI flag-parse and MCP argument sources above).
 //
-// Manifest ErrorNames list verb-specific shared-layer refusals. Generic CLI
-// flag parsing and MCP argument checking do not require every verb to list
-// this error. The internal, non-callable trail-emit verb also lists it.
+// Manifest ErrorNames list verb-specific shared-layer refusals and selected
+// CLI/MCP boundary errors, including this error for sweep, find-missing,
+// expire, serve and trail-emit. Generic CLI flag parsing and MCP argument
+// checking do not require every verb to list it.
 // It stays in five-way coherence check 3's exceptions per SR-1.7; while a
 // callable verb lists it, that listing already satisfies check 3, so the
 // exception changes nothing.

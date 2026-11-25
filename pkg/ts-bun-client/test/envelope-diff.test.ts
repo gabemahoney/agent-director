@@ -25,7 +25,7 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 
-import { Client, AgentDirectorError, ErrCantSend, ErrSpawnNotPausable, ErrTooManyIds } from "../src/index.js";
+import { Client, AgentDirectorError, ErrCantSend, ErrInvalidFlags, ErrSpawnNotPausable, ErrTooManyIds } from "../src/index.js";
 import {
   runHelper,
   privateTmuxSocket,
@@ -1466,9 +1466,10 @@ describe("find-missing", () => {
     TIMEOUT
   );
 
-  // No error path: find-missing no longer returns ErrProbeUnsupported (kept by
-  // SR-1.7), and this suite has no deterministic ErrStoreBusy fixture; it is in
-  // NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
+  // This zero-parameter TS call emits valid arguments. MCP parameter and CLI
+  // leftover-word checks can return ErrInvalidFlags on their own surfaces.
+  // ErrProbeUnsupported is unreachable and there is no ErrStoreBusy fixture;
+  // see NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
 });
 
 describe("sweep", () => {
@@ -1497,9 +1498,10 @@ describe("sweep", () => {
     TIMEOUT
   );
 
-  // No error path: sweep no longer returns ErrProbeUnsupported (kept by
-  // SR-1.7), and this suite has no deterministic ErrStoreBusy fixture; it is in
-  // NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
+  // This zero-parameter TS call emits valid arguments. MCP parameter and CLI
+  // leftover-word checks can return ErrInvalidFlags on their own surfaces.
+  // ErrProbeUnsupported is unreachable and there is no ErrStoreBusy fixture;
+  // see NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
 });
 
 // ── expire ────────────────────────────────────────────────────────────────────
@@ -1610,8 +1612,22 @@ describe("expire", () => {
     TIMEOUT
   );
 
-  // expire has no verb-level ErrorNames in the manifest.
-  // It is in the NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
+  // b.hb2 S1: both callers pass duration text through the same validation.
+  test("error path: invalid older_than → ErrInvalidFlags", async () => {
+    const { homeA, storeB, cleanup } = prepareStores((store) => {
+      runHelper("seed-empty-store", { store });
+    });
+    try {
+      const cli = runCli(["expire", "--older-than", "nonsense"], cliEnv(homeA));
+      expect(cli.exitCode).toBe(1);
+      using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+      const err = await rejection(client.expire({ older_than: "nonsense" }));
+      expect(err).toBeInstanceOf(ErrInvalidFlags);
+      assertErrorEnvelopes(cli.stderr, err);
+    } finally {
+      cleanup();
+    }
+  }, TIMEOUT);
 });
 
 // ── make-template ─────────────────────────────────────────────────────────────

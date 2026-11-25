@@ -17,6 +17,9 @@ func sweepHandlerWith(client *pkgapi.Client, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
 	return writeSweep(client)
 }
 
@@ -31,6 +34,9 @@ func findMissingHandlerWith(client *pkgapi.Client, args []string) error {
 	fs := flag.NewFlagSet("find-missing", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 
@@ -56,6 +62,9 @@ func expireHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&olderThanStr, "older-than", "", "duration override (e.g. 7d, 12h, 0d). Default: cfg.defaults.expire_retention_days.")
 	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 

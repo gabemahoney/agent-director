@@ -228,10 +228,10 @@ func init() {
 		Happy: func(c *api.Client, _ string, ctx context.Context) (any, error) {
 			return c.FindMissing(ctx)
 		},
-		// find-missing has no verb-surface error to trigger: its only
-		// declared error, ErrProbeUnsupported, stays listed by SR-1.7
-		// but find-missing no longer returns it. Skipping the error
-		// assertion is handled by the driver when Error is nil.
+		// b.hb2 S1: CLI argument and MCP parameter validation can return
+		// ErrInvalidFlags; this direct Go call has no string/JSON params.
+		// ErrProbeUnsupported is retained but never returned, and this
+		// fixture does not inject ErrStoreBusy. Nil Error skips that check.
 		Error: nil,
 	}
 
@@ -254,8 +254,9 @@ func init() {
 			d := time.Duration(0)
 			return c.Expire(&d)
 		},
-		// expire declares no ErrorNames in the manifest — a row it does
-		// not delete is kept and listed in kept_ids, not a verb error.
+		// b.hb2 S1: CLI/MCP duration text and the TS subprocess client can
+		// produce ErrInvalidFlags. This direct Go fixture takes a typed
+		// *time.Duration; rows it does not delete are listed in kept_ids.
 		Error: nil,
 		Expired: func(result any) api.ExpireResult {
 			return result.(api.ExpireResult)

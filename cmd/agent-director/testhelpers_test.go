@@ -243,6 +243,16 @@ func assertOnlyEnvelope(t *testing.T, stdout, stderr string, code int, want stri
 	return env
 }
 
+// assertStrayArguments checks the CLI's leftover-word refusal without pinning
+// its prose; the description must identify the first unexpected argument.
+func assertStrayArguments(t *testing.T, stdout, stderr string, code int, word string) {
+	t.Helper()
+	env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
+	if !strings.Contains(env.ErrDescription, word) {
+		t.Errorf("err_description = %q; want it to name unexpected argument %q", env.ErrDescription, word)
+	}
+}
+
 // lastJSONLine returns the last line of s that begins with `{`, skipping the
 // warning lines (e.g. "pre-trust failed for <path> …") a launch may print first.
 func lastJSONLine(s string) string {
@@ -340,6 +350,61 @@ func trailOrNil(t *testing.T, home string) []map[string]any {
 		return nil
 	}
 	return readTrailLines(t, home)
+}
+
+// noActionEffects shares old-flag and stray-argument refusal observations.
+// An id also observes durable busy-send facts beyond the spawn projection.
+type noActionEffects struct {
+	home, id string
+	trail    []map[string]any
+	busy     *apitest.BusySendFacts
+}
+
+func observeNoActionEffects(t *testing.T, home, id string) noActionEffects {
+	t.Helper()
+	e := noActionEffects{home: home, id: id, trail: trailOrNil(t, home)}
+	if id != "" {
+		facts, err := apitest.ReadBusySendFacts(stateDB(home), id)
+		if err != nil {
+			t.Fatalf("ReadBusySendFacts before refusal: %v", err)
+		}
+		e.busy = &facts
+	}
+	return e
+}
+
+// assertUnchanged permits only decide's established ErrInvalidFlags audit
+// when wantTrail is one; zero requires the entire trail to stay unchanged.
+func (e noActionEffects) assertUnchanged(t *testing.T, wantTrail int) {
+	t.Helper()
+	if e.busy != nil {
+		after, err := apitest.ReadBusySendFacts(stateDB(e.home), e.id)
+		if err != nil {
+			t.Fatalf("ReadBusySendFacts after refusal: %v", err)
+		}
+		if jsonOf(t, after) != jsonOf(t, *e.busy) {
+			t.Errorf("busy-send facts changed: before=%+v after=%+v", *e.busy, after)
+		}
+	}
+	after := trailOrNil(t, e.home)
+	if got := len(after) - len(e.trail); got != wantTrail {
+		t.Errorf("trail grew by %d lines; want %d", got, wantTrail)
+	}
+	if len(after) < len(e.trail) {
+		return
+	}
+	for i, before := range e.trail {
+		if jsonOf(t, after[i]) != jsonOf(t, before) {
+			t.Errorf("trail line %d changed: before=%v after=%v", i, before, after[i])
+		}
+	}
+	if wantTrail == 1 {
+		for _, line := range after[len(e.trail):] {
+			if line["event"] != "ad.decide.called" || line["outcome"] != "ErrInvalidFlags" {
+				t.Errorf("unexpected refusal audit: %v; want ad.decide.called with ErrInvalidFlags", line)
+			}
+		}
+	}
 }
 
 // eventsOf returns the lines of lines whose event is name, in order.
