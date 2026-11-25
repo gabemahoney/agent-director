@@ -659,6 +659,95 @@ func TestSettingsBackupNotKept(t *testing.T) {
 	}
 }
 
+// TestSettingsReplaceFailureLeavesNoCopy (b.o4v): a failed or interrupted
+// settings.json replacement keeps the original and removes its token-bearing temp.
+func TestSettingsReplaceFailureLeavesNoCopy(t *testing.T) {
+	const (
+		token = "PLACEHOLDER-TOKEN-not-a-secret-o4v"
+		text  = `{"env":{"GH_TOKEN":"` + token + `"}}` + "\n"
+	)
+	faults := []struct {
+		name, tool, action string
+		code               int
+		symlink            bool
+	}{
+		{name: "mv fails", tool: "mv", action: "exit 73", code: 73},
+		{name: "chmod fails", tool: "chmod", action: "exit 73", code: 73},
+		{name: "mv fails through symlink", tool: "mv", action: "exit 73", code: 73, symlink: true},
+		// The child returns success without renaming: only the signal can end
+		// the script. Bash handles it after this foreground child finishes.
+		{name: "TERM before mv", tool: "mv", action: `kill -TERM "$PPID"; exit 0`, code: 143},
+	}
+	for _, script := range []string{"install.sh", "uninstall.sh"} {
+		for _, fault := range faults {
+			t.Run(script+"/"+fault.name, func(t *testing.T) {
+				t.Parallel()
+				h := newMoveHome(t)
+				h.Flags = []string{"--no-symlink"}
+				settings := filepath.Join(h.Home, ".claude", "settings.json")
+				target := settings
+				link := filepath.Join("..", "dotfiles", "settings.json")
+				if fault.symlink {
+					target = filepath.Join(h.Home, "dotfiles", "settings.json")
+					h.Link(link, settings)
+				}
+				h.Write(target, text, 0o600)
+				if script == "uninstall.sh" {
+					if r := h.Install(); r.Code != 0 {
+						t.Fatalf("setup install: exit %d\n%s\n%s", r.Code, r.Stdout, r.Stderr)
+					}
+				}
+				before, err := os.ReadFile(target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				marker := "b.o4v: injected " + fault.name
+				h.WrapTool(fault.tool, `for a; do
+    if [[ "$a" -ef `+moveQuote(target+".new")+` ]]; then
+        [[ -f "$a" ]] || exit 74
+        printf '%s\n' `+moveQuote(marker)+` >&2
+        `+fault.action+`
+    fi
+done`)
+				var res moveResult
+				if script == "uninstall.sh" {
+					res = schedUninstall(t, h)
+				} else {
+					res = h.Install()
+				}
+				if !slices.Contains(strings.Split(res.Stderr, "\n"), marker) {
+					t.Fatalf("stand-in never intercepted the written temp file; exit %d\nstdout:\n%s\nstderr:\n%s", res.Code, res.Stdout, res.Stderr)
+				}
+				if res.Code != fault.code {
+					t.Errorf("%s exit = %d, want %d\nstderr:\n%s", script, res.Code, fault.code, res.Stderr)
+				}
+				got, err := os.ReadFile(target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != string(before) {
+					t.Error("failed replacement changed settings.json")
+				}
+				var decoded struct{ Env map[string]string }
+				if err := json.Unmarshal(got, &decoded); err != nil || !maps.Equal(decoded.Env, map[string]string{"GH_TOKEN": token}) {
+					t.Errorf("settings.json did not keep its env: %v", err)
+				}
+				if fault.symlink {
+					if got, err := os.Readlink(settings); err != nil || got != link {
+						t.Errorf("settings.json link = %q, %v; want %q", got, err, link)
+					}
+					if _, err := os.Lstat(settings + ".new"); !os.IsNotExist(err) {
+						t.Errorf("settings.json.new remains beside the link (%v)", err)
+					}
+				}
+				if _, err := os.Lstat(target + ".new"); !os.IsNotExist(err) {
+					t.Errorf("BUG b.o4v: settings.json.new remains beside the target after %s (%v)", fault.name, err)
+				}
+			})
+		}
+	}
+}
+
 // treeSnap maps each path under root to its mode, mtime, and contents or link target.
 func treeSnap(t *testing.T, root string) map[string]string {
 	t.Helper()

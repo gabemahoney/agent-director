@@ -541,8 +541,9 @@ agent selection to the caller.
   [Cursor input outcomes](caller-contract.md#cursor-input-outcomes) if input is held.
 - Check, then delete, any `~/.claude/settings.json.bak.<YYYYmmdd-HHMMSS>`
   files: they may hold your tokens. Install and uninstall keep no
-  copy of `settings.json` and delete none of these, but each names those it
-  finds on one line, each path shell-quoted, ready to paste after `rm --`.
+  copy of `settings.json`, including after a failed or interrupted write.
+  They delete none of these old copies, but each names those it finds on
+  one line, each path shell-quoted, ready to paste after `rm --`.
 - A link `~/.agent-director` that points to `~/.config/agent-director` is allowed
   for scripts that still name the old path when the install does not cross the
   native-input cutover. For a crossing upgrade, follow the
