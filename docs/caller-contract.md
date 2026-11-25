@@ -2517,9 +2517,8 @@ repair that selection; follow the [fresh-instance boundary](#cursor-operation-bo
     resume runs inline with `--no-alt-screen`; a caller copy before the first
     `--` is not added again. Callers cannot select the alternate screen by
     argument. Scrollback may contain an extra startup header (cosmetic).
-    A `read-pane` request above the pane height can include older conversation,
-    menus and headers; compare `pane_sha256` only at the same `n_lines`.
-    Retention limits are in [`read-pane`](cli-reference.md#read-pane);
+    Capture contents and retention limits are in
+    [`read-pane`](cli-reference.md#read-pane);
     other launch settings are in [Codex's layers](settings.md#codexs-layers).
   - `resume` does not apply spawn's argument refusals. It filters recognized
     session selectors and Claude print mode from stored arguments as described

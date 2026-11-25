@@ -976,7 +976,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "n_lines",
 				Type:          "int",
-				Description:   "Number of trailing pane lines to return, counted up from the last line with content: blank lines below it are left out, blank lines above it count. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags). Codex launches run inline (--no-alt-screen), so retained scrollback is readable as for a Claude pane, up to tmux's history-limit (default 2000 rows; agent-director sets none). Output tmux never kept cannot be read back. Existing alternate-screen Codex panes return only the visible screen until relaunched or resumed. Requests above the pane height can include older conversation, menus and headers; compare pane_sha256 only at the same n_lines.",
+				Description:   "Number of trailing pane lines to return, counted up from the last line with content: blank lines below it are left out, blank lines above it count. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags). Codex launches run inline (--no-alt-screen), so retained scrollback is readable as for a Claude pane, up to tmux's history-limit (default 2000 rows; agent-director sets none). Output tmux never kept cannot be read back. Existing alternate-screen Codex panes return only the visible screen until relaunched or resumed. Requests above the pane height can include older conversation, menus and headers.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
