@@ -304,6 +304,11 @@
 #      restore that could not finish (needs a human; put the listed copies
 #      back as docs/operator-actions.md "Putting back a kept install"
 #      describes). ErrJournalMigrationIncomplete is install.sh's own name.
+#      ErrUpgradeRefused is also install.sh's own name: an exempt upgrade
+#      from schema v16 to below this release's schema, with no move due,
+#      found live rows (agents_live) or could not read them
+#      (agent_rows_unreadable). Pre-flight changed nothing; follow the
+#      envelope's action, then re-run the same install command.
 #   6  the MCP registration failed (--register-mcp): `claude mcp add` (or the
 #      `claude mcp remove` before the re-add of a registration that names the
 #      old directory's binary) exited non-zero. Every other step is done: the
@@ -359,6 +364,12 @@
 # version, no file is read or changed. An unreadable store version stops the
 # install in pre-flight (exit 5, ErrVersionUnreadable). It runs with or
 # without --no-hooks.
+#
+# Exempt upgrades from schema v16 to below this release's schema, with no
+# directory move due, refuse live or unreadable agent rows before opening
+# the store (exit 5, ErrUpgradeRefused). Stop agents and clear only rows whose
+# agents are established gone, as the refusal advises. File-only upgrades
+# over a versioned layout do not inspect the store or require agent stops.
 #
 # The move (SR-11.7). An earlier release kept AD's files in
 # ~/.agent-director; this one keeps them in ~/.config/agent-director. When
@@ -644,6 +655,10 @@ fi
 #   ErrAgentsLive         the old store holds a live row, a process runs
 #                         the old binary, or the rows could not be read:
 #                         stop them, then re-run.
+#   ErrUpgradeRefused     an exempt non-crossing schema upgrade with no
+#                         move due found live or unreadable agent rows;
+#                         nothing changed. Follow details.refusal.action,
+#                         then re-run the same install command.
 #   ErrMoveFailed         the move failed before its rename: the partial
 #                         new directory was removed, the old one is
 #                         untouched; fix the cause (a full disk), re-run.
@@ -656,7 +671,7 @@ fi
 #   ErrJournalMigrationIncomplete  a failed or uncertain cutover left this
 #                         release installed: complete forward as reported.
 # ErrVersionUnreadable, ErrSchemaVerifyFailed, ErrMoveConflict,
-# ErrAgentsLive, ErrMoveFailed and ErrJournalMigrationIncomplete are install.sh's own names, not
+# ErrAgentsLive, ErrUpgradeRefused, ErrMoveFailed and ErrJournalMigrationIncomplete are install.sh's own names, not
 # agent-director error names.
 #
 # Exit 1 is the agent-rename migration's failed write (see the header): it
@@ -4440,14 +4455,15 @@ fi
 #   - no store, or v0: not crossing;
 #   - v1 up to INPUT_CUTOVER_VERSION - 1: crossing (CUTOVER_CROSSING=1);
 #     with no move due the store must hold no live row
-#     (ad_crossing_live_rows_check), and the candidate administrator's
+#     (ad_upgrade_live_rows_check), and the candidate administrator's
 #     migrate-journal --check-only must accept the run's journal flags and
 #     find no blocking process through the real quiescence verifier;
 #     then the restore preconditions (below) run;
 #   - INPUT_CUTOVER_VERSION up to STORE_SCHEMA_VERSION - 1: not crossing
 #     when the native-input authority is recorded; refused when it is
 #     missing (native_input_authority_missing) or unreadable
-#     (cutover_state_unreadable);
+#     (cutover_state_unreadable); with no move due, live or unreadable rows
+#     then refuse with ErrUpgradeRefused, before any store open;
 #   - STORE_SCHEMA_VERSION or newer: not crossing (step 4's list reports a
 #     newer store).
 # --------------------------------------------------------------------
@@ -4464,30 +4480,36 @@ ad_cutover_refuse_state() {
     ad_outcome_exit ErrJournalMigrationRefused "$reason" "$action" not_committed
 }
 
-# ad_crossing_live_rows_check — on a crossing upgrade with no move due,
+# ad_upgrade_live_rows_check <err_name> — on a schema upgrade with no move due,
 # refuse in pre-flight while the store holds a row in a live state
 # (agents_live), or when its rows cannot be read (agent_rows_unreadable),
-# with nothing changed. The holder inventory follows in ad_journal_check_only.
-# With a move due, ad_agents_live_check has already
-# read the old store's rows. The advice runs the installed binary, which here
-# is still the previous release's.
-ad_crossing_live_rows_check() {
+# with nothing changed. All such upgrades must use this shared reader/advice:
+# ErrJournalMigrationRefused for a crossing (holder inventory follows in
+# ad_journal_check_only), ErrUpgradeRefused for an exempt non-crossing upgrade.
+# With a move due, ad_agents_live_check has already read the old store's rows.
+# The advice runs the installed binary, still the previous release's.
+ad_upgrade_live_rows_check() {
+    local err_name="$1" boundary="the exempt upgrade" live_reason="so the exempt upgrade cannot proceed"
     local bin line state id cmd action
+    if [[ "$err_name" == ErrJournalMigrationRefused ]]; then
+        boundary="the native-input cutover"
+        live_reason="which the native-input cutover cannot cross"
+    fi
     printf -v bin '%q' "$CANONICAL"
     if ! ad_read_live_rows "$state_db"; then
         action="re-run the same install command once ${state_db_name} is no longer busy (a re-run reads its rows again); if it still cannot be read, inspect $state_db with the error this run reported"
-        echo "install.sh: cannot read ${state_db_name}'s agent rows, so cannot tell whether an agent is live before the native-input cutover; refusing to upgrade." >&2
+        echo "install.sh: cannot read ${state_db_name}'s agent rows, so cannot tell whether an agent is live before ${boundary}; refusing to upgrade." >&2
         echo "  state.db: $state_db" >&2
         echo "  The rows could not be read (the store was busy past its busy timeout of ${store_busy_timeout_ms} ms, or is unreadable). sqlite3 said:" >&2
         printf '%s\n' "$LIVE_ROWS_ERR" | sed 's/^/    /' >&2
         echo "  Nothing was installed or changed." >&2
-        ad_outcome_exit ErrJournalMigrationRefused agent_rows_unreadable "$action" not_committed
+        ad_outcome_exit "$err_name" agent_rows_unreadable "$action" not_committed
     fi
     if [[ -z "$LIVE_ROWS" ]]; then
         return 0
     fi
     action="stop each live agent with $bin pause --instance-id <id> (a waiting row) or $bin kill --instance-id <id> (any other live row); only for an agent you have established is gone, clear its row with $bin find-missing, run as the agents' user in their tmux environment (a missing row does not prove the agent stopped: docs/maintenance.md \"Scheduling the sweeps\"); then re-run the same install command from a shell AD did not start"
-    echo "install.sh: ${state_db_name} holds live agents, which the native-input cutover cannot cross; refusing to upgrade." >&2
+    echo "install.sh: ${state_db_name} holds live agents, ${live_reason}; refusing to upgrade." >&2
     echo "  state.db: $state_db" >&2
     echo "  Rows in a live state (state, instance id), each followed by the command that stops its agent:" >&2
     while IFS= read -r line; do
@@ -4506,7 +4528,7 @@ ad_crossing_live_rows_check() {
     echo "    $bin find-missing" >&2
     echo "  A missing row does not prove the agent stopped: a run as another user or against another tmux server can mark a running agent missing (docs/maintenance.md \"Scheduling the sweeps\")." >&2
     echo "  Nothing was installed or changed. Then re-run the same install command from a shell AD did not start." >&2
-    ad_outcome_exit ErrJournalMigrationRefused agents_live "$action" not_committed
+    ad_outcome_exit "$err_name" agents_live "$action" not_committed
 }
 
 # --------------------------------------------------------------------
@@ -5724,7 +5746,7 @@ if [[ "$LATER_INSTALL" -eq 0 && -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STO
                 "first check [store] db_path in config.toml, ~/.claude/settings.json hooks, MCP registrations, scheduled sweeps, PATH links and entries, and scripts for paths under $OLD_INSTALL_ROOT and point them at $DEFAULT_INSTALL_ROOT, then remove only the link with rm -- $compat_link_quoted (no trailing slash), then re-run this release's installer with a new --journal-backup directory" not_committed
         fi
         if [[ "$MOVE_DUE" -ne 1 ]]; then
-            ad_crossing_live_rows_check
+            ad_upgrade_live_rows_check ErrJournalMigrationRefused
         fi
         ad_journal_check_only
         if [[ "$MOVE_DUE" -eq 1 ]]; then
@@ -5744,6 +5766,9 @@ if [[ "$LATER_INSTALL" -eq 0 && -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STO
                 ad_cutover_refuse_state cutover_state_unreadable "unreadable" \
                     "${state_db_name}'s store_meta table and its native_input_authority row" ;;
         esac
+        if [[ "$MOVE_DUE" -ne 1 ]]; then
+            ad_upgrade_live_rows_check ErrUpgradeRefused
+        fi
     fi
 fi
 

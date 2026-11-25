@@ -366,7 +366,8 @@ func (f *upgradeFollow) stepOne() *opsSection {
 	s := docSection(f.t, upgradeSkill, "1. Stop the agents")
 	s.Pin("The upgrade runs only from a shell or agent that agent-director did not start. agent-director sets",
 		"for every Claude, Codex and Cursor agent it starts:",
-		"If it prints `started by agent-director`, stop here and hand the upgrade to the user or to a session agent-director did not start, saying why: your own row is live, so the install refuses, and your own hooks would run the new binary mid-upgrade. Do the same if this session has agent-director's MCP tools: their `agent-director serve` must stop too.",
+		"If it prints `started by agent-director`, stop here and hand the upgrade to the user or to a session agent-director did not start, saying why: schema upgrades refuse live rows, and your own hooks would run the new binary mid-upgrade. Do the same if this session has agent-director's MCP tools: their `agent-director serve` must stop too.",
+		"For an exempt schema v16–v20 upgrade with no directory move due, the refusal is `ErrUpgradeRefused`, reason `agents_live` or `agent_rows_unreadable`. Pre-flight changes nothing. File-only upgrades follow the earlier branch and require no agent stops.",
 		"List the live rows:",
 		"Keep each live row's id and `parent_id` from this output for step 6, before stopping any row. An empty `parent_id` means no parent.",
 		"If it prints `"+upgradeNoRows+"`, skip the checks below and ask the operator. Otherwise, while the agents still run, check that this shell is in their environment. Each must hold:",

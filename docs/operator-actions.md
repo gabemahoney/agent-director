@@ -694,7 +694,11 @@ The store's causes:
 | `migration_incomplete_or_commit_unknown` | The attempt did not finish: either it could not confirm whether its cutover committed (`details.cutover` `unknown`), or the cutover committed and the rest of the schema chain did not (`committed`). | Envelope | Keep the window, then Retry. |
 | `committed_verification_incomplete` | The cutover committed; the check after it did not pass. | Yes | Keep the window, stop any listed process, then run the direct verification retry with a new `--backup-dir` until it exits 0 with `authority: "sqlite"`. |
 
-The installer's own reasons, and the one both tools write:
+The installer's own reasons, and the one both tools write. With no directory
+move due, live-row reasons use `ErrUpgradeRefused` for an exempt schema v16–v20
+upgrade, or `ErrJournalMigrationRefused` for a crossing upgrade. Both leave the
+install unchanged with `details.cutover` `not_committed`; file-only upgrades
+do not inspect rows.
 
 | Reason | Means | Store changed | Next step |
 |---|---|---|---|
@@ -1199,6 +1203,21 @@ Then either:
 2. Or take the way back to the previous release:
    [Going back to the previous release](#going-back-to-the-previous-release).
 
+## `install.sh` refuses with `ErrUpgradeRefused`
+
+An exempt schema v16–v20 upgrade with no directory move due refused in
+pre-flight (exit 5, `err_name=ErrUpgradeRefused`). Nothing was installed or
+changed: the binaries, store, sentinel and layout are as before the run.
+The envelope gives `details.cutover` `not_committed` and
+`details.refusal.reason` and `action`:
+
+- `agents_live`: follow the [live-agent commands](#live-agent-rows) below,
+  then re-run the same install command from a shell agent-director did not start.
+- `agent_rows_unreadable`: re-run once the store is no longer busy. If its
+  rows still cannot be read, inspect the store with the sqlite3 error reported.
+
+File-only upgrades do not inspect rows and need no agent stops.
+
 ## `install.sh` refuses with `ErrJournalMigrationRefused`
 
 `install.sh` (exit 5, `err_name=ErrJournalMigrationRefused`) stopped a
@@ -1261,6 +1280,8 @@ installer with a new `--journal-backup` directory, then finish verification
 as [Upgrading the native-input journal](#upgrading-the-native-input-journal)
 describes. Recreate the link only if still needed and only after verification;
 a later `migrate-journal` run would refuse it again.
+
+### Live agent rows
 
 **Live agents** (`agents_live`, with no move due). The message lists each
 row in a live state, and under it the command that stops its agent, run with
