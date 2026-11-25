@@ -179,7 +179,7 @@ Return get's full row for each given id, in order; ids with no row are listed in
 
 ### Input schema
 
-- `instance_ids`: type=[]string, required=true — Instance ids to read, from one up to the Id Cap ([get_many] id_cap, 20 by default), none empty or repeated. On the CLI these are the words after the command.
+- `instance_ids`: type=[]string, required=true — Instance ids to read, from one up to the Id Cap ([get_many] id_cap, 20 by default), none empty or repeated. On the CLI every word after get-many is an unchanged id, including global-flag spellings and --; put global flags before the verb.
 
 ### Output schema
 

@@ -47,25 +47,7 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 		extraEnvKVs      map[string]string
 		allow, deny, ask []string
 	)
-	fs := flag.NewFlagSet("spawn", flag.ContinueOnError)
-	fs.SetOutput(io.Discard) // we surface errors via the JSON envelope
-	fs.StringVar(&p.CWD, "cwd", "", "absolute / ~-prefixed cwd for the Spawn")
-	fs.StringVar(&p.Template, "template", "", "named template stored under ~/.config/agent-director/templates/<name>.toml")
-	fs.StringVar(&p.Agent, "agent", "", "claude, codex or cursor (case-sensitive; default: the template's agent; neither gives ErrAgentMissing)")
-	fs.StringVar(&p.InstanceID, "instance-id", "", "explicit instance id (default: minted UUID4)")
-	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "explicit tmux session name (default: <basename(cwd)>-<id[:8]>); rejects ':' '.' '#' '$' '\\' (backslash), control chars, and >64 bytes; no DB uniqueness check, name reuse across ended spawns supported")
-	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (after template resolution, default: off for pane-only agents, config defaults.relay_mode for others; pane-only agents refuse on)")
-	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip the folder pre-trust: for claude, pre-writing the cwd's folder-trust key into .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json, CLAUDE_CONFIG_DIR from extra-env, otherwise from agent-director's own environment; ~/.claude.json if neither sets it); for codex, putting the cwd's trust and the hook-trust bypass on the launch's command line (no file is written); Cursor grants no trust: failed by default, skipped with this option; default off (best-effort pre-trust for Claude/Codex); pane-only agents always report skipped with no trust grant or trust-file write, regardless of this option; the choice is recorded on the row until the next spawn or reuse and agents that support resume follow it")
-	fs.BoolVar(&p.ReuseFinished, "reuse-finished", false, "reuse an explicit --instance-id whose row is finished (ended or missing); a live row, pending included, still collides; no effect without --instance-id; this call only; default off (any existing row collides with ErrInstanceIdCollision); success without dropped arguments does not say whether a row was reset; nonempty dropped_args identifies a finished-agent switch and prints a notice")
-	fs.Var(newDecimalInt(&p.IdleScreenTimeoutSeconds, 0), "idle-screen-timeout-seconds", "this row's idle_screen timeout in whole seconds, 1 to 9223372036, in place of [state] idle_screen_timeout_seconds (default 0: none, use the config); recorded on the row, kept by resume, replaced by the next spawn or reuse; a negative or larger value is refused")
-	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
-	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys, HOME (any value) and a template's key that is empty or holds '=' or a NUL byte are refused with ErrReservedEnvKey, a template's included; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config; pane-only agents additionally refuse their credential, configuration and home selectors, even empty, and keep the invoking HOME; inherited entries are checked when spawn resolves the effective agent")
-	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
-	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
-	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
-	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", sendModeUsage)
-	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", confirmedDeliveryUsage)
-	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
+	fs := spawnFlagSet(&p, &labelKVs, &extraEnvKVs, &allow, &deny, &ask)
 	if err := fs.Parse(args); err != nil {
 		return p, flagErr(fs, err)
 	}
@@ -115,9 +97,7 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 // statusHandlerWith implements `agent-director status`.
 func statusHandlerWith(client *pkgapi.Client, args []string) error {
 	var id string
-	fs := flag.NewFlagSet("status", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&id, "instance-id", "", "id to inspect")
+	fs := statusFlagSet(&id)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -155,22 +135,7 @@ func sendKeysHandlerWith(client *pkgapi.Client, args []string) error {
 // the verb (ErrInvalidFlags), as for an MCP caller.
 func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	var p pkgapi.SendKeysParams
-	fs := flag.NewFlagSet("send-keys", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to drive")
-	fs.StringVar(&p.Text, "text", "", "text to type into the Spawn's input (default empty: Enter only)")
-	fs.BoolVar(&p.AllowPending, "allow-pending", false, "also allow a pending row (a spawn, reuse or resume whose agent has not reported in yet); keys go only to a session started by the row's current launch; ended and missing rows are still rejected")
-	fs.BoolVar(&p.NoEnter, "no-enter", false, "type --text with no Enter after it")
-	fs.StringVar(&p.DeliveryRequestID, "delivery-request-id", "", "own a native ordinary text attempt; retry the same id and text to observe without replay after state, relay and dialog guards pass; use a fresh id for an intentional identical native turn; fallback pane input has no native deduplication guarantee")
-	fs.StringVar(&p.Key, "key", "", "send this one key instead of text, no Enter: Escape, Enter, Up, Down, Tab, or one character")
-	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane the keys were chosen from; refused with ErrPaneChanged if the pane changed; on a plain call a match also passes the hold of a permission request not proven gone (ErrDialogMaybeOpen); pass it only for a pane a person or LLM judged")
-	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
-	fs.StringVar(&p.RequestToken, "request-token", "", "make the call a pane answer to this fallen-back permission request: needs --as, --key and --expect-pane-sha256; sends exactly one key, no Enter")
-	fs.StringVar(&p.As, "as", "", "a pane answer's claimed verdict, allow or deny, recorded as its decision")
-	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", "this Message's Send Mode, wait_turn or steer_turn; Covered Agents only, else ErrCantSend agent_not_covered")
-	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", "this Message's Confirmed Delivery (--confirmed-delivery=false is explicit); Covered Agents only, else ErrCantSend agent_not_covered")
-	fs.Var(optionalStringValue{&p.CallerUUID}, "caller-uuid", "Caller UUID, hyphenated hexadecimal; Covered Agents only, else ErrCantSend agent_not_covered")
-	fs.Var(optionalBoolValue{&p.Force}, "force", "also force Held Messages (--force=false is explicit); Covered Agents only, else ErrCantSend agent_not_covered")
+	fs := sendKeysFlagSet(&p)
 	if err := fs.Parse(args); err != nil {
 		return p, flagErr(fs, err)
 	}
@@ -214,12 +179,7 @@ var sendKeysRawKeyFlags = map[string]string{
 // (ErrInvalidFlags), as for an MCP caller.
 func recordPaneAnswerHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.RecordPaneAnswerParams
-	fs := flag.NewFlagSet("record-pane-answer", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.RequestToken, "request-token", "", "token of the permission request answered outside agent-director")
-	fs.StringVar(&p.As, "as", "", "how it was answered: allow, deny, or unknown when not seen (stored as the caller's claim)")
-	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane that showed it answered")
-	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
+	fs := recordPaneAnswerFlagSet(&p)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -257,12 +217,7 @@ func readPaneHandlerWith(client *pkgapi.Client, args []string) error {
 // number.
 func parseReadPaneFlags(args []string) (pkgapi.ReadPaneParams, error) {
 	var p pkgapi.ReadPaneParams
-	fs := flag.NewFlagSet("read-pane", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to read")
-	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "number of trailing pane lines to return, counted up from the last line with content (a negative value is refused)")
-	fs.BoolVar(&p.ANSI, "ansi", false, "return raw bytes (escape codes preserved); default strips ANSI but preserves unicode glyphs")
-	fs.BoolVar(&p.AllowPending, "allow-pending", false, "accepted for surface symmetry with send-keys; read-pane has no state guard so this flag has no effect")
+	fs := readPaneFlagSet(&p)
 	if err := fs.Parse(args); err != nil {
 		return p, flagErr(fs, err)
 	}
@@ -289,22 +244,7 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 		agentArgs   []string
 	)
 	var p pkgapi.MakeTemplateParams
-	fs := flag.NewFlagSet("make-template", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.Name, "name", "", "template name (filename-safe; required)")
-	fs.StringVar(&p.CWD, "cwd", "", "bake a default cwd")
-	fs.StringVar(&p.Agent, "agent", "", "bake the template's agent: claude, codex or cursor (case-sensitive; default: none, no agent key stored)")
-	fs.StringVar(&p.RelayMode, "relay-mode", "", "bake a default relay_mode (on/off); pane-only templates refuse on; an empty resolved spawn value defaults to off for pane-only agents")
-	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
-	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys and HOME (any value) are refused with ErrReservedEnvKey, as spawn refuses them, and no template is written; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config; pane-only agents additionally refuse their credential, configuration and home selectors, even empty, and keep the invoking HOME; inherited entries are checked when spawn resolves the effective agent")
-	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
-	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
-	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
-	fs.Var(newStringSlice(&agentArgs), "agent-args", "single agent arg (repeatable; replaces template's array wholesale at spawn time)")
-	fs.BoolVar(&p.Overwrite, "overwrite", false, "replace any existing template atomically (default false preserves O_EXCL create-only)")
-	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", sendModeUsage)
-	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", confirmedDeliveryUsage)
-	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
+	fs := makeTemplateFlagSet(&p, &labelKVs, &extraEnvKVs, &allow, &deny, &ask, &agentArgs)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -336,14 +276,7 @@ func listHandlerWith(client *pkgapi.Client, args []string) error {
 		labels   []string
 	)
 	var p pkgapi.ListParams
-	fs := flag.NewFlagSet("list", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&stateRaw, "state", "", "comma-separated states to filter (e.g. waiting,working)")
-	fs.Var(newStringSlice(&labels), "label", "label k=v filter (repeatable; multiple AND together)")
-	fs.StringVar(&p.Parent, "parent", "", "filter by parent_id exact match")
-	fs.StringVar(&p.Cwd, "cwd", "", "filter by canonicalized cwd exact match")
-	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "filter by tmux session name exact match")
-	fs.Var(newDecimalInt(&p.Limit, 0), "limit", "cap result count (0 = no cap; a negative value is refused)")
+	fs := listFlagSet(&p, &stateRaw, &labels)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -375,10 +308,7 @@ func listHandlerWith(client *pkgapi.Client, args []string) error {
 // 11) will wire request-scoped cancellation here.
 func pauseHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.PauseParams
-	fs := flag.NewFlagSet("pause", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to pause")
-	fs.BoolVar(&p.OnlyIfWaiting, "only-if-waiting", false, "pause only an agent proven waiting with no turn pending; Covered Agents only, else ErrSpawnNotPausable cause agent_not_covered")
+	fs := pauseFlagSet(&p)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -439,13 +369,7 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 		})
 	}()
 
-	fs := flag.NewFlagSet("decide", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn awaiting a decision")
-	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the specific permission request to decide")
-	fs.StringVar(&p.Decision, "decision", "", "allow or deny")
-	fs.StringVar(&p.Reason, "reason", "", "deprecated; currently ignored — the canonical operator reason is persisted")
-	fs.Var(optionalInt64Value{&p.MaxWaitMs}, "max-wait-ms", "bound on the whole call in milliseconds (no default); a required wait cannot fit before recording the verdict: ErrStoreBusy, nothing recorded")
+	fs := decideFlagSet(&p)
 	if err := fs.Parse(args); err != nil {
 		cliOutcome = "ErrInvalidFlags"
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
@@ -482,12 +406,7 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 // tmux with `--resume <session_id>`. Same id, fresh tmux session.
 func resumeHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.ResumeParams
-	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the finished (ended or missing) row to resume")
-	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", sendModeUsage)
-	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", confirmedDeliveryUsage)
-	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
+	fs := resumeFlagSet(&p)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -512,9 +431,7 @@ func resumeHandlerWith(client *pkgapi.Client, args []string) error {
 // user and in the same tmux environment as the agents (see api.Client.Kill).
 func killHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.KillParams
-	fs := flag.NewFlagSet("kill", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to kill")
+	fs := killFlagSet(&p)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -534,9 +451,7 @@ func killHandlerWith(client *pkgapi.Client, args []string) error {
 // getHandlerWith implements `agent-director get`.
 func getHandlerWith(client *pkgapi.Client, args []string) error {
 	var id string
-	fs := flag.NewFlagSet("get", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&id, "instance-id", "", "id to fetch")
+	fs := getFlagSet(&id)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -554,7 +469,7 @@ func getHandlerWith(client *pkgapi.Client, args []string) error {
 }
 
 // getManyHandlerWith takes every remaining word as an id, unchanged.
-// The global flags were already removed by clisetup.ParseGlobalFlags.
+// Only globals before the verb were removed; post-verb flag names are IDs.
 func getManyHandlerWith(client *pkgapi.Client, args []string) error {
 	res, err := client.GetMany(args)
 	if err != nil {
@@ -566,9 +481,7 @@ func getManyHandlerWith(client *pkgapi.Client, args []string) error {
 // listSubagentsHandlerWith implements `agent-director list-subagents`.
 func listSubagentsHandlerWith(client *pkgapi.Client, args []string) error {
 	var id string
-	fs := flag.NewFlagSet("list-subagents", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&id, "instance-id", "", "id of the row whose subagents to list")
+	fs := listSubagentsFlagSet(&id)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -591,9 +504,7 @@ func listSubagentsHandlerWith(client *pkgapi.Client, args []string) error {
 // the canonical err_name string on the stderr envelope.
 func getPermissionHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.GetPermissionParams
-	fs := flag.NewFlagSet("get-permission", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the permission_requests row to fetch")
+	fs := getPermissionFlagSet(&p)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -648,4 +559,177 @@ func writeVerbError(err error) error {
 		return werr
 	}
 	return errDispatch
+}
+
+// spawnFlagSet defines spawn's flags for both global scanning and the handler.
+func spawnFlagSet(p *pkgapi.SpawnParams, labelKVs *map[string]string, extraEnvKVs *map[string]string, allow *[]string, deny *[]string, ask *[]string) *flag.FlagSet {
+	fs := flag.NewFlagSet("spawn", flag.ContinueOnError)
+	fs.SetOutput(io.Discard) // we surface errors via the JSON envelope
+	fs.StringVar(&p.CWD, "cwd", "", "absolute / ~-prefixed cwd for the Spawn")
+	fs.StringVar(&p.Template, "template", "", "named template stored under ~/.config/agent-director/templates/<name>.toml")
+	fs.StringVar(&p.Agent, "agent", "", "claude, codex or cursor (case-sensitive; default: the template's agent; neither gives ErrAgentMissing)")
+	fs.StringVar(&p.InstanceID, "instance-id", "", "explicit instance id (default: minted UUID4)")
+	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "explicit tmux session name (default: <basename(cwd)>-<id[:8]>); rejects ':' '.' '#' '$' '\\' (backslash), control chars, and >64 bytes; no DB uniqueness check, name reuse across ended spawns supported")
+	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (after template resolution, default: off for pane-only agents, config defaults.relay_mode for others; pane-only agents refuse on)")
+	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip the folder pre-trust: for claude, pre-writing the cwd's folder-trust key into .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json, CLAUDE_CONFIG_DIR from extra-env, otherwise from agent-director's own environment; ~/.claude.json if neither sets it); for codex, putting the cwd's trust and the hook-trust bypass on the launch's command line (no file is written); Cursor grants no trust: failed by default, skipped with this option; default off (best-effort pre-trust for Claude/Codex); pane-only agents always report skipped with no trust grant or trust-file write, regardless of this option; the choice is recorded on the row until the next spawn or reuse and agents that support resume follow it")
+	fs.BoolVar(&p.ReuseFinished, "reuse-finished", false, "reuse an explicit --instance-id whose row is finished (ended or missing); a live row, pending included, still collides; no effect without --instance-id; this call only; default off (any existing row collides with ErrInstanceIdCollision); success without dropped arguments does not say whether a row was reset; nonempty dropped_args identifies a finished-agent switch and prints a notice")
+	fs.Var(newDecimalInt(&p.IdleScreenTimeoutSeconds, 0), "idle-screen-timeout-seconds", "this row's idle_screen timeout in whole seconds, 1 to 9223372036, in place of [state] idle_screen_timeout_seconds (default 0: none, use the config); recorded on the row, kept by resume, replaced by the next spawn or reuse; a negative or larger value is refused")
+	fs.Var(newKVSlice(labelKVs, "--label"), "label", "k=v (repeatable)")
+	fs.Var(newKVSlice(extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys, HOME (any value) and a template's key that is empty or holds '=' or a NUL byte are refused with ErrReservedEnvKey, a template's included; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config; pane-only agents additionally refuse their credential, configuration and home selectors, even empty, and keep the invoking HOME; inherited entries are checked when spawn resolves the effective agent")
+	fs.Var(newStringSlice(allow), "allow", "permissions.allow entry (repeatable)")
+	fs.Var(newStringSlice(deny), "deny", "permissions.deny entry (repeatable)")
+	fs.Var(newStringSlice(ask), "ask", "permissions.ask entry (repeatable)")
+	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", sendModeUsage)
+	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", confirmedDeliveryUsage)
+	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
+	return fs
+}
+
+// statusFlagSet defines status's flags for both global scanning and the handler.
+func statusFlagSet(id *string) *flag.FlagSet {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(id, "instance-id", "", "id to inspect")
+	return fs
+}
+
+// sendKeysFlagSet defines send-keys's flags for both global scanning and the handler.
+func sendKeysFlagSet(p *pkgapi.SendKeysParams) *flag.FlagSet {
+	fs := flag.NewFlagSet("send-keys", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to drive")
+	fs.StringVar(&p.Text, "text", "", "text to type into the Spawn's input (default empty: Enter only)")
+	fs.BoolVar(&p.AllowPending, "allow-pending", false, "also allow a pending row (a spawn, reuse or resume whose agent has not reported in yet); keys go only to a session started by the row's current launch; ended and missing rows are still rejected")
+	fs.BoolVar(&p.NoEnter, "no-enter", false, "type --text with no Enter after it")
+	fs.StringVar(&p.DeliveryRequestID, "delivery-request-id", "", "own a native ordinary text attempt; retry the same id and text to observe without replay after state, relay and dialog guards pass; use a fresh id for an intentional identical native turn; fallback pane input has no native deduplication guarantee")
+	fs.StringVar(&p.Key, "key", "", "send this one key instead of text, no Enter: Escape, Enter, Up, Down, Tab, or one character")
+	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane the keys were chosen from; refused with ErrPaneChanged if the pane changed; on a plain call a match also passes the hold of a permission request not proven gone (ErrDialogMaybeOpen); pass it only for a pane a person or LLM judged")
+	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
+	fs.StringVar(&p.RequestToken, "request-token", "", "make the call a pane answer to this fallen-back permission request: needs --as, --key and --expect-pane-sha256; sends exactly one key, no Enter")
+	fs.StringVar(&p.As, "as", "", "a pane answer's claimed verdict, allow or deny, recorded as its decision")
+	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", "this Message's Send Mode, wait_turn or steer_turn; Covered Agents only, else ErrCantSend agent_not_covered")
+	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", "this Message's Confirmed Delivery (--confirmed-delivery=false is explicit); Covered Agents only, else ErrCantSend agent_not_covered")
+	fs.Var(optionalStringValue{&p.CallerUUID}, "caller-uuid", "Caller UUID, hyphenated hexadecimal; Covered Agents only, else ErrCantSend agent_not_covered")
+	fs.Var(optionalBoolValue{&p.Force}, "force", "also force Held Messages (--force=false is explicit); Covered Agents only, else ErrCantSend agent_not_covered")
+	return fs
+}
+
+// recordPaneAnswerFlagSet defines record-pane-answer's flags for both global scanning and the handler.
+func recordPaneAnswerFlagSet(p *pkgapi.RecordPaneAnswerParams) *flag.FlagSet {
+	fs := flag.NewFlagSet("record-pane-answer", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.RequestToken, "request-token", "", "token of the permission request answered outside agent-director")
+	fs.StringVar(&p.As, "as", "", "how it was answered: allow, deny, or unknown when not seen (stored as the caller's claim)")
+	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane that showed it answered")
+	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
+	return fs
+}
+
+// readPaneFlagSet defines read-pane's flags for both global scanning and the handler.
+func readPaneFlagSet(p *pkgapi.ReadPaneParams) *flag.FlagSet {
+	fs := flag.NewFlagSet("read-pane", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to read")
+	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "number of trailing pane lines to return, counted up from the last line with content (a negative value is refused)")
+	fs.BoolVar(&p.ANSI, "ansi", false, "return raw bytes (escape codes preserved); default strips ANSI but preserves unicode glyphs")
+	fs.BoolVar(&p.AllowPending, "allow-pending", false, "accepted for surface symmetry with send-keys; read-pane has no state guard so this flag has no effect")
+	return fs
+}
+
+// makeTemplateFlagSet defines make-template's flags for both global scanning and the handler.
+func makeTemplateFlagSet(p *pkgapi.MakeTemplateParams, labelKVs *map[string]string, extraEnvKVs *map[string]string, allow *[]string, deny *[]string, ask *[]string, agentArgs *[]string) *flag.FlagSet {
+	fs := flag.NewFlagSet("make-template", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.Name, "name", "", "template name (filename-safe; required)")
+	fs.StringVar(&p.CWD, "cwd", "", "bake a default cwd")
+	fs.StringVar(&p.Agent, "agent", "", "bake the template's agent: claude, codex or cursor (case-sensitive; default: none, no agent key stored)")
+	fs.StringVar(&p.RelayMode, "relay-mode", "", "bake a default relay_mode (on/off); pane-only templates refuse on; an empty resolved spawn value defaults to off for pane-only agents")
+	fs.Var(newKVSlice(labelKVs, "--label"), "label", "k=v (repeatable)")
+	fs.Var(newKVSlice(extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys and HOME (any value) are refused with ErrReservedEnvKey, as spawn refuses them, and no template is written; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config; pane-only agents additionally refuse their credential, configuration and home selectors, even empty, and keep the invoking HOME; inherited entries are checked when spawn resolves the effective agent")
+	fs.Var(newStringSlice(allow), "allow", "permissions.allow entry (repeatable)")
+	fs.Var(newStringSlice(deny), "deny", "permissions.deny entry (repeatable)")
+	fs.Var(newStringSlice(ask), "ask", "permissions.ask entry (repeatable)")
+	fs.Var(newStringSlice(agentArgs), "agent-args", "single agent arg (repeatable; replaces template's array wholesale at spawn time)")
+	fs.BoolVar(&p.Overwrite, "overwrite", false, "replace any existing template atomically (default false preserves O_EXCL create-only)")
+	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", sendModeUsage)
+	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", confirmedDeliveryUsage)
+	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
+	return fs
+}
+
+// listFlagSet defines list's flags for both global scanning and the handler.
+func listFlagSet(p *pkgapi.ListParams, stateRaw *string, labels *[]string) *flag.FlagSet {
+	fs := flag.NewFlagSet("list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(stateRaw, "state", "", "comma-separated states to filter (e.g. waiting,working)")
+	fs.Var(newStringSlice(labels), "label", "label k=v filter (repeatable; multiple AND together)")
+	fs.StringVar(&p.Parent, "parent", "", "filter by parent_id exact match")
+	fs.StringVar(&p.Cwd, "cwd", "", "filter by canonicalized cwd exact match")
+	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "filter by tmux session name exact match")
+	fs.Var(newDecimalInt(&p.Limit, 0), "limit", "cap result count (0 = no cap; a negative value is refused)")
+	return fs
+}
+
+// pauseFlagSet defines pause's flags for both global scanning and the handler.
+func pauseFlagSet(p *pkgapi.PauseParams) *flag.FlagSet {
+	fs := flag.NewFlagSet("pause", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to pause")
+	fs.BoolVar(&p.OnlyIfWaiting, "only-if-waiting", false, "pause only an agent proven waiting with no turn pending; Covered Agents only, else ErrSpawnNotPausable cause agent_not_covered")
+	return fs
+}
+
+// decideFlagSet defines decide's flags for both global scanning and the handler.
+func decideFlagSet(p *pkgapi.DecideParams) *flag.FlagSet {
+	fs := flag.NewFlagSet("decide", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn awaiting a decision")
+	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the specific permission request to decide")
+	fs.StringVar(&p.Decision, "decision", "", "allow or deny")
+	fs.StringVar(&p.Reason, "reason", "", "deprecated; currently ignored — the canonical operator reason is persisted")
+	fs.Var(optionalInt64Value{&p.MaxWaitMs}, "max-wait-ms", "bound on the whole call in milliseconds (no default); a required wait cannot fit before recording the verdict: ErrStoreBusy, nothing recorded")
+	return fs
+}
+
+// resumeFlagSet defines resume's flags for both global scanning and the handler.
+func resumeFlagSet(p *pkgapi.ResumeParams) *flag.FlagSet {
+	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the finished (ended or missing) row to resume")
+	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", sendModeUsage)
+	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", confirmedDeliveryUsage)
+	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
+	return fs
+}
+
+// killFlagSet defines kill's flags for both global scanning and the handler.
+func killFlagSet(p *pkgapi.KillParams) *flag.FlagSet {
+	fs := flag.NewFlagSet("kill", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to kill")
+	return fs
+}
+
+// getFlagSet defines get's flags for both global scanning and the handler.
+func getFlagSet(id *string) *flag.FlagSet {
+	fs := flag.NewFlagSet("get", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(id, "instance-id", "", "id to fetch")
+	return fs
+}
+
+// listSubagentsFlagSet defines list-subagents's flags for both global scanning and the handler.
+func listSubagentsFlagSet(id *string) *flag.FlagSet {
+	fs := flag.NewFlagSet("list-subagents", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(id, "instance-id", "", "id of the row whose subagents to list")
+	return fs
+}
+
+// getPermissionFlagSet defines get-permission's flags for both global scanning and the handler.
+func getPermissionFlagSet(p *pkgapi.GetPermissionParams) *flag.FlagSet {
+	fs := flag.NewFlagSet("get-permission", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the permission_requests row to fetch")
+	return fs
 }

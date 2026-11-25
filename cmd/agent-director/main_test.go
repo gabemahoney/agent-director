@@ -54,26 +54,35 @@ func TestHelpVerbAndAliases(t *testing.T) {
 
 // TestVerbAliases: --help and -h run help, --version and -v run version
 // (b.fv2) as the first argument after the global flags: the alias gives the
-// exit code, stdout and stderr of its verb with the same other args (exit 0).
+// exit code, stdout and stderr of its verb with the same other args, including
+// global-flag validation errors (b.t1b).
 func TestVerbAliases(t *testing.T) {
 	home := t.TempDir()
 	cases := []struct {
-		name        string
-		alias, verb []string
+		name            string
+		alias, verb     []string
+		wantDescription string
 	}{
-		{"--help", []string{"--help"}, []string{"help"}},
-		{"-h", []string{"-h"}, []string{"help"}},
-		{"-h before --home", []string{"-h", "--home", home}, []string{"help", "--home", home}},
-		{"--version", []string{"--version"}, []string{"version"}},
-		{"-v", []string{"-v"}, []string{"version"}},
-		{"--home before -v", []string{"--home", home, "-v"}, []string{"--home", home, "version"}},
-		{"--version --json", []string{"--version", "--json"}, []string{"version", "--json"}},
-		{"-v --help", []string{"-v", "--help"}, []string{"version", "--help"}},
+		{"--help", []string{"--help"}, []string{"help"}, ""},
+		{"-h", []string{"-h"}, []string{"help"}, ""},
+		{"-h before --home", []string{"-h", "--home", home}, []string{"help", "--home", home}, ""},
+		{"--version", []string{"--version"}, []string{"version"}, ""},
+		{"-v", []string{"-v"}, []string{"version"}, ""},
+		{"--home before -v", []string{"--home", home, "-v"}, []string{"--home", home, "version"}, ""},
+		{"--version --json", []string{"--version", "--json"}, []string{"version", "--json"}, ""},
+		{"-v --help", []string{"-v", "--help"}, []string{"version", "--help"}, ""},
+		// b.t1b: suffix validation makes alias grammar resolution observable.
+		{"-v invalid suffix home", []string{"-v", "--home", ""}, []string{"version", "--home", ""}, "--home requires a value"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			wantOut, wantErr, wantCode := runCLIWithHome(t, home, tc.verb...)
-			if wantCode != 0 || wantErr != "" || wantOut == "" {
+			if tc.wantDescription != "" {
+				env := assertOnlyEnvelope(t, wantOut, wantErr, wantCode, "ErrInvalidFlags")
+				if env.ErrDescription != tc.wantDescription {
+					t.Errorf("err_description=%q; want %q", env.ErrDescription, tc.wantDescription)
+				}
+			} else if wantCode != 0 || wantErr != "" || wantOut == "" {
 				t.Fatalf("%q: exit=%d stderr=%q stdout=%.200q; want 0, empty stderr and output",
 					tc.verb, wantCode, wantErr, wantOut)
 			}

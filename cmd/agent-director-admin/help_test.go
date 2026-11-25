@@ -178,4 +178,10 @@ func TestVersionMatchesMainBinary(t *testing.T) {
 				args, adminCode, adminErr, adminOut, mainOut)
 		}
 	}
+	// b.t1b: suffix globals on an alias must undergo global validation;
+	// version output alone cannot show whether a valid HOME was applied.
+	stdout, stderr, code := runAdmin(t, home, "-v", "--home", "")
+	if desc := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags").ErrDescription; desc != "--home requires a value" {
+		t.Errorf("alias suffix global refusal = %q; want --home requires a value", desc)
+	}
 }

@@ -1,6 +1,7 @@
 package clisetup
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"sort"
@@ -77,13 +78,11 @@ func GlobalFlagNames() []string {
 	return names
 }
 
-// ParseGlobalFlags pre-scans argv for the four global flags and returns
-// (parsed flags, argv with those flag tokens removed, error).
-//
-// Parsing model: rather than route every per-verb FlagSet through a parent
-// FlagSet, the pre-scan copies every other token, in order, into the returned
-// argv, so the per-verb dispatch operates on it unchanged. Both `--flag value`
-// and `--flag=value` forms are accepted, anywhere in argv.
+// ParseGlobalFlags parses only the global flags before the verb and returns
+// (parsed flags, remaining argv, error). Both --flag value and --flag=value
+// forms are accepted. Every global requires a value, even create-if-missing.
+// The first word that is not a global flag ends this stage, so a verb's
+// operands and flag values cannot redirect the invocation (b.t1b).
 //
 // Errors are returned for malformed flag inputs: `--store-path` with no
 // following value, or an empty value in either form (`--store-path ""` or
@@ -92,20 +91,34 @@ func GlobalFlagNames() []string {
 // error too, in any copy of a repeated flag (b.78b). Callers should write an
 // ErrInvalidFlags envelope and exit non-zero before any store, config or trail
 // access.
-//
-// Caveat: the pre-scan recognizes flag tokens anywhere in argv and does NOT
-// treat `--` as an end-of-options sentinel. If a caller intentionally passes
-// these flag names through `--` (e.g. `spawn --cwd /w -- --store-path /x`),
-// the pre-scan will still consume them. The practical risk is low because the
-// recognized names (`--store-path`, `--home`, `--tmux-command`,
-// `--create-if-missing`) are unlikely to recur in legitimate passthrough
-// argv, so threading `--`-awareness through the parser is not worth the added
-// complexity. Revisit if a real collision is reported. See bug b.32k.
 func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
-	var g GlobalFlags
+	return parseGlobalFlags(nil, GlobalFlags{}, argv, false)
+}
+
+// ParseVerbGlobalFlags extracts globals only at option positions in argv,
+// the words after a verb (or its routed sub-verb). fs must be built by the
+// same builder the handler uses. This helper only reads fs.Lookup and each
+// flag's IsBoolFlag method; it never parses or sets a verb flag. A nil fs
+// allows only a leading sequence of globals, as before a sub-verb.
+//
+// A value-taking verb flag owns its next word even when it spells a global
+// or --. A bare boolean owns no next word. A positional word, real --,
+// unknown flag or malformed flag token ends extraction, leaving that suffix
+// unchanged for the handler's parser. Operand-only routes such as get-many
+// must not call this helper. g carries the already parsed prefix globals;
+// later valid occurrences override earlier ones. Both binaries must reuse
+// these two stages rather than scan caller data themselves (b.t1b).
+func ParseVerbGlobalFlags(fs *flag.FlagSet, g GlobalFlags, argv []string) (GlobalFlags, []string, error) {
+	return parseGlobalFlags(fs, g, argv, true)
+}
+
+func parseGlobalFlags(fs *flag.FlagSet, g GlobalFlags, argv []string, verbFlags bool) (GlobalFlags, []string, error) {
 	out := make([]string, 0, len(argv))
 
 	var createIfMissing string
+	if g.CreateIfMissingSet {
+		createIfMissing = fmt.Sprint(g.CreateIfMissing)
+	}
 	recognized := globalFlagSlots(&g, &createIfMissing)
 
 	// assign stores one copy of flag name's value in s. It refuses a
@@ -159,8 +172,31 @@ func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
 			continue
 		}
 
-		// Unknown token — pass through.
+		// Follow flag.FlagSet's token grammar without consuming operands,
+		// invoking Set, or treating a value's spelling as an option.
+		name := strings.TrimPrefix(tok, "-")
+		if strings.HasPrefix(name, "-") {
+			name = name[1:]
+		}
+		if !verbFlags || len(tok) < 2 || tok[0] != '-' || name == "" || name[0] == '-' || name[0] == '=' {
+			out = append(out, argv[i:]...)
+			break
+		}
+		name, _, hasValue := strings.Cut(name, "=")
+		var f *flag.Flag
+		if fs != nil {
+			f = fs.Lookup(name)
+		}
+		if f == nil {
+			out = append(out, argv[i:]...)
+			break
+		}
 		out = append(out, tok)
+		boolFlag, isBool := f.Value.(interface{ IsBoolFlag() bool })
+		if !hasValue && (!isBool || !boolFlag.IsBoolFlag()) && i+1 < len(argv) {
+			i++
+			out = append(out, argv[i])
+		}
 	}
 
 	// assign let through only "true" or "false", and the last copy wins.

@@ -3,6 +3,7 @@ package main_test
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -80,6 +81,27 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 				t.Errorf("ad.send_keys.called = %v; want one, %s, row_state %s, allow_pending %v", sk, outcome, tc.state, allowPending)
 			}
 		})
+	}
+}
+
+// b.t1b: a global-looking text value reaches the existing pane exactly,
+// including its leading dashes, without selecting the decoy HOME.
+func TestSendKeysCLIPreservesGlobalLookingText(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home, id, socket := seedRowOnSocket(t, store.StateWaiting, apitest.WithAgent("droid"))
+	faketmuxfix.Tables{}.Write(t, socket, fakeTable(ownSession(t, home, id, "")))
+	decoy := t.TempDir()
+	text := "--home=" + filepath.Join(decoy, "home")
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "send-keys", "--instance-id", id, "--text", text)
+	assertHomeTree(t, decoy)
+	if code != 0 || stdout != "{}\n" || stderr != "" {
+		t.Fatalf("send-keys exit=%d stdout=%q stderr=%q; want 0, {} and empty", code, stdout, stderr)
+	}
+	invs := assertInvocationKinds(t, home, "list-sessions", "list-panes", "send-keys", "send-keys")
+	target := []string{"-u", "-S", socket, "send-keys", "-t", apitest.TestPaneID}
+	want := [][]string{append(slices.Clone(target), "-l", "--", text), append(slices.Clone(target), "Enter")}
+	if got := invs[2:]; !slices.EqualFunc(got, want, slices.Equal) {
+		t.Errorf("input calls=%q; want exactly %q", got, want)
 	}
 }
 

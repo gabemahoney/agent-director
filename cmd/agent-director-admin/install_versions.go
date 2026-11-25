@@ -21,7 +21,7 @@ func versionInstallVerb(verb string) bool {
 }
 
 func versionFactsHandler(args []string) error {
-	fs := flag.NewFlagSet("version-facts", flag.ContinueOnError)
+	fs := versionFactsFlagSet()
 	if done, err := parseFlags(fs, args); done {
 		return err
 	}
@@ -30,8 +30,7 @@ func versionFactsHandler(args []string) error {
 
 func publishVersionHandler(args []string) error {
 	var binary string
-	fs := flag.NewFlagSet("publish-version", flag.ContinueOnError)
-	fs.StringVar(&binary, "binary", "", "candidate runtime executable (required)")
+	fs := publishVersionFlagSet(&binary)
 	if done, err := parseFlags(fs, args); done {
 		return err
 	}
@@ -51,8 +50,7 @@ func publishVersionHandler(args []string) error {
 
 func rollbackVersionHandler(args []string) error {
 	var stamp string
-	fs := flag.NewFlagSet("rollback-version", flag.ContinueOnError)
-	fs.StringVar(&stamp, "version", "", "retained version stamp (required)")
+	fs := rollbackVersionFlagSet(&stamp)
 	if done, err := parseFlags(fs, args); done {
 		return err
 	}
@@ -71,7 +69,7 @@ func rollbackVersionHandler(args []string) error {
 }
 
 func listVersionsHandler(args []string) error {
-	fs := flag.NewFlagSet("list-versions", flag.ContinueOnError)
+	fs := listVersionsFlagSet()
 	if done, err := parseFlags(fs, args); done {
 		return err
 	}
@@ -99,4 +97,30 @@ func writeVersionInstallError(err error) error {
 		return err
 	}
 	return errDispatch
+}
+
+// versionFactsFlagSet defines version-facts's flags for both global scanning and the handler.
+func versionFactsFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("version-facts", flag.ContinueOnError)
+	return fs
+}
+
+// publishVersionFlagSet defines publish-version's flags for both global scanning and the handler.
+func publishVersionFlagSet(binary *string) *flag.FlagSet {
+	fs := flag.NewFlagSet("publish-version", flag.ContinueOnError)
+	fs.StringVar(binary, "binary", "", "candidate runtime executable (required)")
+	return fs
+}
+
+// rollbackVersionFlagSet defines rollback-version's flags for both global scanning and the handler.
+func rollbackVersionFlagSet(stamp *string) *flag.FlagSet {
+	fs := flag.NewFlagSet("rollback-version", flag.ContinueOnError)
+	fs.StringVar(stamp, "version", "", "retained version stamp (required)")
+	return fs
+}
+
+// listVersionsFlagSet defines list-versions's flags for both global scanning and the handler.
+func listVersionsFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("list-versions", flag.ContinueOnError)
+	return fs
 }

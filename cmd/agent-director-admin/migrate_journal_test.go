@@ -122,6 +122,28 @@ func TestMigrateJournalCheckOnly(t *testing.T) {
 	}
 }
 
+// b.t1b: a global-looking legacy-root is validated as a root, with the
+// migration refusal's commit-state envelope, without redirecting HOME.
+func TestMigrateJournalGlobalLookingLegacyRoot(t *testing.T) {
+	home := poisonedHome(t)
+	before := dirEntries(t, home)
+	base := t.TempDir()
+	decoy := filepath.Join(base, "decoy")
+	args := checkOnlyArgs("--home="+decoy, filepath.Join(base, "backup"))
+
+	stdout, stderr, code := runAdmin(t, home, args...)
+
+	if entries, err := os.ReadDir(base); err != nil || len(entries) != 0 {
+		t.Errorf("migration touched decoy or backup: %v (%v); want empty", entries, err)
+	}
+	if after := dirEntries(t, home); !maps.Equal(after, before) {
+		t.Errorf("migration changed invoking HOME: %v; want %v", after, before)
+	}
+	if reason, _ := journalRefusal(t, stdout, stderr, code); reason != "legacy_root_not_absolute" {
+		t.Errorf("reason = %q; want legacy_root_not_absolute", reason)
+	}
+}
+
 // G11: each migrate-journal argument refusal's action, followed literally in
 // agent-director-admin's spelling, gives a --check-only that passes with {}.
 func TestAdviceFollow_G11_CheckOnlyArguments(t *testing.T) {

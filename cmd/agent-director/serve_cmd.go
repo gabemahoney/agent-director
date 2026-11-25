@@ -72,9 +72,7 @@ import (
 func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
 	newClient func(pkgapi.Options) (*pkgapi.Client, error), args []string) error {
 	var stdioFlag bool
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.BoolVar(&stdioFlag, "stdio", false, "enter the stdio MCP loop")
+	fs := serveFlagSet(&stdioFlag)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
@@ -272,4 +270,12 @@ func newMCPLogger(cfg config.Config) *log.Logger {
 		}
 	}
 	return log.New(dest, "agent-director-mcp ", log.LstdFlags)
+}
+
+// serveFlagSet defines serve's flags for both global scanning and the handler.
+func serveFlagSet(stdioFlag *bool) *flag.FlagSet {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.BoolVar(stdioFlag, "stdio", false, "enter the stdio MCP loop")
+	return fs
 }

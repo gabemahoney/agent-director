@@ -106,7 +106,7 @@ var allowPendingSites = []allowPendingSite{
 		return siteText(t, "send-keys", "allow_pending", "")
 	}},
 	{"CLI send-keys --allow-pending usage", apitest.AllowPendingFlag, func(t *testing.T) string {
-		return cliFlagUsage(t, "parseSendKeysFlags", "allow-pending")
+		return cliFlagUsage(t, "sendKeysFlagSet", "allow-pending")
 	}},
 	{"Go doc SendKeysParams.AllowPending", apitest.AllowPendingFlag, func(t *testing.T) string {
 		return apiDeclDoc(t, "SendKeysParams.AllowPending")

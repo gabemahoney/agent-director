@@ -348,6 +348,30 @@ func TestVersionAdminEmptyList(t *testing.T) {
 	}
 }
 
+// b.t1b: rollback owns a global-looking version string, which must reach
+// version validation instead of the HOME-only global-flag restriction.
+func TestVersionAdminGlobalLookingVersion(t *testing.T) {
+	home := poisonedHome(t)
+	root := layout.Dir(home)
+	facts := versionFactsOf(t, adminPath, home, false)
+	_, err := seedVersion(t, root, facts, "")
+	versionMust(t, err)
+	before := versionTree(t, root)
+	base := t.TempDir()
+	stamp := "--store-path=" + filepath.Join(base, "decoy", "state.db")
+
+	stdout, stderr, code := runAdmin(t, home, "rollback-version", "--version", stamp)
+
+	if entries, err := os.ReadDir(base); err != nil || len(entries) != 0 {
+		t.Errorf("rollback touched decoy: %v (%v); want empty", entries, err)
+	}
+	versionUnchanged(t, root, before)
+	refusal := versionRefusal(t, stdout, stderr, code, "layout_invalid")
+	if refusal.Version != stamp || refusal.VersionID != layout.VersionID(stamp) {
+		t.Errorf("refused version = %q (%s); want %q (%s)", refusal.Version, refusal.VersionID, stamp, layout.VersionID(stamp))
+	}
+}
+
 func TestVersionAdminArgumentRefusals(t *testing.T) {
 	verbs := [][]string{{"version-facts"}, {"list-versions"}, {"publish-version", "--binary", mainPath}, {"rollback-version", "--version", testVersion}}
 	flags := [][]string{
