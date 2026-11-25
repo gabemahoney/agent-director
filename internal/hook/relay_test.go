@@ -229,6 +229,19 @@ func TestRelayFirstWriteIsOneTransaction(t *testing.T) {
 	assertNoRequests(t, st, id)
 }
 
+// relayFirstWrite records when stdout first receives the hook response.
+type relayFirstWrite struct {
+	bytes.Buffer
+	at time.Time
+}
+
+func (w *relayFirstWrite) Write(p []byte) (int, error) {
+	if len(p) > 0 && w.at.IsZero() {
+		w.at = time.Now()
+	}
+	return w.Buffer.Write(p)
+}
+
 // TestRelayFirstWriteCutAtItsDeadline (problem 1; the b.146 property): under
 // a write lock held past the hook's kill, its first write waits only until its
 // deadline less the 2 s reserve, then the hook answers the fail-closed deny
@@ -237,39 +250,50 @@ func TestRelayFirstWriteIsOneTransaction(t *testing.T) {
 func TestRelayFirstWriteCutAtItsDeadline(t *testing.T) {
 	const timeout = 3500 * time.Millisecond
 	cases := []struct {
-		name    string
-		busyMs  int
-		started time.Duration // how long before Handle the hook started
-		maxTook time.Duration
+		name      string
+		busyMs    int
+		started   time.Duration // how long before Handle the hook started
+		maxAnswer time.Duration // from hc.Start, including any time already spent
 	}{
 		{"default busy timeout", store.DefaultBusyTimeoutMs, 0, timeout - 2*time.Second + 500*time.Millisecond},
 		{"largest busy timeout", config.MaxStoreBusyTimeoutMs, 0, timeout - 2*time.Second + 500*time.Millisecond},
-		{"no time left before the reserve", config.MaxStoreBusyTimeoutMs, 2 * time.Second, 500 * time.Millisecond},
+		{"no time left before the reserve", config.MaxStoreBusyTimeoutMs, 2 * time.Second, 2500 * time.Millisecond},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			id := "relay-cut-" + string(rune('a'+i))
-			seeded, dbPath := seedAgentRow(t, id, store.StateWorking)
-			st, err := store.OpenWithBusyTimeout(dbPath, tc.busyMs)
-			if err != nil {
-				t.Fatalf("OpenWithBusyTimeout: %v", err)
-			}
-			defer st.Close()
-			hc := relayHC(id, agentParent(t, seeded, id), timeout)
-			hc.Now, hc.Clock, hc.Start = time.Now, hook.DefaultPollClock(), time.Now().Add(-tc.started)
-			before := mustGetSpawn(t, st, id)
-			release := apitest.HoldWriteLock(t, dbPath, time.Minute)
+			// b.82r: keep real SQLite contention, but virtualize its Go retry
+			// timers so scheduler stalls cannot spend the hook's reserve.
+			synctest.Test(t, func(t *testing.T) {
+				id := "relay-cut-" + string(rune('a'+i))
+				seeded, dbPath := seedAgentRow(t, id, store.StateWorking)
+				st, err := store.OpenWithBusyTimeout(dbPath, tc.busyMs)
+				if err != nil {
+					t.Fatalf("OpenWithBusyTimeout: %v", err)
+				}
+				defer st.Close()
+				hc := relayHC(id, agentParent(t, seeded, id), timeout)
+				hc.Now, hc.Clock, hc.Start = time.Now, hook.DefaultPollClock(), time.Now().Add(-tc.started)
+				before := mustGetSpawn(t, st, id)
+				release := apitest.HoldWriteLock(t, dbPath, time.Minute)
 
-			out, took := fireRelay(t, st, hc, relayPayload)
-			release()
+				var out relayFirstWrite
+				if err := hook.Handle(context.Background(), strings.NewReader(relayPayload), &out, st, hc, newSilentLogger()); err != nil {
+					t.Fatalf("Handle: %v", err)
+				}
+				returned := time.Since(hc.Start)
+				release()
 
-			assertDenyEnvelope(t, bytes.NewBufferString(out))
-			if took > tc.maxTook {
-				t.Errorf("the hook answered after %v; want within %v (its deadline less the reserve, before its %v kill)", took, tc.maxTook, timeout)
-			}
-			assertRowUnchanged(t, st, id, before)
-			assertNoRequests(t, st, id)
+				assertDenyEnvelope(t, &out.Buffer)
+				if took := out.at.Sub(hc.Start); out.at.IsZero() || took > tc.maxAnswer {
+					t.Errorf("deny first reached stdout after %v; want within %v of hc.Start (cut plus slack)", took, tc.maxAnswer)
+				}
+				if returned >= timeout {
+					t.Errorf("Handle returned after %v from hc.Start; want before its %v kill", returned, timeout)
+				}
+				assertRowUnchanged(t, st, id, before)
+				assertNoRequests(t, st, id)
+			})
 		})
 	}
 }
