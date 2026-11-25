@@ -2987,6 +2987,8 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
     expect_rc 0 "install.sh --help" || return
     [[ "$(flat "$OUT")" == *'Every exit 5 ends with one line on stderr, its last, naming the cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it. ErrVersionInstallRefused preserves the admin publication details; unreadable or interrupted output means an unknown outcome, not rollback. Correct the cause and rerun the same install with the same tag, pair and flags for forward recovery: docs/operator-actions.md "Recovering a versioned install". Other causes: ErrVersionUnreadable (re-run), ErrConfigMalformed (fix config.toml, then re-run), ErrSchemaMismatch (install a newer agent-director), ErrSchemaVerifyFailed (needs a human), ErrMoveConflict (the directory layout cannot be moved as it is: the message names the one cause and its remedy; change nothing else, apply the remedy, re-run), ErrAgentsLive (an agent or an agent-director process runs against the old ~/.agent-director, or its live rows could not be read: stop whatever starts agents, then every agent, every serve and every caller, and re-run; a re-run reads the rows again), ErrMoveFailed (moving ~/.agent-director to ~/.config/agent-director failed before the rename, a full disk being the usual cause: the partial new directory was removed and the old directory is untouched; fix the cause and re-run), or, when the store open fails another way, agent-director'"'"'s own err_name. ErrTemplateMalformed is agent-director'"'"'s own catalogued name (errnames.Catalog); fix the template the message names, then re-run. ErrMoveConflict, ErrAgentsLive and ErrMoveFailed come from the move of AD'"'"'s directory (SR-11.7), which this release makes once on an upgrade from a release that kept its files in ~/.agent-director, before any binary is replaced; ErrMoveConflict and ErrAgentsLive are raised in pre-flight, changing nothing. They are install.sh'"'"'s own names, as ErrVersionUnreadable is, not agent-director'"'"'s. An upgrade that crosses the native-input journal cutover adds three: ErrJournalMigrationRefused (pre-flight refused, or the cutover refused and the installer put the previous install back: the install is as before the run; fix the reported cause, then re-run with a new --journal-backup directory), ErrJournalMigrationIncomplete (the install did not finish successfully, though the cutover may have committed, and this release stays installed; follow the message, then docs/operator-actions.md "install.sh stops with ErrJournalMigrationIncomplete") and ErrSchemaVerifyFailed for a restore that could not finish (needs a human; put the listed copies back as docs/operator-actions.md "Putting back a kept install" describes). ErrJournalMigrationIncomplete is install.sh'"'"'s own name.'* ]] \
         || bad "--help lacks the cause-line contract: $(flat "$OUT")"
+    [[ "$(flat "$OUT")" == *'ErrUpgradeRefused is also install.sh'*'found live rows (agents_live) or could not read them (agent_rows_unreadable). Pre-flight changed nothing; follow the envelope'* ]] \
+        || bad "--help lacks the exempt live-row refusal: $(flat "$OUT")"
     while IFS='|' read -r setup headline name fix <&3; do
         j17_reap
         J7ARGV=("${argv0[@]}") J17_RELAY="" J17_COPY="" aside=""
@@ -3091,8 +3093,11 @@ EOF
     # SKILL.md's legacy rows each have a j17_remedy case and a row above.
     # The publication row is exercised with capable pairs by
     # TestStagedPublicationOutcomes and TestStagedDocumentUpgradeRollbackRecovery.
+    # ErrUpgradeRefused needs a genuine v20 install: TestUpgradeLiveRows
+    # exercises its live/unreadable refusals and the file-only exclusion;
+    # TestAdviceFollow_J46_CrossingLiveRows follows the shared stop/sweep advice.
     while IFS= read -r tname; do
-        [[ "$tname" != ErrVersionInstallRefused ]] || continue
+        [[ "$tname" != ErrVersionInstallRefused && "$tname" != ErrUpgradeRefused ]] || continue
         [[ "$(j17_remedy "$tname")" != rerun-once ]] || bad "SKILL.md's exit-5 table has $tname, which j17_remedy has no case for"
         [[ " ${seen[*]} " == *" $tname "* ]] || bad "SKILL.md's exit-5 table has $tname, which no J17 row triggers"
     done < <(j17_table_names)

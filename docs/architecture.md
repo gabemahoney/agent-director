@@ -12118,15 +12118,24 @@ other agents use `keysRun.typeText`, with Cursor's
 [gateway verdict check](#cursor-gateway-verdict) and macOS Claude's paced
 typing below. Successful fallback returns an empty `SendKeysResult`, without
 exact transcript confirmation. `confirmLegacySubmission`
-observes a pending Codex row, or the pending Claude path below, for up to 2 s
-after a successful fallback send with Enter;
+observes a pending Codex row for up to 20 s, or the pending Claude path below
+for up to 2 s, after a successful fallback send with Enter;
 only hook-derived `working`, `ask_user` or `check_permission` state satisfies
 that observation. A changed launch, finished row, read failure or timeout
 returns `ErrSubmissionUnconfirmed` with `KeysSent=true`,
 `SubmissionConfirmed=false` and `RowState`. Its JSON contains exactly
 `keys_sent`, `submission_confirmed` and `row_state`; structured attempt fields are
-absent. The two-second observation uses at most twenty 100 ms sleeps. It never
-resends text or Enter.
+absent. Observation uses at most two hundred 100 ms sleeps for Codex, twenty
+for Claude, capped by the caller's earlier context deadline or cancellation.
+A read completing at or after the deadline, or after cancellation, cannot
+confirm submission. Observation never resends text or Enter.
+
+Codex's allowance follows 953 false-unconfirmed sends measured on 2026-11-18
+through 2026-11-25: estimated Enter-to-UserPromptSubmit p50 10.7 s and p95
+16.0 s, with 16 over 20 s. The 20 s margin leaves nominal transport headroom
+under the TypeScript client's 30 s default; transport and storage waits can
+still exceed that budget. Claude retains 2 s because its observed post-Enter
+hook latency after readiness and settle was 50–89 ms.
 
 **Must use:** ordinary Claude fallback read as `pending` goes through
 `sendKeysRun.waitTerminalRaw` in `pkg/api/sendkeys_terminal.go` and the optional
@@ -12941,7 +12950,9 @@ claude /install-agent-director (or `bash install.sh`)
     not_committed, nothing on disk changed; a store from v16
     to below this release's version whose native-input authority is
     unreadable or not recorded → exit 5, ErrJournalMigrationRefused,
-    nothing on disk changed
+    nothing on disk changed; with recorded authority and no move due,
+    live or unreadable rows refuse with ErrUpgradeRefused (agents_live or
+    agent_rows_unreadable), cutover not_committed, before the store open
   → pre-flight OK, then the per-agent summary lines (claude, codex and cursor; see
     "Agent presence")
   → move due only: the move (steps 0 to 10; ErrMoveFailed, exit 5, the old
@@ -13072,6 +13083,7 @@ for every cause, so a caller that checks only for 5 is unaffected.
 | `ErrSchemaMismatch` | step 4's non-crossing `list` open, relayed: newer store, invalid store id, incompatible or uncommitted current-schema input authority, or authorized migration refusing incompatible eligibility, family-history or context-provenance definitions/values | read the actual envelope; a matching binary addresses a newer store, while invalid metadata requires stopped-writer backup/restore or human recovery; never edit eligibility, family history or context provenance to bypass validation (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery)) |
 | `ErrMoveConflict` | `ad_move_conflict`, before every other pre-flight reader (and, for a store that is a link and a path key that cannot be placed, right after the reader) | the layout cannot be moved as it is: apply the remedy in operator-actions.md, re-run |
 | `ErrAgentsLive` | `ad_agents_live_check`, in pre-flight and again as the move's first step | stop every agent, `serve` and caller, then re-run from a shell agent-director did not start; a re-run reads unreadable rows again |
+| `ErrUpgradeRefused` | `ad_upgrade_live_rows_check`, in pre-flight for an exempt non-crossing schema upgrade with no move due; own envelope, reason `agents_live` or `agent_rows_unreadable`, cutover `not_committed`; nothing changed | follow the shared stop/sweep or unreadable-row action, then re-run the same install command; file-only upgrades never reach this check |
 | `ErrMoveFailed` | `ad_move_fail`, any failure or interrupt before the rename | free space or fix the cause named, re-run; the old directory was not changed |
 | `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded (see "No store after the open" below), or a readable `user_version` that is not the target; a restore that could not finish (an occupied pre-move path or I/O failure), with remaining copies kept and listed | a human, following the advice; an unfinished restore needs [Putting back a kept install](operator-actions.md#putting-back-a-kept-install) |
 | `ErrJournalMigrationRefused` | pre-flight, before anything on disk changes: `migrate-journal --check-only`'s refusal, relayed; the installer's own envelope (`ad_outcome_exit`): `legacy_root_symlink` for a link at `~/.config/agent-director` or the old directory (including its compatibility link) on a crossing run before `--check-only`, then, with no move due, `agents_live` or `agent_rows_unreadable` for the store's live rows; `cutover_state_unreadable` or `native_input_authority_missing` for a store past the cutover; or, for a `--check-only` answer that is neither `{}` nor this refusal, the relayed `err_name` or `check_only_unestablished`; on a crossing upgrade, the restore preconditions' `backup_inside_install_directory`, `previous_release_unknown` or `restore_copies_unavailable` (see "The restore preconditions" under [Schema migration at install-time](#schema-migration-at-install-time)). Step 4: a failed crossing attempt whose restore put the previous install back; also a restored interrupt before the attempt started (own envelope, reason `interrupted`, `details.cutover: "not_committed"`) | pre-flight's: follow `details.refusal.action`, then re-run with a new `--journal-backup` directory (`previous_release_unknown` and `restore_copies_unavailable` re-run with the same flags); the two store-state reasons need a human. A restored run: fix the reported cause, then re-run this release's installer with a new `--journal-backup`. See [Upgrade refusal reasons](operator-actions.md#upgrade-refusal-reasons) and [`install.sh` refuses with `ErrJournalMigrationRefused`](operator-actions.md#installsh-refuses-with-errjournalmigrationrefused) |
@@ -13079,7 +13091,7 @@ for every cause, so a caller that checks only for 5 is unaffected.
 | any other name | step 4's non-crossing `list` open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
 
 `ErrVersionUnreadable`, `ErrSchemaVerifyFailed`, `ErrMoveConflict`,
-`ErrAgentsLive`, `ErrMoveFailed` and `ErrJournalMigrationIncomplete` are install.sh's own signals, not
+`ErrAgentsLive`, `ErrUpgradeRefused`, `ErrMoveFailed` and `ErrJournalMigrationIncomplete` are install.sh's own signals, not
 agent-director error names: they are not in `errnames.Catalog` and no verb
 returns them (b.cfq's decision, overriding b.7b4's "no new error name" for
 the first two). `ErrTemplateMalformed` is the other kind: it is agent-director's
@@ -13881,7 +13893,7 @@ resolved (the old directory's store while a move is due):
   old-path references, then remove only the link as
   [operator-actions.md](operator-actions.md#installsh-refuses-with-errjournalmigrationrefused)
   describes. Re-run with a new `--journal-backup`.
-  With no move due, `ad_crossing_live_rows_check` then refuses the same way
+  With no move due, `ad_upgrade_live_rows_check ErrJournalMigrationRefused` then refuses the same way
   while `ad_read_live_rows` finds a row in a live state (`agents_live`: each
   row with the installed binary's `pause` or `kill` for it, its
   `find-missing`, and a re-run from a shell agent-director did not start),
@@ -13902,9 +13914,17 @@ resolved (the old directory's store while a move is due):
   [refusal runbook](operator-actions.md#upgrade-refusal-reasons));
 - `INPUT_CUTOVER_VERSION` to below `STORE_SCHEMA_VERSION`: not crossing
   when the authority is `recorded`; refused with `cutover_state_unreadable`
-  when `unreadable`, and `native_input_authority_missing` when `missing`;
+  when `unreadable`, and `native_input_authority_missing` when `missing`.
+  With recorded authority and no move due,
+  `ad_upgrade_live_rows_check ErrUpgradeRefused` refuses live or unreadable
+  rows (`agents_live` or `agent_rows_unreadable`), cutover `not_committed`,
+  before any binary swap, migration, store open or layout publication;
 - `STORE_SCHEMA_VERSION` or newer: not crossing; step 4's `list` reports a
   newer store.
+
+**Must use:** `ad_upgrade_live_rows_check` is the shared no-move schema-upgrade
+row check and stop/sweep advice renderer for both branches. It uses
+`ad_read_live_rows`; do not duplicate its messages or advice.
 
 Pre-flight only refuses: no check before the swap authorizes the cutover or
 stands in for a later verification. The real `migrate-journal` makes all

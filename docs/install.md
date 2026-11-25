@@ -394,6 +394,13 @@ authorizes this itself. Every agent agent-director manages must then be
 resumed or restarted (see **After the upgrade** below). A store already at
 v21 opens with no migration.
 
+Stop every agent, `serve` and caller before an exempt upgrade; use
+[step 1 of the upgrade skill](../skills/upgrade-agent-director/SKILL.md#1-stop-the-agents).
+With no directory move due, a schema v16–v20 store with live or unreadable
+agent rows refuses in pre-flight with `ErrUpgradeRefused`, changing nothing.
+The [refusal procedure](operator-actions.md#installsh-refuses-with-errupgraderefused)
+gives the next steps. File-only upgrades need no stops and do not inspect the store.
+
 Check holders with the candidate release and the same journal flags planned
 for installation:
 
@@ -528,8 +535,6 @@ agent selection to the caller.
 - Resume each agent stopped for the upgrade, parents first, with
   `AGENT_DIRECTOR_INSTANCE_ID=<its recorded parent>` set for each child's
   command only; follow [step 6 of the upgrade skill](../skills/upgrade-agent-director/SKILL.md#6-resume-the-agents).
-  Every agent must restart for the exempt install; also relaunch any still
-  running from before it (`kill` or `pause`, then `resume`).
 - Cursor gateway refusal reporting requires both the caller and the running
   gateway to be agent-director 0.17.2 or later. Relaunch Cursor rows (`kill` or
   `pause`, then `resume`) to run the installed gateway; follow

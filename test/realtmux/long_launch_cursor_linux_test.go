@@ -38,11 +38,17 @@ func TestLongLaunchCursorProcessDelivery(t *testing.T) {
 				}, func() string { return "runtime did not receive the exact 30000-byte prompt" })
 				return
 			}
+			oldPID, err := strconv.Atoi(readFileTrim(t, peer.PID))
+			if err != nil {
+				t.Fatal(err)
+			}
 			before := readRow(t, f.DBPath, launch.ID)
 			if _, err := f.API.Pause(context.Background(), api.PauseParams{InstanceID: launch.ID}); err != nil {
 				t.Fatal(err)
 			}
 			waitFor(t, "original gateway gone", func() bool { return pidGone(int(before.PanePID.(int64))) }, nil)
+			// b.ckn / SR-6.1: the last session's gateway can exit before its server.
+			waitPidGone(t, int(before.TmuxServerPID.(int64)))
 			// Extend the existing runtime's recorder for this one ordinary key.
 			// Its JavaScript process writes the value itself, after exec, without
 			// depending on a provider accepting any configuration selector.
@@ -81,6 +87,19 @@ func TestLongLaunchCursorProcessDelivery(t *testing.T) {
 				return err == nil && string(got) == payload
 			}, func() string {
 				return fmt.Sprintf("replacement runtime did not record exact 30000-byte value for %s", verb)
+			})
+			// b.ckn: the env recorder runs before PID publication. Cleanup must
+			// wait for the replacement runtime, even when the old PID file remains.
+			waitFor(t, "live replacement runtime publishes its PID", func() bool {
+				raw, err := os.ReadFile(peer.PID)
+				if err != nil {
+					return false
+				}
+				pid, err := strconv.Atoi(string(raw))
+				return err == nil && pid > 0 && pid != oldPID && !pidGone(pid)
+			}, func() string {
+				raw, err := os.ReadFile(peer.PID)
+				return fmt.Sprintf("old PID %d; replacement PID file %q: %v", oldPID, raw, err)
 			})
 		})
 	}

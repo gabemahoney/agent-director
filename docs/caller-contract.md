@@ -95,6 +95,9 @@ error:
   files in.
 - A TypeScript call that outlasts `callTimeoutMs` (30 s by default) returns
   `ErrCallTimeout` while the verb may still complete: check the row first.
+  A first send to pending Codex can wait up to 20 s for hooks, plus transport
+  and admission. Raise `callTimeoutMs` if it is below about 25000 ms; slow
+  transport or store contention can require more.
 
 `kill` success on a live row verifies the process checks of that call. A
 finished-row call is a no-op without checking the process; it is not proof
@@ -1480,8 +1483,11 @@ Enter. Paste framing requires the application to have enabled bracketed paste;
 it does not establish composer readiness.
 
 After successful pending Codex fallback transport, the call observes the same
-launch for up to 2 s for hook-derived `working`, `ask_user` or
-`check_permission`. Success returns `{}` without exact transcript confirmation.
+launch for up to 20 s for hook-derived `working`, `ask_user` or
+`check_permission`: startup hooks can lag accepted input. Pending Claude
+fallback retains a 2 s observation after its readiness checks. An earlier
+caller deadline or cancellation ends observation sooner. Success returns `{}`
+without exact transcript confirmation.
 Without that activity it returns `ErrSubmissionUnconfirmed` with
 `keys_sent: true`, `submission_confirmed: false` and `row_state`, without
 an `outcome`. Read the pane and state instead of resending. Other fallback
