@@ -6701,8 +6701,8 @@ raw `--agent` text into the agent whose table applies: empty (an entry with
 no `--agent`) and `claude` are Claude, `codex` is Codex, `cursor` is Cursor, anything else is
 `ErrInvalidAgent`.
 
-**Payload types.** Classification and event-name peeking must share
-`decodePayload(agent, raw)`. For Claude (empty agent or `claude`),
+**Payload types.** Full classification uses `decodePayload(agent, raw)`.
+For Claude (empty agent or `claude`),
 `session_id`, `source`, `origin`, `turn_id`, `prompt` and `file_path` accept
 strings; any other JSON value, including `null`, means absent (`""`).
 Thus a malformed `session_id` follows the absent-session branch of busy
@@ -6716,6 +6716,17 @@ keeps those fields directly declared in a local type named `payload` to
 preserve their decode-error text. Codex and Cursor use the strict
 `json.Unmarshal` into the common `payload` for all sixteen fields,
 including the same acceptance of `null` and unchanged error text.
+
+**Event identification.** `PeekEventNameForAgent` uses event-only decoding
+for Claude (including the default agent) and Codex: two typed projections
+read `hook_event_name`, then `event_name` only if the primary is empty,
+missing or null. This preserves the classifier's case-insensitive key
+matching and duplicate/null handling. Invalid JSON or a type error in the
+selected field returns an empty name; a wrong-typed primary never falls
+back to the alias. A non-empty primary ignores even a wrong-typed alias.
+Other fields cannot hide a known event. Cursor and invalid agents retain
+the strict full decode. Peeking selects early error and busy-send output
+handling; it never authorizes a state write, request or prompt delivery.
 
 **The agent comes from the hook's own argument and nowhere else.**
 `runHook` hands the parsed `--agent` text to `HandleConfig.Agent`; neither the
@@ -16228,8 +16239,8 @@ falls back when the hook exits.
    the commit leaves neither. Its lock wait is `waitLeft()`, cut to 0 when
    that has passed. A lock not taken in time (`ErrStoreBusy`), or any other
    failure, writes nothing, and the hook prints the fail-closed deny: the
-   tool is denied and no dialog appears. A gate that does not hold writes
-   nothing, prints nothing and writes the hook's one `ad.hook.ignored`
+   tool is denied. A gate that does not hold writes nothing, prints
+   nothing and writes the hook's one `ad.hook.ignored`
    (see "The hook gate on the relay path" below). After the commit the
    store emits `ad.spawn.state_transition` (prior state to
    `check_permission`) and the request's `ad.row_mutation.committed`
@@ -17325,12 +17336,12 @@ reserve; this repair imposes no shorter bound on those retained holds.
   b.45p), and only if the peek identified it. The handler calls
   `PeekEventNameForAgent(hc.Agent, raw)` before resolving the instance id;
   `runHook` uses the parsed reporting agent for its earlier peek too.
-  Both share [the classifier's decode policy](#the-agent-aware-hook-classifier).
+  Both follow [the event-identification policy](#the-agent-aware-hook-classifier).
   `PeekEventName(raw)` remains a Claude-default wrapper; production callers
-  with a reporting agent must use the agent-aware function. Invalid agents
-  use the strict peek policy. A syntax or type error returns an empty name
-  and suppresses the deny envelope: in particular, a wrong-typed Claude
-  classifier field can still lose a PermissionRequest deny. Non-permission
+  with a reporting agent must use the agent-aware function. A known Claude
+  or Codex PermissionRequest still denies when another field fails full
+  classification; the failure logs and records no request or state write.
+  An unreadable or unknown event gets no deny envelope. Non-permission
   events (PreToolUse, etc.) stay fail-open even on internal failures.
   `proveRequestsGone` is a hook's proof that requests' dialogs are gone
   (see "The dialog hold" above), through the optional `requestProver`
@@ -17834,7 +17845,10 @@ instance-id missing/invalid, payload read failure, classify failure, a
 store with no relay writes, a failed token mint, a first write that fails
 or whose lock wait runs out. The handler's `failClosed` helper, and
 `runRelay`'s own for the last three, writes a deny envelope when
-`relayActive` is true: the tool is denied and no dialog appears.
+`relayActive` is true, the event is identified as `PermissionRequest` and
+the invocation has a decision channel: the tool is denied. Unreadable or
+unknown events and capacity callbacks emit no decision. Ignored ownership
+gates are not failures (see "The hook gate on the relay path" below).
 
 **After the request is recorded:** every failure ends with no answer
 (`silent`; see "The relay hook's lifecycle" above): the poll's `ctx.Done()`,
@@ -17846,12 +17860,12 @@ back. Conversely, an already-entered COMMIT may retain an acknowledgement
 when its result is late or unknown; `silent` suppresses output without erasing
 that history. See the lifecycle's "No answer" branch above.
 
-The cmd/-side `runHook` ALSO has a pre-Handle fail-closed: if the
+The cmd/-side `runHook` also has a pre-Handle fail-closed: if the
 config can't be loaded, the store path can't be resolved
 (`EffectiveDbPath`; logged as `hook: resolve store path: …`) or the store
-can't be opened, runHook itself writes the deny envelope before
-returning. This is the SRD §6.5 "env-var, not DB" guarantee — even a
-store-open failure on a relay-on Spawn still surfaces deny.
+can't be opened, it applies the same event and decision-channel conditions
+before writing a deny. This is the SRD §6.5 "env-var, not DB" guarantee:
+store-open failure cannot suppress an identifiable relayed request's deny.
 
 With `HOME` unset or empty, `store.OpenOrInitWithBusyTimeout` refuses the hook's `~/`
 store path (the config's default `~/.config/agent-director/state.db`, left

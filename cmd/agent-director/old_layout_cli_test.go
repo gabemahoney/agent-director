@@ -119,9 +119,11 @@ func TestOldLayoutNotRefusedWithStorePath(t *testing.T) {
 // with empty stdout and logs one line, creating nothing (the old-layout check
 // comes before the hook's logger, which would create errors.log); a relayed
 // PermissionRequest still gets its deny.
+// b.n62: a readable permission event denies even when another field is ill typed.
 func TestOldLayoutHookFailsOpenAndCreatesNothing(t *testing.T) {
 	const (
 		permission   = `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"}}`
+		wrongType    = `{"hook_event_name":"PermissionRequest","tool_name":12345}`
 		sessionStart = `{"hook_event_name":"SessionStart","source":"startup","transcript_path":"/x/old.jsonl"}`
 	)
 	deny := hook.EncodeDecision(hook.EventNamePermissionRequest, "deny", "") + "\n"
@@ -129,19 +131,29 @@ func TestOldLayoutHookFailsOpenAndCreatesNothing(t *testing.T) {
 	relayOff := map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": "id-old-layout"}
 	for _, tc := range []struct {
 		name    string
+		agent   string
 		env     map[string]string
 		payload string
 		want    string // the whole stdout
 	}{
-		{"SessionStart", relayOff, sessionStart, ""},
-		{"SessionStart relay on", relayOn, sessionStart, ""},
-		{"PermissionRequest relay off", relayOff, permission, ""},
-		{"PermissionRequest relay on", relayOn, permission, deny},
+		{"SessionStart", "", relayOff, sessionStart, ""},
+		{"SessionStart relay on", "", relayOn, sessionStart, ""},
+		{"PermissionRequest relay off", "", relayOff, permission, ""},
+		{"PermissionRequest relay on", "", relayOn, permission, deny},
+		{"PermissionRequest codex relay on", "codex", relayOn, permission, deny},
+		{"PermissionRequest wrong tool_name claude", "", relayOn, wrongType, deny},
+		{"PermissionRequest wrong tool_name codex", "codex", relayOn, wrongType, deny},
+		{"unknown primary with permission alias", "", relayOn, `{"hook_event_name":12345,"event_name":"PermissionRequest"}`, ""},
+		{"PreToolUse wrong field with permission alias", "", relayOn, `{"hook_event_name":"PreToolUse","event_name":"PermissionRequest","tool_name":12345}`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := newOldLayout(t)
 
-			stdout, stderr, code, timedOut := runBounded(t, o.home, tc.env, tc.payload, false, surfaceDeadline, "hook")
+			args := []string{"hook"}
+			if tc.agent != "" {
+				args = append(args, "--agent", tc.agent)
+			}
+			stdout, stderr, code, timedOut := runBounded(t, o.home, tc.env, tc.payload, false, surfaceDeadline, args...)
 
 			if timedOut || code != 0 || stdout != tc.want {
 				t.Errorf("hook exit=%d stdout=%q timedOut=%v; want 0 and %q (stderr=%q)", code, stdout, timedOut, tc.want, stderr)

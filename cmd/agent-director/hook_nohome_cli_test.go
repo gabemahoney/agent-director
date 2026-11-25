@@ -15,25 +15,31 @@ import (
 
 // TestHookWithoutHOMEOpensNoStore: with HOME empty or unset the hook exits 0, writes nothing under the
 // passwd home or the cwd, logs one line, and prints only a relayed PermissionRequest's deny (b.4uz).
+// b.n62: Claude/Codex still deny when a different classifier field is ill typed.
 func TestHookWithoutHOMEOpensNoStore(t *testing.T) {
 	const (
 		permission   = `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"}}`
+		wrongType    = `{"hook_event_name":"PermissionRequest","tool_name":12345}`
 		sessionStart = `{"hook_event_name":"SessionStart","source":"startup"}`
 	)
 	deny := hook.EncodeDecision(hook.EventNamePermissionRequest, "deny", "") + "\n"
 	relayOn := []string{hook.EnvRelayMode + "=" + hook.RelayModeOn}
 	for _, tc := range []struct {
 		name    string
+		agent   string
 		unset   bool
 		env     []string
 		payload string
 		want    string // the whole stdout
 	}{
-		{"PermissionRequest relay on HOME empty", false, relayOn, permission, deny},
-		{"PermissionRequest relay on HOME unset", true, relayOn, permission, deny},
-		{"PermissionRequest relay off", false, nil, permission, ""},
-		{"SessionStart relay on", false, relayOn, sessionStart, ""},
-		{"SessionStart relay off HOME unset", true, nil, sessionStart, ""},
+		{"PermissionRequest relay on HOME empty", "", false, relayOn, permission, deny},
+		{"PermissionRequest relay on HOME unset", "", true, relayOn, permission, deny},
+		{"PermissionRequest codex relay on", "codex", false, relayOn, permission, deny},
+		{"PermissionRequest wrong tool_name claude", "", false, relayOn, wrongType, deny},
+		{"PermissionRequest wrong tool_name codex", "codex", true, relayOn, wrongType, deny},
+		{"PermissionRequest relay off", "", false, nil, permission, ""},
+		{"SessionStart relay on", "", false, relayOn, sessionStart, ""},
+		{"SessionStart relay off HOME unset", "", true, nil, sessionStart, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			passwdDir := passwdAgentDir(t)
@@ -42,7 +48,11 @@ func TestHookWithoutHOMEOpensNoStore(t *testing.T) {
 			if !tc.unset {
 				environ = append(environ, "HOME=")
 			}
-			stdout, stderr, code := mustRun(t, cliOpts{dir: cwd, env: environ, stdin: tc.payload, deadline: surfaceDeadline}, "hook")
+			args := []string{"hook"}
+			if tc.agent != "" {
+				args = append(args, "--agent", tc.agent)
+			}
+			stdout, stderr, code := mustRun(t, cliOpts{dir: cwd, env: environ, stdin: tc.payload, deadline: surfaceDeadline}, args...)
 			if code != 0 || stdout != tc.want {
 				t.Errorf("hook exit=%d stdout=%q; want 0 and %q (stderr=%q)", code, stdout, tc.want, stderr)
 			}
