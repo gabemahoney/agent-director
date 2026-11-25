@@ -83,6 +83,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
+# Bound retries and abort stalled downloads while allowing large archives to
+# keep transferring. File output prevents duplicated bytes on a partial retry.
+ARG CURL_FETCH_FLAGS="-fsSL --retry 5 --retry-delay 2 --retry-all-errors --retry-max-time 120 --connect-timeout 15 --speed-limit 1024 --speed-time 30"
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         binutils \
@@ -98,11 +102,13 @@ RUN apt-get update \
         sqlite3 \
         tmux \
         unzip \
- && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && curl ${CURL_FETCH_FLAGS} -o /tmp/nodesource-setup.sh https://deb.nodesource.com/setup_20.x \
+ && bash /tmp/nodesource-setup.sh \
+ && rm /tmp/nodesource-setup.sh \
  && apt-get install -y --no-install-recommends nodejs \
  && mkdir -p -m 755 /etc/apt/keyrings \
- && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-        | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+ && curl ${CURL_FETCH_FLAGS} -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+        https://cli.github.com/packages/githubcli-archive-keyring.gpg \
  && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
         > /etc/apt/sources.list.d/github-cli.list \
@@ -110,7 +116,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
- && curl -fsSL https://bun.sh/install | BUN_INSTALL=/opt/bun bash -s "bun-v${BUN_VERSION}" \
+ && curl ${CURL_FETCH_FLAGS} -o /tmp/bun-install.sh https://bun.sh/install \
+ && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v${BUN_VERSION}" \
+ && rm /tmp/bun-install.sh \
  && ln -s /opt/bun/bin/bun /usr/local/bin/bun \
  && bun --version \
  && arch=$(dpkg --print-architecture) \
@@ -119,7 +127,7 @@ RUN apt-get update \
         arm64) go_sha256="${GO_SHA256_ARM64}" ;; \
         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;; \
     esac \
- && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" \
+ && curl ${CURL_FETCH_FLAGS} -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" \
  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c - \
  && tar -C /usr/local -xzf /tmp/go.tgz \
  && rm /tmp/go.tgz \
@@ -137,12 +145,12 @@ RUN arch=$(dpkg --print-architecture) \
     esac \
  && base="https://github.com/gabemahoney/agent-director/releases/download/${PREV_RELEASE_TAG}" \
  && mkdir -p /opt/previous-release \
- && curl -fsSL -o /opt/previous-release/install.sh \
+ && curl ${CURL_FETCH_FLAGS} -o /opt/previous-release/install.sh \
         "https://raw.githubusercontent.com/gabemahoney/agent-director/${PREV_RELEASE_TAG}/skills/install-agent-director/install.sh" \
  && echo "${PREV_INSTALL_SH_SHA256}  /opt/previous-release/install.sh" | sha256sum -c - \
- && curl -fsSL -o /opt/previous-release/agent-director "${base}/agent-director-linux-${arch}" \
+ && curl ${CURL_FETCH_FLAGS} -o /opt/previous-release/agent-director "${base}/agent-director-linux-${arch}" \
  && echo "${prev_sha}  /opt/previous-release/agent-director" | sha256sum -c - \
- && curl -fsSL -o /opt/previous-release/agent-director-admin "${base}/agent-director-admin-linux-${arch}" \
+ && curl ${CURL_FETCH_FLAGS} -o /opt/previous-release/agent-director-admin "${base}/agent-director-admin-linux-${arch}" \
  && echo "${prev_admin_sha}  /opt/previous-release/agent-director-admin" | sha256sum -c - \
  && printf '%s\n' "${PREV_RELEASE_TAG}" > /opt/previous-release/TAG \
  && chmod 0755 /opt/previous-release /opt/previous-release/install.sh /opt/previous-release/agent-director /opt/previous-release/agent-director-admin \

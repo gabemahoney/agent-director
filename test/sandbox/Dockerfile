@@ -104,6 +104,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
+# Bound retries and abort stalled downloads while allowing large archives to
+# keep transferring. File output prevents duplicated bytes on a partial retry.
+ARG CURL_FETCH_FLAGS="-fsSL --retry 5 --retry-delay 2 --retry-all-errors --retry-max-time 120 --connect-timeout 15 --speed-limit 1024 --speed-time 30"
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         build-essential \
@@ -128,7 +132,7 @@ RUN apt-get update \
         arm64) node_arch="arm64"; node_sha256="${NODE_SHA256_ARM64}" ;; \
         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;; \
     esac \
- && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
+ && curl ${CURL_FETCH_FLAGS} -o /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c - \
  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz \
  && rm /tmp/node.tar.xz \
@@ -139,14 +143,14 @@ RUN apt-get update \
         arm64) go_sha256="${GO_SHA256_ARM64}" ;; \
         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;; \
     esac \
- && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" \
+ && curl ${CURL_FETCH_FLAGS} -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" \
  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c - \
  && tar -C /usr/local -xzf /tmp/go.tgz \
  && rm /tmp/go.tgz \
  && ln -s /usr/local/go/bin/go /usr/local/bin/go \
  && go version \
  # ── Bun runtime (installer SHA-verified before execution) ───────────────
- && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install \
+ && curl ${CURL_FETCH_FLAGS} -o /tmp/bun-install.sh https://bun.sh/install \
  && echo "${BUN_INSTALL_SHA256}  /tmp/bun-install.sh" | sha256sum -c - \
  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v${BUN_VERSION}" \
  && rm /tmp/bun-install.sh \
