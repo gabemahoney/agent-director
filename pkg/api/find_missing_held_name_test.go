@@ -100,10 +100,11 @@ func (e *hnEnv) sweep(t *testing.T, d time.Duration) (api.FindMissingResult, int
 	return mustSweep(t, e.s, e.pc, fmSweep{tmux: e.rec, clock: e.clock, lg: e.lg}), mark
 }
 
-// assertHolderUntouched fails unless the Recorder saw exactly one lookup, no other call, and sessions unchanged.
+// assertHolderUntouched requires the row lookup and the default report lookup,
+// no other call, and unchanged holding sessions (b.9ps).
 func (e *hnEnv) assertHolderUntouched(t *testing.T, sessions []tmuxfix.SeedSession) {
 	t.Helper()
-	assertLookups(t, e.rec, 1)
+	assertSweepLookups(t, e.rec.SocketCalls(), 1)
 	if n := len(e.rec.Calls()); n != 0 {
 		t.Errorf("name-based tmux calls = %d; want 0", n)
 	}
@@ -303,13 +304,15 @@ func TestFindMissingHeldNamePendingGrace(t *testing.T) {
 				}
 				drainTrail(t)
 				// No sweep record: the only new line is the drain's sentinel.
-				if n, lines := len(e.rec.SocketCalls()), len(readAPITrailLines(t)); n != 0 || lines != mark+1 {
-					t.Errorf("inside grace: %d tmux calls, trail %d -> %d lines; want no calls and only the drain sentinel", n, mark, lines)
+				if n, lines := len(e.rec.SocketCalls()), len(readAPITrailLines(t)); n != 2 || lines != mark+1 {
+					t.Errorf("inside grace: %d tmux calls, trail %d -> %d lines; want two report lookups and only the drain sentinel", n, mark, lines)
 				}
 				if pr, err := e.s.GetPermissionRequest(r.id, perm.RequestToken); err != nil || pr.Decision != "" {
 					t.Errorf("permission request inside grace = %+v, %v; want it still open", pr, err)
 				}
 
+				assertReportLookupsOnly(t, e.rec, apitest.TestSocket) // b.9ps: independent of pending grace.
+				e.rec.Reset()
 				res, mark = e.sweep(t, 2*time.Second)
 				assertLists(t, res, []string{r.id}, nil)
 				c := e.cols(t, r.id)
@@ -347,14 +350,20 @@ func TestFindMissingHeldNameGuard(t *testing.T) {
 		gone      bool // the row is deleted
 	}{
 		{"deleted after the lookup", func(t *testing.T, e *hnEnv, r hnRow) {
-			e.rec.AfterCall(tmux.CallLookup, func(tmuxfix.SocketCall, error) {
+			e.rec.AfterCall(tmux.CallLookup, func(c tmuxfix.SocketCall, _ error) {
+				if c.Socket != apitest.TestSocket {
+					return
+				} // b.9ps: inject only on the row lookup.
 				if err := storefix.DeleteWithExit(t, e.s, r.id); err != nil {
 					t.Errorf("DeleteSpawn: %v", err)
 				}
 			})
 		}, "left_changed", true},
 		{"versioned write after the lookup", func(t *testing.T, e *hnEnv, r hnRow) {
-			e.rec.AfterCall(tmux.CallLookup, func(tmuxfix.SocketCall, error) {
+			e.rec.AfterCall(tmux.CallLookup, func(c tmuxfix.SocketCall, _ error) {
+				if c.Socket != apitest.TestSocket {
+					return
+				} // b.9ps: inject only on the row lookup.
 				apitest.SeedSessionID(t, e.dbPath, r.id, uuid.NewString())
 			})
 		}, "left_changed", false},

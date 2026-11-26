@@ -212,9 +212,8 @@ func TestExpireSweepWrongServer(t *testing.T) {
 				if !reflect.DeepEqual(after, want) {
 					t.Fatalf("unknown gateway changed more than its uncertainty note: want=%+v after=%+v", want, after)
 				}
-				if calls := other.SocketCalls(); len(calls) != 0 {
-					t.Fatalf("unknown gateway fell through to tmux: %v", calls)
-				}
+				// No tmux fallback for the row: the only calls are the unowned_sessions report's (b.9ps).
+				assertReportLookupsOnly(t, other, r.Socket)
 				return
 			}
 			assertLists(t, fm, []string{r.ID}, nil)

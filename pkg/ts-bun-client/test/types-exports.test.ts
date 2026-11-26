@@ -242,7 +242,7 @@ function _assertSweepAliases(client: ad.Client, result: SweepResult): void {
  const legacy: Promise<FindMissingResult> = client.findMissing(oldParams);
  void [checks, canonical, optional, legacy];
  // @ts-expect-error checks must be present, even when empty
- const missing: SweepResult = {count: 0, ids: [], unverified: 0, unverified_ids: []};
+ const missing: SweepResult = {count: 0, ids: [], unverified: 0, unverified_ids: [], unowned_sessions: []};
  void missing;
 }
 void _assertSweepAliases;

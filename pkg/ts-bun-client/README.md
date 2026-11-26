@@ -353,13 +353,14 @@ Handling and the live-row sequence are in the
 
 `client.sweep()` returns `Promise<SweepResult>` for one bounded all-agent pass.
 `checks: SweepCheck[]` carries values, three confirmation records and independent
-`completion`/`reason` for each identity live at selection. Legacy counters
-remain in the same result. See [Sweep results](../../docs/caller-contract.md#sweep-results)
-for membership, coverage and failure handling.
+`completion`/`reason` for each identity live at selection. Legacy counters and
+`unowned_sessions: UnownedSession[]` share the result. See
+[Sweep results](../../docs/caller-contract.md#sweep-results) for membership,
+scan scope, ordering, coverage and failure handling.
 
 `findMissing()` remains supported and invokes the CLI's `find-missing` alias;
-`sweep()` invokes `sweep`. `SweepParams`, `SweepResult` and `SweepCheck` are
-exported alongside the retained `FindMissingParams` and `FindMissingResult`
+`sweep()` invokes `sweep`. `SweepParams`, `SweepResult`, `SweepCheck` and
+`UnownedSession` are exported alongside the retained `FindMissingParams` and `FindMissingResult`
 types. Both parameter types accept `timeout_ms` but ignore it: neither command
 receives that flag. `callTimeoutMs` bounds the transport call; timeout proves
 neither rollback nor completion and need not return partial checks.

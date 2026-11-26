@@ -1976,6 +1976,14 @@
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
+        },
+        {
+          "name": "unowned_sessions",
+          "type": "[]UnownedSession",
+          "description": "Read-only report of sessions with a valid label for this store whose instance id matches no row of any status. Always present and non-null; [] when none. See docs/caller-contract.md#sweep-results.",
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
         }
       ],
       "error_names": [
@@ -2027,6 +2035,14 @@
           "name": "unverified_ids",
           "type": "[]string",
           "description": "Sorted IDs of live rows this sweep left unverified with a liveness note, whether it wrote the note or found it already current: rows whose agent process could not be checked and which tmux did not mark, for example because their own session is present, tmux could not tell or was unavailable, or tmux was not called, or their recorded tmux session name cannot be used (empty, a control character, or a character tmux stores differently: no tmux call, and a liveness note of its own; removing such a row is a human's decision, see docs/operator-actions.md). Never a pending row inside the pending grace period or while its launch runs. A row whose guarded write found it changed or gone, or failed, a row whose note was cleared, and a pending row noted unreported (its agent alive, no hook reported since its launch; find it by liveness_note in get or list) are in neither list. Never null; [] when none.",
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
+        },
+        {
+          "name": "unowned_sessions",
+          "type": "[]UnownedSession",
+          "description": "Read-only report of sessions with a valid label for this store whose instance id matches no row of any status. Always present and non-null; [] when none. See docs/caller-contract.md#sweep-results.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null

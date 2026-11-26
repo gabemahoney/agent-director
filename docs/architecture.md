@@ -1942,7 +1942,7 @@ files carry the detail.
 | `unusable.go` | `UnusableKind` and `Unusable(name)`, the unusable recorded-name guard. |
 | `agent_process.go` | `ProcIdentity`, `AgentSource`, `AgentProcess`, `SelectAgentProcess`, `ProcState` and `JudgeProcess`. |
 | `pane_token.go` | `PaneMatch` and `PaneByToken(panes, token)`. |
-| `sweep.go` | `Sweep`, `StoppedSockets`, `NewSweep`, `NewSweepFrom`, `(*Sweep) Lookup`, `PaneLister`, `PaneListing`, `(*Sweep) ListPanes`. |
+| `sweep.go` | `Sweep`, `StoppedSockets`, `NewSweep`, `NewSweepFrom`, `(*Sweep) Lookup`, `PaneLister`, `PaneListing`, `(*Sweep) ListPanes`, `(*Sweep) Answer`. |
 | `starting_session.go` | `Elapsed` with `Under`, `SessionAge`, `StartingSessionOutcome` (`StillStopping`, `StillStarting`, `PastBoth`), `StartingSessionInput`, `StartingSessionClass` and `StartingSession`. |
 
 **Entry points.**
@@ -2231,11 +2231,15 @@ record of stopped sockets. It is not for concurrent use.
   answers, pane listings and spent budget belong to this Sweep alone.
 - `(*Sweep) Lookup(row Launch, holderName string) Result`: **one lookup per
   socket**, keyed by `row.Socket` exactly as passed (never resolved or
-  created). The first row to reach a socket makes its one
-  `c.Lookup(row.Socket)` call and the outcome (answer or error) is held;
-  every row of that socket is then mapped from the held outcome through the
+  created). The first eligible `Lookup` or `Answer` for a socket makes its
+  one `c.Lookup` call and holds the outcome (answer or error). Each row of
+  that socket is then mapped from the held outcome through the
   same outcome mapping and `Classify` as `tmux.Lookup`, with its own
   `Launch`, so each row is judged against its own recorded server.
+- `(*Sweep) Answer(socket string) (LookupAnswer, bool)` supplies session reports
+  with the same held lookup, socket stop rule and budget. **Must use:** reports
+  over sessions use `Answer`, never a separate lookup or budget. Failed, stopped
+  or budget-exhausted sockets supply no answer; returned sessions are a copy.
 - `(*Sweep) ListPanes(pl PaneLister, row Launch) PaneListing`: the adoption
   pane listing, at most one `pl.ListPanes` call per socket, under the same
   gate, stop rule and budget. `PaneLister` is `ListPanes(socket) ([]Pane,
@@ -20247,6 +20251,24 @@ path), `find_missing_writes.go` (the per-row writers), `sweep_socket.go`
 step). The evidence model, notes, guard and marking order are in
 [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user).
 
+`find_missing_unowned.go` owns the read-only `unowned_sessions` report. After
+row checks it scans every distinct recorded socket in the original selection
+(finished rows included), then the default socket, through `tmux.Sweep.Answer`.
+It shares the run's one default-socket resolution through `sweepSockets.forRow`
+and can initiate a shared lookup even on an empty store or a selection of only
+finished rows. **Must use:** any sweep session report uses this helper,
+which reuses held lookups and their stop state and remaining budget. Valid labels
+for this store qualify only when their instance id has no row of any status;
+inherited `@ad_owner` scope values make a server ambiguous and exclude it.
+Production re-reads candidate ids with the bounded `RecoveryRows` before
+reporting, excluding concurrently created rows and returning an empty report on
+a read failure. Without the all-status `RecoveryRows` capability the report is
+an empty array and makes no report lookups or socket resolution: a live-only
+selection cannot establish that a session has no row.
+Entries contain instance id, socket, session id, name and RFC 3339 UTC creation
+time, sorted by socket then session id. No session action, row write or trail
+record follows. Missing, stopped or budget-skipped answers contribute nothing.
+
 1. `findMissingChecked` selects all agents in one `RecoveryRows(nil, settle)`
    snapshot and sorts by instance ID before `checkActiveRows`. This lightweight
    projection carries the sampled row/launch/process/turn/request-epoch identity
@@ -20354,9 +20376,9 @@ written through `writeLivenessNote`, guarded on the snapshot the sweep
 read, with the SR-11.4 rules of
 [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)
 (an equal note writes nothing; an applied write ticks only on entry from
-no note), and is reported in `unverified_ids`. Such a row gets no tmux
-call, no socket resolution (`sweepSockets.forRow` is not called), no
-lookup and no pane listing, so it neither triggers nor meets the
+no note), and is reported in `unverified_ids`. The row path makes no tmux
+call, socket resolution (`sweepSockets.forRow`), lookup or pane listing for
+that row, so it neither triggers nor meets the
 per-socket stop and spends none of the budget, and it writes no
 `ad.provenance.disagree`. The order is: the pending grace period (a
 `pending` row is checked only once past it), then the process (alive or
@@ -20368,10 +20390,10 @@ row is never marked from tmux evidence; removing it is a human's decision
 evidence is unknown or absent, and whose recorded session name can be used,
 reach tmux, never a Cursor row with a recorded gateway; eligible display samples reuse the same lookups (see
 [Shared active checks](#shared-active-checks)). The run holds one `tmux.Sweep` (see
-[Sweep](#sweep-sweepgo)): one lookup per socket per run, taken by the first
-row that needs it and shared by every later row of that socket, each row
-judged against its own launch (the shared `rowLaunch`: instance id, token,
-recorded server identity, this store's `store_id`, socket) and holding its
+[Sweep](#sweep-sweepgo)): one lookup per socket per run, initiated by the first
+eligible `Lookup` or `Answer`. On the row path, each row is classified from
+that held outcome against its own launch (the shared `rowLaunch`: instance id,
+token, recorded server identity, this store's `store_id`, socket), with its
 recorded session name as the holder name.
 
 - **Which socket.** A row's recorded `tmux_socket`, exactly as recorded; the
@@ -20379,7 +20401,8 @@ recorded session name as the holder name.
   before the release) uses the caller's socket through the shared no-socket
   helper `sweepSockets.forRow` (`pkg/api/sweep_socket.go`), which resolves
   it through `rowSocket` / `spawn.ResolveQuerySocket` at most once per run,
-  only when such a row reaches the lookup, and creates nothing. A missing
+  creating nothing. The row path requests resolution when such a row reaches
+  its lookup; the session report shares that resolution. A missing
   per-user directory is no refusal: the lookup at its would-be socket reads
   tmux's no-socket reply (Gone). An unusable one means no tmux call for
   those rows: the first gets tmux unavailable, every later one not called.
@@ -20465,8 +20488,8 @@ live `pending` row noted `unreported` (or found already noted so) are in
 neither list; `get` and `list` show the note. Both lists are sorted and
 never null, on a failure too: the selection read's error, and
 `ErrClientClosed` from `Client.Sweep` or its alias on a closed Client, come with
-an empty `SweepResult` (counts 0, `Checks`, `IDs` and `UnverifiedIDs` non-nil
-and empty). These errors are not successful empty sweeps. The verb's
+an empty `SweepResult` (counts 0, `Checks`, `IDs`, `UnverifiedIDs` and
+`UnownedSessions` non-nil and empty). These errors are not successful empty sweeps. The verb's
 manifest error list declares `ErrStoreBusy`, for a selection read that did
 not finish within its bound (nothing was checked), and keeps
 `ErrProbeUnsupported` (SR-1.7), which is never returned.
@@ -20500,7 +20523,7 @@ not finish within its bound (nothing was checked), and keeps
 | --- | --- | --- |
 | `find_missing_lookup.go` | `lookupRow` (SR-11.3's table), `oursRow`, `adoptedPaneRow`, `lookupMarkRow`, `emitRowNameHeld`, `notCalledNote` (each row's `tmux.Launch` comes from the shared `rowLaunch`, `lookup_outcome.go`). | The one mapping from a sweep row's lookup to its mark or note; a sweep never decides a row from a `tmux.Result` another way. |
 | `find_missing_writes.go` | The per-row outcome writers, shared by the process path and the tmux path: `markMissingSameLife` (the pinned marking order: guarded `MarkMissingIfSameLife`, whose transaction also closes the row's open permission requests and running subagent entries, then one `ad.find_missing.tick` with any extra fields the tmux path passes), `markEndedSameLife` (end-report recovery: guarded `MarkEndedIfSameLife` through `EndedMover`, whose transaction makes the same closes, then one `ad.find_missing.tick` with `new_state` `ended`, the reason and extra fields the caller passes; not in `ids` or `unverified_ids`; shared by the sweep's two gone-process paths, `goneRow`, and by pause's end-report check; [signal pause](#busy-uncovered-codex-pause) supplies its bounded adapter), `writeLivenessNote` (skips a note equal to the one read; the guarded `SetLivenessNoteIfSameLife`; the SR-11.4 tick rule in `noteTickReason`, emitted by `emitNoteTick`), `clearLivenessNote` (no write for a row with no note; the guarded `ClearLivenessIfSameLife`, no tick) and `writeUnreportedNote` (b.kdf: no write for a row already noted `unreported`; the guarded `NoteUnreportedIfSameLife`; the same tick rule through `emitNoteTick`; not in `ids` or `unverified_ids`; its caller `aliveRow` never passes a row noted `provenance_conflict`). Each takes the snapshot to guard on (the read one, or the adoption's) and returns a `findMissingWrite`; a changed, absent or failed write ticks nothing and adds to neither list. All identities live at selection remain in `checks`; store errors are logged through `logFindMissing`. | The only way a sweep marks, notes or clears a row: every mark, Codex move, note write, clear and `unreported` note (process or tmux evidence, adopted or not) goes through these five writers; a sweep's Codex end-report recovery uses `markEndedSameLife` only after proven process exit and an end report; never call the guarded store writes, write a tick or deny permission requests for a sweep row another way. |
-| `sweep_socket.go` | `sweepSockets.forRow(recorded)`: the socket a sweep row's calls use, the caller's resolved at most once per run for rows that record none, creating nothing; a refused resolution gives tmux unavailable, then not called. It implements SR-3.3's socket rule for a sweep (a recorded socket exactly as recorded; none recorded: the caller's socket, resolved as tmux would through `rowSocket` / `spawn.ResolveQuerySocket`, creating nothing, LFR H1), with SR-3.15's stop after a refusal. | The shared no-socket helper: every sweep (`find-missing`, and `expire` for each row that reaches its lookup) takes a row's socket from one `sweepSockets` per run; never resolve a sweep row's socket another way. |
+| `sweep_socket.go` | `sweepSockets.forRow(recorded)`: the socket a sweep row's calls use, also used by the session report for the default socket. It uses a recorded socket exactly as recorded; otherwise it resolves the caller's through `rowSocket` / `spawn.ResolveQuerySocket` at most once per run, creating nothing (SR-3.3, LFR H1). A refused resolution gives tmux unavailable, then not called (SR-3.15). | The shared no-socket helper: every sweep (`find-missing`, and `expire` for each row that reaches its lookup) and session report takes its socket from one `sweepSockets` per run; never resolve a sweep socket another way. |
 
 `missing` is a check's judgement on available evidence, not
 proof that the agent has exited.

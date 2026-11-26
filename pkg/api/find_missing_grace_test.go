@@ -4,8 +4,8 @@ package api_test
 // AC-FM-12, AC-FM-14, AC-CFG-02): Client.FindMissing on a real store with the Client's clock and configured grace,
 // its tmux client a tmuxfix.Recorder (no server: Gone) and its start-time reader the procfix fake; rows come from
 // killEnv (kill_fixture_test.go). Inside the grace period a row is never judged; past it a dead recorded pane
-// process is marked proc_absent with no tmux call, and a row whose process cannot be checked is decided by one
-// lookup. The grace rule's boundaries and launch-start values are store.InsidePendingGrace's and the live-row
+// process is marked proc_absent with no row lookup, and a row whose process cannot be checked is decided by one
+// lookup. Independent session reporting still scans the recorded and default sockets (b.9ps). The grace rule's boundaries and launch-start values are store.InsidePendingGrace's and the live-row
 // read's (internal/store); spawn's, reuse's and resume's rows that never report in are advice_follow_resume_test.go's
 // (B1) through this same Client path.
 
@@ -56,24 +56,40 @@ var fgcEvidences = []struct {
 // fgcRun is one sweep's result, its tmux calls, lookups and start-time reads.
 type fgcRun struct {
 	res                  api.FindMissingResult
+	calls                []tmuxfix.SocketCall
 	tmux, lookups, reads int
 }
 
 // fgcSweep runs c.FindMissing and returns what it did.
 func fgcSweep(t *testing.T, c *api.Client, rec *tmuxfix.Recorder, pc *procfix.Checker) fgcRun {
 	t.Helper()
+	callsBefore := len(rec.SocketCalls())
 	tmuxBefore, lookupsBefore, readsBefore := pendCalls(rec), len(rec.SocketCallsOf(tmux.CallLookup)), len(pc.StartTimeCalls())
 	res, err := c.FindMissing(context.Background())
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
 	drainTrail(t)
-	return fgcRun{res: res, tmux: pendCalls(rec) - tmuxBefore,
+	return fgcRun{res: res, calls: rec.SocketCalls()[callsBefore:], tmux: pendCalls(rec) - tmuxBefore,
 		lookups: len(rec.SocketCallsOf(tmux.CallLookup)) - lookupsBefore, reads: len(pc.StartTimeCalls()) - readsBefore}
 }
 
+// b.9ps: both protected and checked rows share the independent session scans;
+// the tick still proves whether the row itself needed a lookup.
+func fgcAssertReportCalls(t *testing.T, run fgcRun) {
+	t.Helper()
+	want := []fmbCall{{tmux.CallLookup, apitest.TestSocket}, {tmux.CallLookup, reportSocket()}}
+	got := []fmbCall{}
+	for _, c := range run.calls {
+		got = append(got, fmbCall{c.Call, c.Socket})
+	}
+	if !slices.Equal(got, want) || run.tmux != 2 || run.lookups != 2 {
+		t.Errorf("tmux calls = %+v; want report scans %+v", got, want)
+	}
+}
+
 // fgcAssertInside fails unless the sweep held id's row inside its grace period: pending, no liveness note, no tick,
-// in no list, nothing read and no tmux call.
+// in no list, no process read, and only the independent session-report lookups (b.9ps).
 func fgcAssertInside(t *testing.T, dbPath, id string, run fgcRun) {
 	t.Helper()
 	cols, err := apitest.ReadSpawnColumns(dbPath, id)
@@ -90,9 +106,10 @@ func fgcAssertInside(t *testing.T, dbPath, id string, run fgcRun) {
 	if n := len(pendTrail(t, "ad.find_missing.tick", id)); n != 0 {
 		t.Errorf("ad.find_missing.tick lines for the row = %d; want 0", n)
 	}
-	if run.tmux != 0 || run.reads != 0 {
-		t.Errorf("tmux calls %d, start-time reads %d; want none", run.tmux, run.reads)
+	if run.reads != 0 {
+		t.Errorf("start-time reads %d; want none", run.reads)
 	}
+	fgcAssertReportCalls(t, run)
 }
 
 // fgcAssertMarked fails unless id's row is missing with ended_at set and no launch start, listed in ids, with one
@@ -112,11 +129,13 @@ func fgcAssertMarked(t *testing.T, dbPath, id string, run fgcRun, want fgcWant) 
 		t.Errorf("ad.find_missing.tick lines = %v; want one with reason %s from pending", ticks, want.reason)
 	} else if gone := (tmux.Result{Verdict: tmux.Gone}).Token(); want.lookups > 0 && ticks[0]["lookup_outcome"] != gone {
 		t.Errorf("tick lookup_outcome = %#v; want %q", ticks[0]["lookup_outcome"], gone)
+	} else if outcome, ok := ticks[0]["lookup_outcome"]; want.lookups == 0 && ok {
+		t.Errorf("tick lookup_outcome = %#v; want no row lookup for process evidence", outcome)
 	}
-	if run.tmux != want.lookups || run.lookups != want.lookups || run.reads != want.reads {
-		t.Errorf("tmux calls %d (lookups %d), start-time reads %d; want %d lookup(s) only and %d",
-			run.tmux, run.lookups, run.reads, want.lookups, want.reads)
+	if run.reads != want.reads {
+		t.Errorf("start-time reads %d; want %d", run.reads, want.reads)
 	}
+	fgcAssertReportCalls(t, run)
 }
 
 // TestFindMissingGraceConfigured: pending_grace_seconds at its safe minimum holds a row 1 s before that period
@@ -131,18 +150,34 @@ func TestFindMissingGraceConfigured(t *testing.T) {
 	for _, ev := range fgcEvidences {
 		t.Run(ev.name, func(t *testing.T) {
 			t.Parallel()
-			e := newKillEnv(t)
-			configured, _ := e.client(t, apitest.TmuxInt(config.TmuxPendingGraceSeconds, fgcMinGraceSeconds))
-			dflt, _ := e.client(t)
-			launch := e.clock.Now()
-			id := fgcSeedPending(t, e, ev.pane, ev.proc, launch)
-
-			fgcSetClock(e.clock, launch.Add(grace-time.Second))
-			fgcAssertInside(t, e.dbPath, id, fgcSweep(t, configured, e.rec, e.pc))
-
-			fgcSetClock(e.clock, launch.Add(grace+time.Second))
-			fgcAssertInside(t, e.dbPath, id, fgcSweep(t, dflt, e.rec, e.pc))
-			fgcAssertMarked(t, e.dbPath, id, fgcSweep(t, configured, e.rec, e.pc), ev.want)
+			for _, sample := range []struct {
+				name               string
+				offset             time.Duration
+				configured, marked bool
+			}{
+				{"configured before", grace - time.Second, true, false},
+				{"default after", grace + time.Second, false, false},
+				{"configured after", grace + time.Second, true, true},
+			} {
+				t.Run(sample.name, func(t *testing.T) {
+					// b.9ps: each boundary starts at its stated instant; a prior
+					// report's lookup time must neither shift it nor require a rewind.
+					e := newKillEnv(t)
+					var settings []apitest.TmuxSetting
+					if sample.configured {
+						settings = append(settings, apitest.TmuxInt(config.TmuxPendingGraceSeconds, fgcMinGraceSeconds))
+					}
+					c, _ := e.client(t, settings...)
+					launch := e.clock.Now()
+					id := fgcSeedPending(t, e, ev.pane, ev.proc, launch)
+					fgcSetClock(e.clock, launch.Add(sample.offset))
+					if sample.marked {
+						fgcAssertMarked(t, e.dbPath, id, fgcSweep(t, c, e.rec, e.pc), ev.want)
+					} else {
+						fgcAssertInside(t, e.dbPath, id, fgcSweep(t, c, e.rec, e.pc))
+					}
+				})
+			}
 		})
 	}
 }

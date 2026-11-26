@@ -1068,6 +1068,8 @@ func TestPauseClaimOwnerDispositions(t *testing.T) {
 				if _, err := e.c.Sweep(context.Background()); err != nil {
 					t.Error(err)
 				}
+				assertReportLookupsOnly(t, e.rec, e.r.Socket) // b.9ps: calls belong to this sweep only.
+				e.rec.Reset()                                 // The remaining pause path must still make no tmux call.
 				return nil
 			}
 		}, signals: 1, claims: []string{"ended launch_end r3 intent"}, ended: true},

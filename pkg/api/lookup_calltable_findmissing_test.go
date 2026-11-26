@@ -95,7 +95,35 @@ func runCallTableFindMissing(t *testing.T, _ callTableVerb, col callTableColumn,
 					assertMarkReason(t, before, r.ID, want.mark)
 				}
 				assertCallTableNameHeld(t, r.ID, want.mark == "tmux_name_held")
-				e.assertKillCalls(t, cell.calls...)
+				// b.9ps: preserve every row-level call; append only previously
+				// unscanned recorded/default sockets for the independent report.
+				wantCalls := []fmbCall{}
+				looked := map[string]bool{}
+				for _, call := range cell.calls {
+					wantCalls = append(wantCalls, fmbCall{call, r.Socket})
+					if call == tmux.CallLookup {
+						looked[r.Socket] = true
+					}
+				}
+				sockets := []string{r.Spawn.Identity.Socket}
+				defaultUsable := true
+				for _, u := range callTableUnusables() {
+					if u.outcome == col.outcome && u.noSocket {
+						defaultUsable = false
+					}
+				}
+				if defaultUsable {
+					sockets = append(sockets, reportSocket())
+				}
+				for _, socket := range sockets {
+					if socket != "" && !looked[socket] {
+						wantCalls = append(wantCalls, fmbCall{tmux.CallLookup, socket})
+						looked[socket] = true
+					}
+				}
+				if got := fmbCalls(e.rec); !slices.Equal(got, wantCalls) || len(e.rec.Calls()) != 0 {
+					t.Errorf("socket calls = %+v; want row calls and distinct report lookups %+v, no name-based calls", got, wantCalls)
+				}
 			})
 		}
 	}
@@ -120,7 +148,7 @@ func assertCallTableNameHeld(t *testing.T, id string, held bool) {
 // session holds the recorded name, else tmux_absent), a different server
 // and a provenance conflict are noted, and an unreadable answer or tmux
 // unavailable leave the "not called" note. An unusable recorded name is
-// noted with no tmux call (SR-3.2).
+// noted without a row lookup (SR-3.2); independent report scans still run (b.9ps).
 func callTableFindMissing() callTableVerb {
 	lookup := []tmux.Call{tmux.CallLookup}
 	noted := func(unknown, none string) callTableCell {
@@ -169,7 +197,7 @@ func callTableFindMissing() callTableVerb {
 
 // callTableFindMissingUnusable is find-missing's unusable-name cells (SR-11.3):
 // for either evidence, the row left unverified with the fixture's note and
-// its entry tick, with no tmux call.
+// its entry tick, with no row lookup. Only report scans are added (b.9ps).
 func callTableFindMissingUnusable() map[callTableOutcome]callTableCell {
 	cells := map[callTableOutcome]callTableCell{}
 	for _, u := range callTableUnusables() {

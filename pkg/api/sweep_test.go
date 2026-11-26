@@ -102,9 +102,9 @@ func TestSweepAliases(t *testing.T) {
 			}
 			// Only e-working's idle-screen display adapter attempts a pane lookup.
 			// Its distinct socket keeps other rows' unexpected lookups visible.
-			e.assertPaneCalls(t, tmux.CallLookup)
-			if calls, want := e.rec.SocketCalls(), []tmuxfix.SocketCall{{Call: tmux.CallLookup, Socket: workingSocket}}; !reflect.DeepEqual(calls, want) {
-				t.Errorf("socket calls = %+v; want only e-working display lookup %+v", calls, want)
+			e.assertPaneCalls(t, tmux.CallLookup, tmux.CallLookup, tmux.CallLookup)
+			if calls, want := e.rec.SocketCalls(), []tmuxfix.SocketCall{{Call: tmux.CallLookup, Socket: workingSocket}, {Call: tmux.CallLookup, Socket: apitest.TestSocket}, {Call: tmux.CallLookup, Socket: reportSocket()}}; !reflect.DeepEqual(calls, want) {
+				t.Errorf("socket calls = %+v; want e-working display lookup, then the recorded/default report lookups %+v", calls, want)
 			}
 		})
 	}
@@ -120,13 +120,17 @@ func TestSweepNoLiveRows(t *testing.T) {
 				e.seedRow(t, killRowSpec{State: state})
 			}
 			got := mustSweep(t, e.st, e.pc, fmSweep{canonical: canonical, tmux: e.rec, clock: e.clock})
-			if raw := jsonOf(t, got); raw != `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[]}` {
+			if raw := jsonOf(t, got); raw != `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[],"unowned_sessions":[]}` {
 				t.Errorf("canonical=%v states=%v: %s", canonical, states, raw)
 			}
 			if calls := e.pc.StartTimeCalls(); len(calls) != 0 {
 				t.Errorf("finished rows were probed: %v", calls)
 			}
-			e.assertNoTmuxCall(t)
+			var sockets []string
+			if len(states) > 0 {
+				sockets = append(sockets, apitest.TestSocket)
+			}
+			assertReportLookupsOnly(t, e.rec, sockets...) // b.9ps: finished rows contribute sockets only.
 		}
 	}
 }
@@ -294,6 +298,7 @@ func TestSweepFailedAttemptCanBeComplete(t *testing.T) {
 	a := e.seedRow(t, killRowSpec{State: store.StateWaiting})
 	b := e.seedRow(t, killRowSpec{State: store.StateWaiting})
 	s := &busyProcessRecordStore{Store: e.st, busy: a.ID}
+	checkedAt := e.clock.Now() // b.9ps: report scans happen after the process samples.
 	got, err := runFindMissing(s, e.pc, fmSweep{canonical: true, tmux: e.rec, clock: e.clock})
 	if err != nil {
 		t.Fatal(err)
@@ -311,9 +316,9 @@ func TestSweepFailedAttemptCanBeComplete(t *testing.T) {
 		if row.Completion != "complete" || row.Reason != nil {
 			t.Errorf("attempted row = %+v; want complete", row)
 		}
-		want := confirmed(e.clock.Now(), "process")
+		want := confirmed(checkedAt, "process")
 		if row.InstanceID == a.ID {
-			want = "not_confirmed|-|-|" + confAt(e.clock.Now()) + "|busy"
+			want = "not_confirmed|-|-|" + confAt(checkedAt) + "|busy"
 		}
 		if conf(row.Confirmations.ProcessLiveness) != want {
 			t.Errorf("%s: process = %s; want %s", row.InstanceID, conf(row.Confirmations.ProcessLiveness), want)
@@ -450,7 +455,7 @@ func TestSweepNarrowStoreAndFatalSelection(t *testing.T) {
 			t.Errorf("narrow coverage = %+v; want explicit unsupported", check)
 		}
 		failed, err := runFindMissing(&fakeFindMissingStore{listErr: errSentinel}, pc, fmSweep{canonical: canonical})
-		if !errors.Is(err, errSentinel) || jsonOf(t, failed) != `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[]}` {
+		if !errors.Is(err, errSentinel) || jsonOf(t, failed) != `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[],"unowned_sessions":[]}` {
 			t.Errorf("fatal selection = %+v %v", failed, err)
 		}
 	}
@@ -666,7 +671,7 @@ func TestSweepProtectedCursorUnknownGatewayReason(t *testing.T) {
 				if samples != 1 {
 					t.Errorf("gateway samples=%d; want 1", samples)
 				}
-				e.assertNoTmuxCall(t)
+				assertReportLookupsOnly(t, e.rec) // b.9ps: no row fallback, only the default session scan.
 			})
 		}
 	}
@@ -736,7 +741,7 @@ func TestSweepOptionalWriterCoverage(t *testing.T) {
 			if records := ticksSince(t, mark, r.ID); len(records) != 0 {
 				t.Errorf("unavailable/no-op repair ticked: %+v", records)
 			}
-			e.assertNoTmuxCall(t)
+			assertReportLookupsOnly(t, e.rec, r.Socket) // b.9ps: keep no-input/no-mutation coverage.
 		})
 	}
 }

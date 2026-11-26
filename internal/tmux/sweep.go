@@ -15,8 +15,8 @@ type StoppedSockets struct {
 }
 
 // Sweep serves one run (SRD SR-3.15, SR-13.3, SR-13.5,
-// Appendix F.2; LFR M7): one lookup per socket, taken at the first row of that
-// socket that reaches the Sweep, the stop rule per socket, and the run's tmux
+// Appendix F.2; LFR M7): one lookup per socket, initiated by the first
+// eligible Lookup or Answer, the stop rule per socket, and the run's tmux
 // time budget, measured with the injected clock. find-missing also takes its
 // adoption pane listing through it (ListPanes), under the same stop rule and
 // budget. Its stop rule may start from and add to a caller's StoppedSockets
@@ -92,10 +92,10 @@ func NewSweepFrom(c LookupClient, pc ProcChecker, now func() time.Time, budget t
 	return &Sweep{c: c, pc: pc, now: now, budget: budget, sockets: map[string]*sweepSocket{}, stopped: stopped}
 }
 
-// Lookup returns row's result for this run (SR-3.15). On the first row of a
-// socket it makes that socket's one LookupClient.Lookup call and holds its
-// outcome (the answer or the call error); every row of the socket, that one
-// included, is then classified from the held outcome through the lookup's one
+// Lookup returns row's result for this run (SR-3.15). The first eligible
+// Lookup or Answer for a socket makes its one LookupClient.Lookup call and
+// holds the outcome (answer or call error). Lookup classifies each row from
+// that held outcome, including one initiated by Answer, through the lookup's one
 // outcome mapping (Classify for an answer), with the row's own Launch and
 // holderName, so per-row facts such as the recorded server process are judged
 // per row. The result is Skipped, with no call, when the budget is spent or
@@ -105,15 +105,44 @@ func (s *Sweep) Lookup(row Launch, holderName string) Result {
 	if !s.open(row.Socket) {
 		return skipped()
 	}
+	if !s.lookup(row.Socket, st) {
+		return skipped()
+	}
+	return s.stopOn(row.Socket, resultForCall(st.ans, st.lookErr, s.pc, row, holderName))
+}
+
+// Answer returns a socket's lookup answer for a report over its sessions.
+// Session reports must use this method, sharing Lookup's held outcome, stop
+// rule and budget, rather than making their own lookup (docs/architecture.md).
+// ok is false when the socket stopped, the budget is spent (including by this
+// call), or the lookup failed. Unreadable and unavailable failures stop the
+// socket as they do for Lookup. The returned sessions are the caller's copy.
+func (s *Sweep) Answer(socket string) (LookupAnswer, bool) {
+	st := s.socket(socket)
+	if !s.open(socket) || !s.lookup(socket, st) {
+		return LookupAnswer{}, false
+	}
+	if st.lookErr != nil {
+		s.stopOn(socket, resultForFailure(st.lookErr, s.pc, Launch{Socket: socket}))
+		return LookupAnswer{}, false
+	}
+	ans := st.ans
+	ans.Sessions = slices.Clone(ans.Sessions)
+	return ans, true
+}
+
+// lookup holds the socket's one call, discarding a call that spends the budget.
+// Callers check open first and apply the failure's stop rule for their use.
+func (s *Sweep) lookup(socket string, st *sweepSocket) bool {
 	if !st.looked {
 		var ans LookupAnswer
 		var err error
-		if !s.timed(func() { ans, err = s.c.Lookup(row.Socket) }) {
-			return skipped()
+		if !s.timed(func() { ans, err = s.c.Lookup(socket) }) {
+			return false
 		}
 		st.looked, st.ans, st.lookErr = true, ans, err
 	}
-	return s.stopOn(row.Socket, resultForCall(st.ans, st.lookErr, s.pc, row, holderName))
+	return true
 }
 
 // PaneLister is the pane-listing capability a sweep's adoption listing needs

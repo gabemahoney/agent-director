@@ -18,6 +18,7 @@ Finished rows skip live-agent checks; late exact input proof can still be
 recorded without sending input.
 `status`, `get`, `get-many` and `list` run those checks for their returned agents. Existing
 `find-missing` schedules keep working: it is an alias of `sweep`.
+The result also reports [`unowned_sessions`](caller-contract.md#sweep-results).
 
 For agents no `status`, `get`, `get-many` or `list` returns, a longer sweep interval
 delays discovery of exits, missed Codex turn endings, stale permission state
@@ -115,8 +116,8 @@ lines carry `PATH` and `TMUX_TMPDIR`: the sweep must reach the tmux server the
 agents use. `HOME` is carried when it differs from the passwd home because the
 binary keeps its files in `$HOME/.config/agent-director`.
 
-See [Sweep results](caller-contract.md#sweep-results) for liveness outcomes,
-counters and check coverage. A `pending` row is not judged inside its grace
+See [Sweep results](caller-contract.md#sweep-results) for session reports,
+liveness outcomes, counters and check coverage. A `pending` row is not judged inside its grace
 period or while its launch owner is alive, except a Cursor row whose recorded
 gateway is gone.
 

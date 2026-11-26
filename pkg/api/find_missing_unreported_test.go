@@ -132,8 +132,9 @@ func TestFindMissingNotesLivePendingRowUnreported(t *testing.T) {
 				if lostReply {
 					writes++ // the adoption first
 					assertOneDisagree(t, mark, e.id, "adopted", "left_unreported", 1)
-				} else if calls := e.rec.SocketCalls(); len(calls) != 0 {
-					t.Errorf("tmux calls = %+v; want none (the process decides)", calls)
+				} else {
+					// The process decides: no call for the row, only the unowned_sessions report's (b.9ps).
+					assertReportLookupsOnly(t, e.rec, apitest.TestSocket)
 				}
 				if after.RowVersion != before.RowVersion.(int64)+writes {
 					t.Errorf("row_version %v -> %v; want +%d", before.RowVersion, after.RowVersion, writes)

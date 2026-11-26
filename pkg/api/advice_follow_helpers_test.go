@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -120,12 +121,18 @@ func adviceAssertManifest(t *testing.T, verb, param string, phrases ...string) {
 	}
 }
 
+// adviceReportTime is the most virtual time find-missing's unowned_sessions
+// report (b.9ps) adds once the row is judged, before get reads it: one query
+// timeout each for the row's socket and the default socket.
+var adviceReportTime = 2 * config.Tmux{}.EffectiveQueryTimeout()
+
 // adviceAwaitFinished follows "do not retry until get shows the row ended or
 // missing" and the pending-row texts that point to find-missing: get shows id
-// pending with a launch start; with inside set, find-missing 1 s before the
-// pending grace period ends leaves it pending and inside runs; 1 s after it
-// ends find-missing runs and get must show the row ended or missing, which it
-// returns. The clock only moves forward.
+// pending with a launch start; with inside set, find-missing 1 s plus
+// adviceReportTime before the pending grace period ends, so get still reads
+// inside it, leaves it pending and inside runs; 1 s after it ends find-missing
+// runs and get must show the row ended or missing, which it returns. The clock
+// only moves forward.
 func adviceAwaitFinished(t *testing.T, c *api.Client, clock *tmuxfix.Clock, id string, inside func()) string {
 	t.Helper()
 	row, err := c.Get(id)
@@ -148,7 +155,7 @@ func adviceAwaitFinished(t *testing.T, c *api.Client, clock *tmuxfix.Clock, id s
 		return row.State
 	}
 	if inside != nil {
-		if st := sweep(start.Add(fmGrace - time.Second)); st != store.StatePending {
+		if st := sweep(start.Add(fmGrace - time.Second - adviceReportTime)); st != store.StatePending {
 			t.Fatalf("Get(%s) after find-missing inside the pending grace period = %q; want pending", id, st)
 		}
 		inside()

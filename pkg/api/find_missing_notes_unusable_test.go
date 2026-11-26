@@ -34,16 +34,9 @@ func fmuReps() []unusableNameFixture {
 	return out
 }
 
-// assertNoTmux fails unless rec saw no tmux call at all.
-func assertNoTmux(t *testing.T, rec *tmuxfix.Recorder) {
-	t.Helper()
-	if len(rec.SocketCalls()) != 0 || len(rec.Calls()) != 0 {
-		t.Errorf("tmux calls = %+v %+v; want none", rec.SocketCalls(), rec.Calls())
-	}
-}
-
 // TestFindMissingUnusableNameNoteRealStore: on a real store, entry writes the note and its first unverified time
-// with one tick; an overwrite keeps that time; the same note leaves the row untouched; none makes a tmux call.
+// with one tick; an overwrite keeps that time; the same note leaves the row untouched. Only the
+// independent recorded/default session-report lookups run for unusable rows (b.9ps).
 func TestFindMissingUnusableNameNoteRealStore(t *testing.T) {
 	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	const since = "2026-09-01 10:00:00"
@@ -81,7 +74,7 @@ func TestFindMissingUnusableNameNoteRealStore(t *testing.T) {
 					t.Errorf("liveness_unverified_since = %v; want the first stored %s", now.LivenessUnverifiedSince, since)
 				}
 				assertNoteTick(t, before, "r", tc.tick)
-				assertNoTmux(t, rec)
+				assertReportLookupsOnly(t, rec, apitest.TestSocket)
 			})
 		}
 	}

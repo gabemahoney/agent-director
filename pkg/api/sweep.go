@@ -41,6 +41,11 @@ type SweepCheck struct {
 // snapshot, retaining them even when they finish, change, disappear or cannot
 // be checked. Only selection errors fail the call; interrupted work for those
 // agents remains in Checks.
+// UnownedSessions reports this store's labelled sessions whose instance id has
+// no row, scanning all recorded sockets (finished rows included) and the default
+// server after row checks, through the same lookup cache, stop rule and budget.
+// Without the all-status RecoveryRows capability it returns an empty array
+// without report lookups. No write or trail record follows; [] does not prove absence.
 // Missing is a check's judgement on available evidence, not proof that the
 // agent has exited. Run as the agents' user in their tmux environment.
 //
@@ -78,7 +83,7 @@ func (c *Client) Sweep(ctx context.Context) (SweepResult, error) {
 }
 
 func emptySweepResult() SweepResult {
-	return SweepResult{IDs: []string{}, UnverifiedIDs: []string{}, Checks: []SweepCheck{}}
+	return SweepResult{IDs: []string{}, UnverifiedIDs: []string{}, Checks: []SweepCheck{}, UnownedSessions: []UnownedSession{}}
 }
 
 // sweepCompletion consumes adapter outcomes, without sampling or checking

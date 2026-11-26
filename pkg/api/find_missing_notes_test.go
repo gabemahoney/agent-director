@@ -190,7 +190,13 @@ func TestFindMissingChangedBetweenReadAndWrite(t *testing.T) {
 				o := fmSweep{budget: fmBudgetSpent}
 				if w.rec != nil {
 					fs, o.budget, o.tmux = s, 0, w.rec(t, dbPath)
-					o.tmux.AfterCall(w.after, func(tmuxfix.SocketCall, error) { change() })
+					// The row's own socket only: the unowned_sessions report's later lookup of the default
+					// socket (b.9ps) comes after the row's write and must not change it again.
+					o.tmux.AfterCall(w.after, func(c tmuxfix.SocketCall, _ error) {
+						if c.Socket == apitest.TestSocket {
+							change()
+						}
+					})
 				}
 
 				res, lg, before := sweepFrom(t, fs, paneChecker(w.proc), o)

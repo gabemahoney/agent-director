@@ -1454,7 +1454,7 @@ describe("find-missing", () => {
         using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.findMissing({ timeout_ms: 1 });
         // b.915: finished history contributes no checks through either client.
-        expect(ts).toEqual({ checks: [], count: 0, ids: [], unverified: 0, unverified_ids: [] });
+        expect(ts).toEqual({ checks: [], count: 0, ids: [], unverified: 0, unverified_ids: [], unowned_sessions: [] });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
           ignorePaths: loadIgnorePathsForVerb("find-missing"),
@@ -1486,7 +1486,7 @@ describe("sweep", () => {
         using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.sweep({ timeout_ms: 1 });
         // b.915: finished history contributes no checks through either client.
-        expect(ts).toEqual({ checks: [], count: 0, ids: [], unverified: 0, unverified_ids: [] });
+        expect(ts).toEqual({ checks: [], count: 0, ids: [], unverified: 0, unverified_ids: [], unowned_sessions: [] });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
           ignorePaths: loadIgnorePathsForVerb("sweep"),

@@ -223,6 +223,8 @@ func TestPauseUncoveredCodexConcurrentMissing(t *testing.T) {
 		if _, err := e.c.Sweep(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+		assertReportLookupsOnly(t, e.rec, e.r.Socket) // b.9ps: calls belong to this sweep only.
+		e.rec.Reset()                                 // The remaining pause path must still make no tmux call.
 		row, err := e.st.GetSpawn(e.r.ID)
 		if err != nil || row.State != store.StateMissing {
 			t.Fatalf("sweep before pause completion: state=%s, err=%v; want missing", row.State, err)

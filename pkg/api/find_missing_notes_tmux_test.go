@@ -238,7 +238,7 @@ func TestFindMissingNoteConflictReentryRealStore(t *testing.T) {
 
 // TestFindMissingStaleNoteClearedRealStore (AC-FM-13): on a real store an alive row's note (a tmux-path or an
 // unusable-name note) and unverified time are cleared at +1 version; a row without a note is not written (version
-// delta 0). No tmux call, no tick, in neither list.
+// delta 0). Only the shared display reads and report lookup, no tick, in neither list.
 func TestFindMissingStaleNoteClearedRealStore(t *testing.T) {
 	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	notes := append([]string{""}, ntNotes...)
@@ -266,8 +266,9 @@ func TestFindMissingStaleNoteClearedRealStore(t *testing.T) {
 				t.Errorf("row_version delta %d, note %v, since %v; want %d, NULL, NULL", d, now.LivenessNote, now.LivenessUnverifiedSince, delta)
 			}
 			assertNoteTick(t, before, "r", "")
-			if calls := rec.SocketCalls(); len(calls) != 2 || calls[0].Call != tmux.CallLookup || calls[1].Call != tmux.CallListPanes {
-				t.Errorf("tmux calls = %+v; want one shared lookup and pane listing for display observation", calls)
+			wantCalls := []fmbCall{{tmux.CallLookup, apitest.TestSocket}, {tmux.CallListPanes, apitest.TestSocket}, {tmux.CallLookup, reportSocket()}}
+			if calls := fmbCalls(rec); !slices.Equal(calls, wantCalls) || len(rec.Calls()) != 0 {
+				t.Errorf("tmux calls = %+v; want exactly %+v and no name-based calls (b.9ps)", calls, wantCalls)
 			}
 		})
 	}

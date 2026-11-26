@@ -158,6 +158,10 @@ type FindMissingResult struct {
 	// Always non-nil — encodes as [] when no rows were unverified (same
 	// discipline as IDs).
 	UnverifiedIDs []string `json:"unverified_ids"`
+	// UnownedSessions reports this store's labelled tmux sessions whose
+	// instance id matches no row of any status. No write or trail record
+	// follows from this report. Always non-nil; [] when none was found.
+	UnownedSessions []UnownedSession `json:"unowned_sessions"`
 }
 
 // FindMissingLogger is the narrow log surface FindMissing uses to report
@@ -325,8 +329,8 @@ func findMissingAction(r findMissingRow) string {
 //
 // The start-time reader pc (SR-3.8; LFR C1) is the only source of liveness,
 // and the sweep never reads a process environment. t is the lookup and the pane listing (FindMissingTmux), called
-// only through the run's one tmux.Sweep and only for rows whose agent process
-// cannot be checked. pendingGrace is the pending grace period (SR-11.2),
+// only through the run's one tmux.Sweep: for rows whose agent process
+// cannot be checked, then for the read-only unowned session report. pendingGrace is the pending grace period (SR-11.2),
 // sweepBudget the run's tmux time budget (SR-13.5) and now the clock every
 // age and every tmux call's time is measured against; FindMissing never reads
 // time.Now itself (Appendix F.5).
@@ -393,8 +397,9 @@ func findMissingAction(r findMissingRow) string {
 //     tmux_name_held and one ad.launch.name_held when a session holds its
 //     recorded name, tmux_absent otherwise; Can't tell and not called leave
 //     it unverified with a note. One tmux.Sweep serves the run: one lookup
-//     and at most one pane listing per socket, taken at the first row that
-//     needs it, no more calls on a socket after an unreadable or unavailable
+//     per socket, initiated by the first eligible Lookup or Answer, and at
+//     most one pane listing per socket when a row needs it. There are no
+//     more calls on a socket after an unreadable or unavailable
 //     result there, and none at all once sweepBudget is spent. tmux problems
 //     never fail the sweep. A Cursor row with a recorded gateway (pid and
 //     start time) never comes here: an unknown gateway verdict leaves it
@@ -410,6 +415,13 @@ func findMissingAction(r findMissingRow) string {
 //  7. The selected live rows also receive eligible missed-turn, permission,
 //     owned-pane and provisional Claude transcript checks. Late exact native
 //     proof uses only its persistence seam; nothing sends input or answers.
+//
+// After row checks, UnownedSessions scans all recorded sockets (finished rows
+// included) plus the default server through the same Sweep, stop rule and budget.
+// It reports only this store's valid labels whose instance id has no row; no
+// session action, row write or trail record follows. Unreadable or skipped
+// sockets contribute nothing. Stores without the all-status RecoveryRows
+// capability return an empty report and make no report lookups.
 //
 // The result lists are sorted. The only error FindMissing returns is the
 // selection read's, and (c *Client).FindMissing adds one, ErrClientClosed on a
@@ -451,6 +463,7 @@ func findMissingChecked(ctx context.Context, s FindMissingStore, view RelayView,
 	empty := emptySweepResult()
 	var rows []Spawn
 	var refresh func([]string, []store.CursorMissingProof) ([]Spawn, error)
+	var recheck func([]string) ([]Spawn, error)
 	if reader, ok := s.(interface {
 		RecoveryRows([]string, store.SettleRead) ([]Spawn, error)
 	}); ok {
@@ -460,6 +473,7 @@ func findMissingChecked(ctx context.Context, s FindMissingStore, view RelayView,
 			return empty, err
 		}
 		refresh = activeRefresh(s, settle, true, nil)
+		recheck = func(ids []string) ([]Spawn, error) { return reader.RecoveryRows(ids, settle) }
 	} else {
 		// A legacy narrow store exposes only its live identities. It cannot
 		// promise all-agent snapshot selection or the richer adapters.
@@ -512,6 +526,7 @@ func findMissingChecked(ctx context.Context, s FindMissingStore, view RelayView,
 		}
 	}
 	run.missing.Checks = run.sweepChecks(rows)
+	run.missing.UnownedSessions = unownedSessions(ctx, run.live, rows, recheck)
 	return run.missing, nil
 }
 

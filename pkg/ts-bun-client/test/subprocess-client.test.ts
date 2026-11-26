@@ -257,7 +257,9 @@ test("sweep and findMissing preserve incomplete checks and queue order", async (
     process_liveness: "unknown", completion, reason,
     confirmations: {state: unknown, process_liveness: unknown, displayed_state: unknown},
   });
-  const result: SweepResult = {checks: [check("complete", null), check("incomplete", "deadline")], count: 0, ids: [], unverified: 0, unverified_ids: []};
+  const result: SweepResult = {checks: [check("complete", null), check("incomplete", "deadline")], count: 0, ids: [], unverified: 0, unverified_ids: [],
+    unowned_sessions: [{instance_id: "unowned", tmux_socket: "/fixture/tmux/default", tmux_session_id: "$7",
+      tmux_session_name: "kept-session", created_at: "2026-09-30T11:00:00Z"}]};
   const cli = path.join(tmp, `${crypto.randomUUID()}-sweep.sh`);
   const argvFile = path.join(tmp, `${crypto.randomUUID()}-sweep-argv`);
   fs.writeFileSync(cli, `#!/bin/sh

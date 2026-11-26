@@ -556,9 +556,11 @@ case errors.Is(err, api.ErrTmuxSessionConflict):
 `Client.Sweep(ctx)` returns `(SweepResult, error)` for one bounded all-agent
 pass. `SweepResult.Checks` contains a `SweepCheck` per identity live at selection,
 with values, three confirmation records and independent `Completion`/`Reason` fields.
-The result also retains `Count`, `IDs`, `Unverified` and `UnverifiedIDs`. See
+The result also retains `Count`, `IDs`, `Unverified` and `UnverifiedIDs`.
+`UnownedSessions` is a non-nil `[]UnownedSession`; its entries carry `InstanceID`,
+`TmuxSocket`, `TmuxSessionID`, `TmuxSessionName` and `CreatedAt`. See
 [Sweep results](../../docs/caller-contract.md#sweep-results) for membership,
-coverage, counters and failure handling.
+scan scope, ordering, coverage, counters and failure handling.
 
 The exported `Sweep` function accepts the same store, tmux, process checker,
 grace, budget, clock and logger arguments as `FindMissing`. `FindMissing` and
@@ -566,7 +568,9 @@ grace, budget, clock and logger arguments as `FindMissing`. `FindMissing` and
 `FindMissingResult`. Existing `FindMissingStore`, `FindMissingTmux` and
 `FindMissingLogger` interfaces remain accepted. A narrow store can supply only
 live identities and its available checks, so it cannot promise an all-agent
-snapshot and reports unsupported coverage explicitly.
+snapshot and reports unsupported coverage explicitly. Without the all-status
+`RecoveryRows` capability, `UnownedSessions` is an empty array and makes no
+report lookups; live-only membership cannot establish that a session has no row.
 
 ---
 

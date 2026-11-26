@@ -972,9 +972,9 @@ added. A per-agent failure does not suppress independent agents.
 with `status`, `get`, `get-many` or `list`. Finished rows receive eligible recovery
 checks, including late exact input proof.
 
-The result has `checks`, `count`, `ids`, `unverified` and `unverified_ids`.
-All three arrays are non-null, including on an empty store. Each `checks` entry
-has these fields:
+The result has `checks`, `count`, `ids`, `unverified`, `unverified_ids` and
+`unowned_sessions`. All four arrays are always present and non-null, including
+on an empty store. Each `checks` entry has these fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -1011,6 +1011,37 @@ including an already-current note. Neither list includes Codex moves to `ended`,
 failed or refused writes, rows changed before their guarded write, or live
 pending rows noted `unreported`. These counters measure neither coverage nor
 confirmation.
+
+`unowned_sessions` reports tmux sessions with a valid label for this store whose
+`instance_id` matches no row of any status. It excludes unlabelled or invalid
+labels, other stores' labels and sessions owned by `ended` or `missing` rows.
+Each entry has exactly these five fields:
+
+| Field | Meaning |
+| --- | --- |
+| `instance_id` | Instance ID named by the session's label. |
+| `tmux_socket` | Socket of the server holding the session. |
+| `tmux_session_id` | Session's tmux ID (`$N`). |
+| `tmux_session_name` | Session's name. |
+| `created_at` | Session's creation time, RFC 3339 UTC. |
+
+Entries are sorted lexically by `tmux_socket`, then `tmux_session_id`, then
+`instance_id`. After row checks, the report scans every distinct recorded socket
+from rows of every status, plus the caller's default server. It reuses the
+sweep's one lookup per socket, stop rule and remaining
+[`[tmux] sweep_budget_seconds`](configuration.md#timing-settings-tmux).
+Reporting a session never kills it, writes a row or emits a trail record; it
+does not affect the per-row checks or counters above.
+
+`[]` means no qualifying session was reported, not proof that none exists. A
+stopped, unreadable or budget-skipped socket contributes nothing, as does a
+server with an inherited `@ad_owner` scope value. Cancellation discards the
+report. A store without all-status membership returns `[]` without report
+lookups. An initial store read failure fails the call; a failed membership
+re-read before reporting returns `[]`. That re-read excludes rows created
+during the scan but cannot make the report atomic with concurrent spawns.
+The report has no completeness field; `checks.completion` describes only its
+row's checks.
 
 A failed initial selection or closed client is an error, not a successful empty
 sweep. After selection, interrupted work remains in a returned result; a

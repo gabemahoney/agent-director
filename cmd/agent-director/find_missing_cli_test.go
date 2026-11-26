@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -57,6 +58,57 @@ func seedFindMissingRow(t *testing.T, home, id, state string, opts ...apitest.Sp
 	t.Helper()
 	if _, err := apitest.SeedSpawn(stateDB(home), id, state, "/tmp", "off", "", true, opts...); err != nil {
 		t.Fatalf("seed %s: %v", id, err)
+	}
+}
+
+// b.9ps: both spellings expose [] or the same orphan on CLI and MCP, including
+// a non-default socket recorded only by a finished row. Repeating leaves it intact.
+func TestFindMissingUnownedSessionsCLIMCPParity(t *testing.T) {
+	created := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	for _, orphaned := range []bool{false, true} {
+		t.Run(fmt.Sprintf("orphan=%v", orphaned), func(t *testing.T) {
+			home := t.TempDir()
+			seedFindMissingRow(t, home, "id-b9ps-ended", store.StateEnded,
+				apitest.WithTmuxSocket(apitest.TestSocket), apitest.WithNoPane())
+			storeID, err := apitest.ReadStoreID(stateDB(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			tables := faketmuxfix.Tables{Dir: t.TempDir()}
+			want := []any{}
+			if orphaned {
+				tables.Write(t, apitest.TestSocket, fakeTable(faketmuxfix.Session{ID: "$1", Created: created.Unix(),
+					Name: "orphan", Label: tmuxfix.LabelValue(tmuxfix.Token, "$1", "id-b9ps-gone", storeID)}))
+				want = append(want, map[string]any{"instance_id": "id-b9ps-gone", "tmux_socket": apitest.TestSocket,
+					"tmux_session_id": "$1", "tmux_session_name": "orphan", "created_at": created.Format(time.RFC3339)})
+			}
+			fakeDir := buildFakeTmux(t)
+			unowned := func(surface, out string) any {
+				var env map[string]any
+				if err := json.Unmarshal([]byte(out), &env); err != nil {
+					t.Fatalf("%s output is not JSON: %v\n%s", surface, err, out)
+				}
+				got, ok := env["unowned_sessions"]
+				if !ok {
+					t.Errorf("%s output %s has no unowned_sessions; want it always present (b.9ps)", surface, out)
+				}
+				return got
+			}
+			srv := startServe(t, home, append(fakeTmuxEnv(t, home, fakeDir), tables.Env()...)...)
+			t.Cleanup(srv.kill)
+			srv.initialize(t)
+			for _, verb := range []string{"find-missing", "sweep"} {
+				stdout, stderr, code := runSpawnCLIEnv(t, home, fakeDir, map[string]string{faketmuxfix.EnvTables: tables.Dir}, verb)
+				if code != 0 {
+					t.Fatalf("%s exit = %d; want 0\nstderr=%s", verb, code, stderr)
+				}
+				cli, mcp := unowned("CLI "+verb, stdout), unowned("MCP "+verb, srv.callToolOK(t, verb, `{}`))
+				if !reflect.DeepEqual(cli, any(want)) || !reflect.DeepEqual(mcp, any(want)) {
+					t.Errorf("%s: unowned_sessions CLI=%v MCP=%v; want %v on both", verb, cli, mcp, want)
+				}
+			}
+			srv.stop(t)
+		})
 	}
 }
 
@@ -218,7 +270,12 @@ func testRecoveryCLITmuxAnswers(t *testing.T, verb string) {
 				apitest.WithNoPane(), apitest.WithLaunchStartedAt(pastGrace.UnixMilli()))
 
 			res := runFindMissing(t, home, map[string]string{faketmuxfix.EnvTables: tables.Dir}, verb)
-			assertInvocationKinds(t, home, "list-sessions") // one lookup, one socket
+			invs := assertInvocationKinds(t, home, "list-sessions", "list-sessions") // b.9ps: row and default report scans.
+			for i, socket := range []string{apitest.TestSocket, spawnSocket(t, home)} {
+				if !slices.Contains(invs[i], socket) {
+					t.Errorf("lookup %d = %q; want socket %s", i, invs[i], socket)
+				}
+			}
 
 			marked, unverified := rowIDs, []string{}
 			if !tc.gone {

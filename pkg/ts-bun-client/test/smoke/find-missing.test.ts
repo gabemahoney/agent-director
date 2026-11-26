@@ -14,6 +14,6 @@ import { homeStore, openClient } from "../internal/helper.js";
 test("find-missing: happy path — empty store returns count=0", async () => {
   await withTempHome(async (homeDir) => {
     using client = await openClient(homeStore(homeDir));
-    expect(await client.findMissing({})).toEqual({ checks: [], count: 0, ids: [], unverified: 0, unverified_ids: [] });
+    expect(await client.findMissing({})).toEqual({ checks: [], count: 0, ids: [], unverified: 0, unverified_ids: [], unowned_sessions: [] });
   });
 }, 10_000);

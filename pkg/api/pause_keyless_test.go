@@ -323,6 +323,8 @@ func TestPauseKeylessEndsRowAfterSweepMissing(t *testing.T) {
 	}
 	e.assertEnded(t)
 	e.assertSignals(t, 1)
+	assertReportLookupsOnly(t, e.rec, e.r.Socket) // b.9ps: the concurrent sweep scanned sessions only.
+	e.rec.Reset()
 	e.assertKept(t, held)
 	assertMoveRecords(t, mark, e.r.ID, moveWant{source: "ad_recovery", prior: store.StateMissing, now: store.StateEnded,
 		reason: "proc_absent", denyReason: store.DecisionReasonEnded})

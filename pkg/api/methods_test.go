@@ -80,8 +80,8 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 		"GetMany":       `{"spawns":[],"not_found":[]}`,
 		"List":          `{"spawns":[]}`,
 		"ListSubagents": emptySubagentsJSON,
-		"Sweep":         `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`,
-		"FindMissing":   `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`,
+		"Sweep":         `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[],"unowned_sessions":[]}`,
+		"FindMissing":   `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[],"unowned_sessions":[]}`,
 		"Expire":        `{"count":0,"ids":[],"kept":0,"kept_ids":[]}`,
 		"Delete":        `{"results":{}}`,
 	}

@@ -134,6 +134,8 @@ type activeReadStore struct {
 	fallbackBusy  bool
 	fallbackTried map[int64]bool
 	withHistory   bool
+	// live retains this pass's tmux Sweep for the sweep-only session report.
+	live *findMissingRun
 	// delivery is the covered rows' delivery facts the row reads took in
 	// their own read transaction (activeRefresh), which the projection shows
 	// with the row read with them (busySendObservationOf).
@@ -420,6 +422,7 @@ func checkActiveRows(ctx context.Context, source any, view RelayView, settle sto
 			}
 			now := newRelayJudge(view).now
 			live = &findMissingRun{s: s, t: p.tmux, pc: view.Procs, sw: tmux.NewSweepFrom(p.tmux, view.Procs, now, p.budget, p.stoppedSockets), lg: p.logger, emit: r.emit, now: now}
+			r.live = live
 			if capture, ok := p.tmux.(interface {
 				CapturePaneID(string, string, int, bool) (string, error)
 			}); ok {

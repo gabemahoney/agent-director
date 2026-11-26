@@ -141,7 +141,13 @@ func TestProvisionalTranscriptSharedFirstCall(t *testing.T) {
 					t.Errorf("first-call stored result %s: got=%+v want=%+v err=%v", id, got, want, err)
 				}
 			}
-			if calls := e.rec.SocketCalls(); len(calls) != 0 {
+			if verb == "find-missing" {
+				sockets := []string{}
+				for _, row := range before {
+					sockets = append(sockets, row.Identity.Socket)
+				}
+				assertReportLookupsOnly(t, e.rec, sockets...) // b.9ps: report scans do no transcript/pane work.
+			} else if calls := e.rec.SocketCalls(); len(calls) != 0 {
 				t.Errorf("transcript recovery dispatched pane work: %+v", calls)
 			}
 		})

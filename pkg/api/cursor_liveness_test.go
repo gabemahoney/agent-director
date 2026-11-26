@@ -446,6 +446,7 @@ func TestCursorReadIndependentRecoveryAfterDeferredWriteRejection(t *testing.T) 
 					}
 				}
 			case "find-missing", "sweep":
+				checkedAt := e.clock.Now() // b.9ps: session reporting advances time after these checks.
 				var got api.SweepResult
 				var err error
 				if surface == "sweep" {
@@ -468,9 +469,9 @@ func TestCursorReadIndependentRecoveryAfterDeferredWriteRejection(t *testing.T) 
 					if conf(row.Confirmations.ProcessLiveness) != unknownRecord(store.ReasonUnsupported) || conf(row.Confirmations.DisplayedState) != unknownRecord(store.ReasonUnsupported) {
 						t.Errorf("Cursor acquired unsupported confirmation: %+v", row)
 					}
-					wantState, wantRecord := store.StateMissing, "pending|-|-|"+confAt(e.clock.Now())+"|operation_pending"
+					wantState, wantRecord := store.StateMissing, "pending|-|-|"+confAt(checkedAt)+"|operation_pending"
 					if row.InstanceID == a.InstanceID {
-						wantState, wantRecord = store.StateWorking, "not_confirmed|-|-|"+confAt(e.clock.Now())+"|stale_observation"
+						wantState, wantRecord = store.StateWorking, "not_confirmed|-|-|"+confAt(checkedAt)+"|stale_observation"
 					}
 					if row.State != wantState || conf(row.Confirmations.State) != wantRecord {
 						t.Errorf("Cursor returned-value record mismatch: %+v; want %s %s", row, wantState, wantRecord)
@@ -524,7 +525,9 @@ func TestCursorReadIndependentRecoveryAfterDeferredWriteRejection(t *testing.T) 
 			if multi && familyAfter[b.InstanceID].state != store.StateWaiting || !multi && familyAfter[b.InstanceID] != familyBefore[b.InstanceID] {
 				t.Fatalf("independent B family history: before=%+v after=%+v", familyBefore, familyAfter)
 			}
-			if calls := e.rec.SocketCalls(); len(calls) != 0 {
+			if surface == "find-missing" || surface == "sweep" {
+				assertReportLookupsOnly(t, e.rec) // b.9ps: no Cursor row fallback or mutation.
+			} else if calls := e.rec.SocketCalls(); len(calls) != 0 {
 				t.Errorf("recovery dispatched tmux calls: %+v", calls)
 			}
 		})

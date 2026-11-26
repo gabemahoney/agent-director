@@ -449,9 +449,7 @@ func TestSweepPermissionFallbackHasNoAnswerAuthority(t *testing.T) {
 			if raw, err := e.s.GetSpawn(e.id); err != nil || raw.State != store.StateCheckPermission {
 				t.Fatalf("fallback changed raw lifecycle: %+v %v", raw, err)
 			}
-			if calls := rec.SocketCalls(); len(calls) != 0 {
-				t.Errorf("permission observation dispatched tmux: %+v", calls)
-			}
+			assertReportLookupsOnly(t, rec) // b.9ps: default report lookup grants no answer authority.
 		})
 	}
 }

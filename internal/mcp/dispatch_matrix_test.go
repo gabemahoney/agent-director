@@ -177,7 +177,7 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 			err = callErr
 			if v.Name == "sweep" || v.Name == "find-missing" {
 				raw, marshalErr := json.Marshal(result)
-				if err != nil || marshalErr != nil || string(raw) != `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[]}` {
+				if err != nil || marshalErr != nil || string(raw) != `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[],"unowned_sessions":[]}` {
 					t.Errorf("%s = %s, %v, %v; want exact empty sweep envelope", v.Name, raw, err, marshalErr)
 				}
 			}

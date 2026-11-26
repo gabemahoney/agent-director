@@ -13,6 +13,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
@@ -87,7 +88,7 @@ func (f *killFix) assertStateNote(t testing.TB, id, state, note string) {
 }
 
 // TestFindMissingRemainOnExitDeadAgentMarked: a dead agent whose session
-// remain-on-exit keeps is marked missing with no tmux call; the session stays.
+// remain-on-exit keeps is marked missing from process evidence; the session stays.
 // b.x9o: a public read's own probe confirms the running agent alive; once it
 // is gone the mark commits its exited record in the same write, while the
 // surviving session and a descendant the agent left running never make it
@@ -136,8 +137,37 @@ func testRecoveryRemainOnExitDeadAgentMarked(t *testing.T, canonical bool) {
 	}
 	s.assertListed(t, r.InstanceID, "ids")
 	f.assertStateNote(t, r.InstanceID, "missing", "")
-	if len(s.Calls) != 0 { // proc_absent is decided on the process alone (SR-11.1)
-		t.Errorf("find-missing made %d tmux calls, want none for a dead recorded process", len(s.Calls))
+	// b.9ps: proc_absent is still decided on the process alone (SR-11.1).
+	// Reporting may only read the recorded/default servers, once per socket.
+	def, err := tmux.ResolveSocket(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, call := range s.Calls {
+		args := call.Args
+		// The two format strings are immaterial here. The exact command/flag
+		// shape admits only server-wide lookup reads, with no row target.
+		want := []string{"display-message", "-p", "format", ";", "list-sessions", "-F", "format", ";",
+			"show-options", "-gqv", "@ad_owner", ";", "show-options", "-sqv", "@ad_owner", ";", "show-options", "-gwqv", "@ad_owner"}
+		if len(args) != 3+len(want) || args[0] != "-u" || args[1] != "-S" {
+			t.Errorf("unexpected tmux call: %q; want a socket-scoped lookup only", args)
+			continue
+		}
+		socket := args[2]
+		if (socket != f.Socket && socket != def) || seen[socket] {
+			t.Errorf("lookup socket %q repeated or outside recorded/default sockets", socket)
+		}
+		seen[socket] = true
+		for i, word := range want {
+			if i != 2 && i != 6 && args[3+i] != word {
+				t.Errorf("tmux call %q is not a read-only lookup", args)
+				break
+			}
+		}
+	}
+	if s.Res.UnownedSessions == nil || len(s.Res.UnownedSessions) != 0 {
+		t.Errorf("unowned_sessions = %+v; want []: the retained session still has its missing row", s.Res.UnownedSessions)
 	}
 	f.assertSession(t, r.Reply.SessionID, true)
 	if f.label(t, r.Reply.SessionID) != label {

@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -491,6 +492,50 @@ func assertMarkReason(t *testing.T, before int, id, reason string) {
 	ticks := ticksSince(t, before, id)
 	if len(ticks) == 0 || ticks[0]["reconciliation_reason"] != reason {
 		t.Errorf("ticks on %s = %v; want the first with reason %s", id, ticks, reason)
+	}
+}
+
+// reportSocket is the default server scanned after the row checks (b.9ps).
+// These fixtures use TestMain's TMUX-unset environment or their own TMUX_TMPDIR.
+func reportSocket() string {
+	return filepath.Join(userSocketDir(os.Getenv("TMUX_TMPDIR")), "default")
+}
+
+// assertReportLookupsOnly preserves the no-input/no-mutation guard while allowing
+// exactly the independent report's distinct recorded/default socket lookups.
+func assertReportLookupsOnly(t *testing.T, rec *tmuxfix.Recorder, rowSockets ...string) {
+	t.Helper()
+	want := []string{}
+	for _, socket := range append(slices.Clone(rowSockets), reportSocket()) {
+		if socket != "" && !slices.Contains(want, socket) {
+			want = append(want, socket)
+		}
+	}
+	assertUnownedLookups(t, rec, want...)
+	if calls := rec.Calls(); len(calls) != 0 {
+		t.Errorf("name-based tmux calls = %+v; want none", calls)
+	}
+}
+
+// assertSweepLookups checks one pass's row lookups followed by the report's
+// extra default-server lookup. The row's original lookup count stays explicit.
+func assertSweepLookups(t *testing.T, calls []tmuxfix.SocketCall, rowLookups int) {
+	t.Helper()
+	if len(calls) != rowLookups+1 {
+		t.Errorf("tmux calls = %+v; want %d row lookups and the default report lookup", calls, rowLookups)
+		return
+	}
+	for i, c := range calls {
+		wantSocket := apitest.TestSocket
+		if i == rowLookups {
+			wantSocket = reportSocket()
+		}
+		if c.Call != tmux.CallLookup || c.Socket != wantSocket {
+			t.Errorf("unexpected tmux call: %+v; want lookup on %s", c, wantSocket)
+		}
+	}
+	if calls[rowLookups].Socket != reportSocket() {
+		t.Errorf("last lookup = %+v; want default report socket %s", calls[rowLookups], reportSocket())
 	}
 }
 

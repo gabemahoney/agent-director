@@ -1384,6 +1384,15 @@ export interface SweepCheck {
     /** Null when complete. Unattempted work adds no evidence timestamps. */
     reason: "deadline" | "busy" | "unreadable" | "stale_observation" | "no_evidence" | "commit_unconfirmed" | "unsupported" | "unattempted" | null;
 }
+/** A reported tmux session labelled by this store whose instance id has no row. */
+export interface UnownedSession {
+    instance_id: string;
+    tmux_socket: string;
+    tmux_session_id: string;
+    tmux_session_name: string;
+    /** tmux session creation time, RFC 3339 in UTC. */
+    created_at: string;
+}
 /** One bounded shared check pass; no input, answer, restart or signal authority. */
 export interface SweepResult {
     /**
@@ -1428,6 +1437,13 @@ export interface SweepResult {
      * list. Never null; [] when none.
      */
     unverified_ids: string[];
+    /**
+     * Read-only report from all recorded sockets (finished rows included) and
+     * the caller's default server, within the pass's shared tmux budget.
+     * Sorted by socket then session id. Always an array; [] does not prove
+     * absence when a socket stopped, failed or exhausted the budget.
+     */
+    unowned_sessions: UnownedSession[];
 }
 /** Retained compatibility name for the common sweep result. */
 export interface FindMissingResult extends SweepResult {
