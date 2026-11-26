@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -195,8 +196,49 @@ func TestPauseSQLiteFullCheckBeforeExit(t *testing.T) {
 	}
 }
 
+// b.88i: losing admission after /exit keeps the attempted-input facts, sends
+// no Enter and identifies pause as the operation that failed.
+func TestPauseSQLitePostTextAdmissionRetainsProgress(t *testing.T) {
+	t.Parallel()
+	e, r, _ := sqliteSubmission(t, sqliteCodexSpec(store.StateWaiting, false))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.rec.Reset()
+	e.rec.AfterCall(tmux.CallSendText, func(tmuxfix.SocketCall, error) { cancel() })
+
+	_, err := api.Pause(ctx, e.st, e.rec, api.PauseEnv{Input: e.env.Input, Relay: e.env.Relay}, 0, pauseParams(r))
+
+	if !errors.Is(err, api.ErrSubmissionUnconfirmed) {
+		t.Fatalf("pause = %v; want ErrSubmissionUnconfirmed", err)
+	}
+	want := api.SubmissionUnconfirmedDetails{
+		Outcome: "partial_input_unconfirmed", Phase: "text_attempted", BytesAttempted: 5,
+		KeysSent: true, RowState: store.StateWaiting,
+		Reason: "input admission changed after text; Enter was not sent",
+	}
+	if got := api.ErrDetails(err); got != want {
+		t.Errorf("details=%+v; want %+v", got, want)
+	}
+	keys := e.rec.SocketCallsOf(tmux.CallSendKey)
+	if len(keys) != 1 || keys[0].Key != "C-u" || keys[0].Socket != r.Socket || keys[0].Target != r.Spawn.Identity.PaneID || keys[0].Repeat != codexClearPresses {
+		t.Errorf("pause keys=%+v; want one C-u to the owned pane", keys)
+	}
+	texts := e.rec.SocketCallsOf(tmux.CallSendText)
+	if len(texts) != 1 || texts[0].Text != "/exit" || texts[0].PressEnter || texts[0].Socket != r.Socket || texts[0].Target != r.Spawn.Identity.PaneID {
+		t.Errorf("pause text=%+v; want /exit once without Enter to the owned pane", texts)
+	}
+	e.assertNoCalls(t, tmux.CallSendEnter)
+	if enters := ordinaryEnters(e.killEnv); len(enters) != 0 {
+		t.Errorf("Enter calls=%+v; want none", enters)
+	}
+	if !strings.HasPrefix(err.Error(), "ErrSubmissionUnconfirmed: pause: "+r.ID+":") || strings.Contains(err.Error(), "send-keys:") {
+		t.Errorf("pause error message names the wrong operation: %v", err)
+	}
+}
+
 // t2.7tz.tb.ib R5: cleanup failure after /exit retains the dispatch facts and
 // the unresolved ordinary owner; cleanup never hides a pre-input refusal.
+// b.88i: the dispatched cleanup failure's message must identify pause.
 func TestPauseSQLiteCloseFailureRetainsDispatch(t *testing.T) {
 	t.Parallel()
 	for _, refused := range []bool{false, true} {
@@ -250,6 +292,9 @@ func TestPauseSQLiteCloseFailureRetainsDispatch(t *testing.T) {
 			owner.ManualInterference, owner.Revision, owner.Confirmation = true, after.Revision, after.Confirmation
 			if !reflect.DeepEqual(owner, after) {
 				t.Fatalf("cleanup changed original attempt: before=%+v after=%+v", owner, after)
+			}
+			if !strings.HasPrefix(err.Error(), "ErrSubmissionUnconfirmed: pause: "+r.ID+":") || strings.Contains(err.Error(), "send-keys:") {
+				t.Errorf("pause error message names the wrong operation: %v", err)
 			}
 		})
 	}

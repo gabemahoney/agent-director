@@ -918,6 +918,50 @@ func TestAdviceFollow_E8_PauseTimeoutInspectBeforeInput(t *testing.T) {
 	}
 }
 
+// b.88i, CR-1: inspect an unsubmitted /exit before choosing a fresh pause;
+// its line clear must prevent the leftover becoming /exit/exit.
+func TestAdviceFollow_E8_PausePostTextInspectBeforeRetry(t *testing.T) {
+	t.Parallel()
+	e, r, _ := sqliteSubmission(t, sqliteCodexSpec(store.StateWaiting, false))
+	in := paneAgentExiting(t, e.killEnv, r, false, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	adviceOnceAfter(e.rec, tmux.CallSendText, cancel)
+	env := api.PauseEnv{Input: e.env.Input, Relay: e.env.Relay}
+	params := pauseParams(r)
+
+	_, err := api.Pause(ctx, e.st, e.rec, env, 0, params)
+
+	adviceAssertAdvice(t, err, api.ErrSubmissionUnconfirmed, "unconfirmed input may still submit later; do not automatically replay text or Enter")
+	adviceAssertManifest(t, "pause", "", "ErrPauseTimeout/ErrSubmissionUnconfirmed: check get/read-pane; `/exit` may be unsubmitted, no blind retry")
+	if in.box != exitText || len(in.submitted) != 0 {
+		t.Fatalf("after failed pause: typed %q, submitted %q; want unsubmitted /exit", in.box, in.submitted)
+	}
+	row, err := api.Get(e.st, e.env.Relay, r.ID)
+	if err != nil || row.State != store.StateWaiting {
+		t.Fatalf("get after failed pause = %+v, %v; want waiting", row, err)
+	}
+	pane, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID})
+	if err != nil || pane.Pane != exitText {
+		t.Fatalf("read-pane = %+v, %v; want unsubmitted /exit for inspection", pane, err)
+	}
+	// The caller chooses a retry only after inspecting the waiting row and
+	// its one-line leftover. Keep that composer content across the retry.
+	e.rec.Reset()
+	retryCtx, retryCancel := context.WithCancel(context.Background())
+	defer retryCancel()
+	if _, err := api.Pause(retryCtx, e.st, e.rec, env, 0, params); err != nil {
+		t.Fatalf("pause after inspection: %v; want the row ended", err)
+	}
+	e.assertLineClearedTimes(t, r.Socket, r.Spawn.Identity.PaneID, codexClearPresses)
+	if texts := e.rec.SocketCallsOf(tmux.CallSendText); len(texts) != 1 {
+		t.Errorf("retry text calls=%+v; want /exit typed once", texts)
+	}
+	assertInputWrites(t, e.killEnv, r, exitText)
+	in.assertSubmittedOnce(t, exitText)
+	pauAssertState(t, e.killEnv, r.ID, store.StateEnded)
+}
+
 // TestAdviceFollow_E9_SendKeysPendingAllowPending: E9 a pending row's
 // "state=pending" refusal, followed by the allow_pending text ("When true,
 // also allows a pending row"); re-issued with it on a pane-only Droid row

@@ -214,7 +214,7 @@ func (r *sendKeysRun) pacedRefusal(params SendKeysParams) (Spawn, string) {
 // call's send error. No follow-up lookup is made, as pasteText makes none.
 func (r *sendKeysRun) pacedUnconfirmed(row Spawn, reason string) error {
 	a := r.found.deliveryAttempt()
-	r.found.SendErr = deliveryError(row, a, unresolvedOutcome(a), reason)
+	r.found.SendErr = deliveryError("send-keys", row, a, unresolvedOutcome(a), reason)
 	return r.found.SendErr
 }
 

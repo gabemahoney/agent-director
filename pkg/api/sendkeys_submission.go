@@ -107,7 +107,7 @@ func supportsInput(session inputdelivery.Session, id inputdelivery.Identity) boo
 }
 
 func deliveryNotStarted(row Spawn, reason string) error {
-	return deliveryError(row, nil, "not_started", reason)
+	return deliveryError("send-keys", row, nil, "not_started", reason)
 }
 
 // Keep the verb's existing classification, even when persistence returned a
@@ -155,12 +155,12 @@ func submissionDetails(row Spawn, a *inputdelivery.Attempt, outcome, reason stri
 	return d
 }
 
-func deliveryError(row Spawn, a *inputdelivery.Attempt, outcome, reason string) error {
+func deliveryError(verb string, row Spawn, a *inputdelivery.Attempt, outcome, reason string) error {
 	guidance := "unconfirmed input may still submit later; do not automatically replay text or Enter"
 	if outcome == "not_started" {
 		guidance = "no input was attempted by this request"
 	}
-	return &DetailedError{Err: fmt.Errorf("%w: send-keys: %s: %s (%s); %s", ErrSubmissionUnconfirmed, row.InstanceID, outcome, reason, guidance), Details: submissionDetails(row, a, outcome, reason)}
+	return &DetailedError{Err: fmt.Errorf("%w: %s: %s: %s (%s); %s", ErrSubmissionUnconfirmed, verb, row.InstanceID, outcome, reason, guidance), Details: submissionDetails(row, a, outcome, reason)}
 }
 
 func (r *sendKeysRun) sleepInput(d time.Duration) {
@@ -218,12 +218,12 @@ func (r *sendKeysRun) reconcileOrdinary(row Spawn, id inputdelivery.Identity, te
 		if previous.EnterAttempted && previous.Identity == id {
 			proof, err := r.input.Confirm(previous)
 			if err != nil {
-				return false, deliveryError(row, previous, unresolvedOutcome(previous), "native transcript evidence is unavailable or ambiguous")
+				return false, deliveryError("send-keys", row, previous, unresolvedOutcome(previous), "native transcript evidence is unavailable or ambiguous")
 			}
 			if proof != nil {
 				previous.Proof, previous.Phase = proof, "submitted"
 				if err = r.input.Save(previous); err != nil {
-					return false, deliveryError(row, previous, "submission_unconfirmed", "late proof could not be persisted")
+					return false, deliveryError("send-keys", row, previous, "submission_unconfirmed", "late proof could not be persisted")
 				}
 				if requestID != "" && requestID != previous.RequestID || requestID == "" && text != previous.Payload {
 					return false, deliveryNotStarted(row, "earlier request was confirmed; this different request has not started")
@@ -232,7 +232,7 @@ func (r *sendKeysRun) reconcileOrdinary(row Spawn, id inputdelivery.Identity, te
 				return true, r.useReconciledProof(row, previous)
 			}
 		}
-		return false, deliveryError(row, previous, unresolvedOutcome(previous), "an earlier launch attempt remains unresolved; operator reconciliation is required")
+		return false, deliveryError("send-keys", row, previous, unresolvedOutcome(previous), "an earlier launch attempt remains unresolved; operator reconciliation is required")
 	}
 	if previous != nil && previous.ManualInterference {
 		return false, deliveryNotStarted(row, "manual input changed the launch's composer contract; continue with operator-controlled input")
@@ -246,11 +246,11 @@ func (r *sendKeysRun) reconcileOrdinary(row Spawn, id inputdelivery.Identity, te
 func (r *sendKeysRun) useReconciledProof(row Spawn, a *inputdelivery.Attempt) error {
 	current, err := r.s.GetSpawnWithin(row.InstanceID, time.Second)
 	if err != nil {
-		return deliveryError(row, a, "submission_unconfirmed", "reconciled launch cannot be reread")
+		return deliveryError("send-keys", row, a, "submission_unconfirmed", "reconciled launch cannot be reread")
 	}
 	if current.LifeNumber != row.LifeNumber || deliveryIdentity(current, r.s.StoreID()) != a.Identity ||
 		current.SessionID != "" && current.SessionID != a.Proof.SessionID {
-		return deliveryError(row, a, "submission_unconfirmed", "launch or native session changed before reconciliation")
+		return deliveryError("send-keys", row, a, "submission_unconfirmed", "launch or native session changed before reconciliation")
 	}
 	r.deliveryResult = confirmedDelivery(a)
 	return nil
@@ -377,7 +377,7 @@ func (r *sendKeysRun) stopDelivery(a *inputdelivery.Attempt, reason string) erro
 	if err := r.input.Save(a); err != nil {
 		reason += "; journal update failed"
 	}
-	return deliveryError(r.row, a, unresolvedOutcome(a), reason)
+	return deliveryError("send-keys", r.row, a, unresolvedOutcome(a), reason)
 }
 
 // A persisted intent is not a dispatch. Preserve the named pre-input refusal
@@ -390,7 +390,7 @@ func (r *sendKeysRun) stopInputValidation(a *inputdelivery.Attempt, err error) e
 			if a.BytesAttempted == 0 && !a.EnterAttempted {
 				a.Phase = "not_started"
 				if saveErr := r.input.Save(a); saveErr != nil {
-					return deliveryError(r.row, a, "not_started", "Codex turn errored before input; journal update failed")
+					return deliveryError("send-keys", r.row, a, "not_started", "Codex turn errored before input; journal update failed")
 				}
 			}
 			return err
@@ -616,7 +616,7 @@ func (r *sendKeysRun) observeSubmission(a *inputdelivery.Attempt) error {
 		if proof != nil {
 			a.Proof, a.Phase = proof, "submitted"
 			if err = r.input.Save(a); err != nil {
-				return deliveryError(row, a, "submission_unconfirmed", "positive proof could not be persisted")
+				return deliveryError("send-keys", row, a, "submission_unconfirmed", "positive proof could not be persisted")
 			}
 			r.deliveryResult = confirmedDelivery(a)
 			return nil
