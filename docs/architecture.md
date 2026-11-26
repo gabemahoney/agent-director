@@ -18116,9 +18116,12 @@ cannot be checked) and `confirm_by` is not later than `hook_gone_at`, from
 Both refusals for such a hook name
 the same `not_before` and read the same, so a retry before it gets the
 same answer and a retry at it is not refused as too soon; `hook_gone_at`
-keeps its meaning and is not moved. Claude Code draws the dialog only
-after the hook ends, so a pane read inside those 2 s may not show it and
-still hash the same (`pa_B_noage`). Then the lookup and pane listing
+keeps its meaning and is not moved. Codex draws its dialog only after the
+hook ends, so a pane read inside those 2 s may miss it and still hash the
+same (`pa_B_noage`). Claude Code shows its dialog while the hook runs; the
+wait only delays a valid claim there. Cursor has no per-request hook: it
+waits from `confirm_by` plus 2 s, though its choice can already be on the
+pane during the relay window. Then the lookup and pane listing
 (`recordPaneRun`, `read-pane`'s gone sentinel, no adoption write), and
 `RecordPaneOutside`, one `inWriteTx` transaction whose `PaneCheck`
 re-applies `claimRefusal` under the lock and captures and compares the
