@@ -292,9 +292,12 @@ var ErrCodexTurnErrored = errors.New("ErrCodexTurnErrored")
 var ErrPaneAnswerInProgress = errors.New("ErrPaneAnswerInProgress")
 
 // ErrClaimTooSoon is returned by record-pane-answer when the request's relay
-// hook has not been gone for at least 2 s (b.146 rule 13, decision 5): the agent
-// draws a permission dialog only after the hook is gone, so a pane read
-// just after the hook's end may not show the dialog yet. It is measured from
+// hook has not been gone for at least 2 s (b.146 rule 13, decision 5). Codex
+// draws its dialog after the hook ends, so an immediate pane read may miss it.
+// Claude Code shows its dialog while the hook runs; this wait only delays a
+// valid claim there. Cursor has no per-request hook and waits from confirm_by
+// plus 2 s, though its choice can already be on the pane during the relay
+// window. For hook-based requests, the wait is measured from
 // the request's hook_gone_at, when a reader first found the hook gone (a
 // request with none yet gets it written now), or, when the hook cannot be
 // checked (or the request was recorded before schema v7) and its confirm_by

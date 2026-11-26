@@ -2832,8 +2832,13 @@ with:
   longer open.
 
 `record-pane-answer` returns `ErrClaimTooSoon` while the relay hook may still
-answer or has not been gone for 2 s yet, so the prompt may not be drawn:
+answer or has not been gone for 2 s yet:
 retry at `err_details.not_before` (null only while the hook is seen running).
+Codex draws its dialog after the hook ends, so an immediate pane read may
+miss it. Claude Code shows its dialog while the hook runs; the wait only
+delays a valid claim there. Cursor has no per-request hook: it waits from
+`confirm_by` plus 2 s, though its choice can already be on the pane during
+the relay window.
 Its other refusals record nothing: `ErrPermissionRequestNotFound` (no request
 has the token), `ErrNoOpenPermissionRequest` (closed with its spawn),
 `ErrAlreadyDecided` (confirmed, or already closed at the pane),

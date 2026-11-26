@@ -174,7 +174,8 @@ func runHook() (exit int) {
 	relayActive := os.Getenv(hook.EnvRelayMode) == hook.RelayModeOn
 
 	// Parse once before peeking so the early fail-closed and busy-send
-	// output paths use the reporting agent's decode policy (b.45p, b.3mx).
+	// output paths use the reporting agent's event-identification policy:
+	// event-only for Claude/Codex, strict for Cursor/invalid agents (b.45p).
 	// Stdin is consumed here and passed to Handle via a bytes.Reader so
 	// Handle's own ReadPayload still works, before other I/O.
 	//
