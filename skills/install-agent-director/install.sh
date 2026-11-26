@@ -2809,9 +2809,12 @@ fi
 # unchanged.
 build_advice="make -C <path-to-agent-director-checkout> build"
 build_rerun="bash <path-to-agent-director-checkout>/skills/install-agent-director/install.sh"
+# With no checkout, building alone leaves the refused binary sources in place.
+build_pair_advice="$build_advice && $build_rerun"
 if [[ -n "$source_head" && -f "$source_root/Makefile" ]]; then
     build_advice="make -C $(printf '%q' "$source_root") build"
     build_rerun="bash $(printf '%q' "$0")"
+    build_pair_advice="$build_advice"
 fi
 
 # --------------------------------------------------------------------
@@ -3300,7 +3303,7 @@ if [[ "$main_stamp" != "$admin_stamp" ]]; then
     echo "" >&2
     echo "  Both binaries open the same store, so they must come from the same" >&2
     echo "  build (the same version and commit). Either:" >&2
-    echo "    - rebuild both first:  $build_advice" >&2
+    echo "    - rebuild both first:  $build_pair_advice" >&2
     echo "    - or download release: rerun with --from-release (omit --binary and --admin-binary)" >&2
     exit 3
 fi
@@ -3316,7 +3319,7 @@ if [[ -z "$main_stamp" || -z "$stamp_commit" || "$stamp_commit" == "unknown" ]];
     echo "  one (a plain 'go build' reports commit \"unknown\") match any other" >&2
     echo "  such build, from any tree. 'make build' in a git checkout stamps" >&2
     echo "  both with the checkout's commit. Either:" >&2
-    echo "    - rebuild both first:  $build_advice" >&2
+    echo "    - rebuild both first:  $build_pair_advice" >&2
     echo "    - or download release: rerun with --from-release (omit --binary and --admin-binary)" >&2
     exit 3
 fi
@@ -3360,7 +3363,7 @@ if [[ "$main_config_dir" != "~/.config/agent-director" || "$admin_config_dir" !=
         echo "  release's own install.sh installs (that release's install.sh must support this host): fetch that release's install.sh from its" >&2
         echo "  tag and run it, rather than this one. To install this release instead:" >&2
     fi
-    echo "    - build both binaries from it: $build_advice" >&2
+    echo "    - build both binaries from it: $build_pair_advice" >&2
     echo "    - or download release:        rerun with --from-release (omit --binary and --admin-binary)" >&2
     exit 3
 fi

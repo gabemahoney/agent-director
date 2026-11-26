@@ -249,8 +249,8 @@ Going back across an exempt schema conversion instead requires the
    installed ("version stamps differ"), and neither is a pair whose
    commit is `unknown` or empty, as a plain `go build` reports ("carry
    no commit stamp, so they cannot be shown to come from the same
-   build"). The fix for both is `make build` in a git checkout (both
-   binaries again, stamped) or `--from-release`.
+   build"). Follow the printed build-and-install command to install both
+   stamped binaries from a git checkout, or use `--from-release`.
 
    - *Reversibility:* picking wrong is cheap. The upgrade skill later
      installs the latest release over it, and `uninstall.sh --purge`
@@ -709,8 +709,10 @@ The exempt script:
       `--from-release`. The advice names the tree install.sh sits in
       when that is a git checkout of agent-director's source with a
       Makefile; otherwise it names no tree, only the placeholder
-      `<path-to-agent-director-checkout>`. Both binaries open the same
-      store, so they must come from one build.
+      `<path-to-agent-director-checkout>` and appends that checkout's
+      install.sh to install the rebuilt pair from its `bin/`, without the
+      refused `--binary` or `--admin-binary` arguments. Both binaries open
+      the same store, so they must come from one build.
    10. **Directory capability check (SR-11.7)** — each binary's `version`
       result must report `config_dir` `~/.config/agent-director`, the
       directory this release keeps AD's files in. A binary whose
@@ -718,8 +720,9 @@ The exempt script:
       release and is refused with exit 3 ("a binary to install is from
       an earlier release"), naming both binaries and their `config_dir`.
       The check runs `version`, which opens no store. The fix is to
-      install this release's binaries (`make build` in a checkout, or
-      `--from-release`). This directory check is distinct from version-command
+      install this release's binaries: follow the printed build-and-install
+      command (including the checkout's install.sh when no checkout is known),
+      or use `--from-release`. This directory check is distinct from version-command
       capability: an otherwise supported older candidate may still install
       without layout evidence, as described above. Never overwrite a versioned
       layout with an older installer.
