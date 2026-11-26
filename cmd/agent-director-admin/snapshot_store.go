@@ -36,5 +36,6 @@ func snapshotStoreFlagSet(directory *string, busyTimeoutMs *int) *flag.FlagSet {
 	fs := flag.NewFlagSet("snapshot-store", flag.ContinueOnError)
 	fs.StringVar(directory, "directory", "", "existing empty private directory for the readonly snapshot")
 	fs.IntVar(busyTimeoutMs, "busy-timeout-ms", store.DefaultBusyTimeoutMs, "maximum snapshot/lock wait in milliseconds")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }

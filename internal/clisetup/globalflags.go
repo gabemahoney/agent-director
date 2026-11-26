@@ -88,11 +88,13 @@ func GlobalFlagNames() []string {
 // following value, or an empty value in either form (`--store-path ""` or
 // `--store-path=`). Both forms give the same "<flag> requires a value" error
 // (b.pu2). A --create-if-missing value other than "true" or "false" is an
-// error too, in any copy of a repeated flag (b.78b). Callers should write an
+// error too (b.78b). A second copy of any global flag is refused, including
+// a copy after the verb when the first was in the prefix. Callers should write an
 // ErrInvalidFlags envelope and exit non-zero before any store, config or trail
-// access.
+// access. On a global repeat, g and the remaining argv are retained so
+// callers can validate later global positions before reporting it.
 func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
-	return parseGlobalFlags(nil, GlobalFlags{}, argv, false)
+	return parseGlobalFlags(nil, GlobalFlags{}, argv, false, nil)
 }
 
 // ParseVerbGlobalFlags extracts globals only at option positions in argv,
@@ -106,14 +108,30 @@ func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
 // unknown flag or malformed flag token ends extraction, leaving that suffix
 // unchanged for the handler's parser. Operand-only routes such as get-many
 // must not call this helper. g carries the already parsed prefix globals;
-// later valid occurrences override earlier ones. Both binaries must reuse
-// these two stages rather than scan caller data themselves (b.t1b).
-func ParseVerbGlobalFlags(fs *flag.FlagSet, g GlobalFlags, argv []string) (GlobalFlags, []string, error) {
-	return parseGlobalFlags(fs, g, argv, true)
+// any further occurrence is refused.
+//
+// A non-nil fs requires trialParse, which must silently parse the extracted
+// argv with disposable, caller-owned values. Only verb repeats defer to a
+// trial parse error, preserving the real handler's help and error handling.
+// Global repeats are reported after every global copy has been validated,
+// before any trial parse. A global-repeat error retains g and the extracted
+// argv so callers can scan any later global positions; combine those results
+// with GlobalFlagScanError before reporting the pending error.
+//
+// A nil fs requires no trial parser and scans globals only, as on help/version
+// and before a sub-verb. The scanner itself never parses or sets fs. Both
+// binaries must reuse these two stages rather than scan caller data (b.t1b).
+func ParseVerbGlobalFlags(fs *flag.FlagSet, g GlobalFlags, argv []string, trialParse func([]string) error) (GlobalFlags, []string, error) {
+	if fs != nil && trialParse == nil {
+		return GlobalFlags{}, nil, fmt.Errorf("verb global scan requires a trial parser")
+	}
+	return parseGlobalFlags(fs, g, argv, true, trialParse)
 }
 
-func parseGlobalFlags(fs *flag.FlagSet, g GlobalFlags, argv []string, verbFlags bool) (GlobalFlags, []string, error) {
+func parseGlobalFlags(fs *flag.FlagSet, g GlobalFlags, argv []string, verbFlags bool, trialParse func([]string) error) (GlobalFlags, []string, error) {
 	out := make([]string, 0, len(argv))
+	seen := make(map[string]bool)
+	var globalRepeatErr, verbRepeatErr error
 
 	var createIfMissing string
 	if g.CreateIfMissingSet {
@@ -128,6 +146,12 @@ func parseGlobalFlags(fs *flag.FlagSet, g GlobalFlags, argv []string, verbFlags 
 	assign := func(name, val string, s slot) error {
 		if name == createIfMissingFlag && val != "true" && val != "false" {
 			return fmt.Errorf("%s must be true or false, got %q", createIfMissingFlag, val)
+		}
+		if *s.setRef {
+			if globalRepeatErr == nil {
+				globalRepeatErr = &flagRepeatError{name: strings.TrimPrefix(name, "--"), global: true}
+			}
+			return nil
 		}
 		*s.val = val
 		*s.setRef = true
@@ -191,6 +215,12 @@ func parseGlobalFlags(fs *flag.FlagSet, g GlobalFlags, argv []string, verbFlags 
 			out = append(out, argv[i:]...)
 			break
 		}
+		if !isRepeatableFlag(f.Value) {
+			if seen[name] && verbRepeatErr == nil {
+				verbRepeatErr = repeatedFlagError(name)
+			}
+			seen[name] = true
+		}
 		out = append(out, tok)
 		boolFlag, isBool := f.Value.(interface{ IsBoolFlag() bool })
 		if !hasValue && (!isBool || !boolFlag.IsBoolFlag()) && i+1 < len(argv) {
@@ -199,10 +229,18 @@ func parseGlobalFlags(fs *flag.FlagSet, g GlobalFlags, argv []string, verbFlags 
 		}
 	}
 
-	// assign let through only "true" or "false", and the last copy wins.
+	// assign let through at most one copy, and only "true" or "false".
 	g.CreateIfMissing = createIfMissing == "true"
 
-	return g, out, nil
+	if globalRepeatErr != nil {
+		return g, out, globalRepeatErr
+	}
+	if verbRepeatErr != nil && trialParse(out) != nil {
+		// Only the handler renders real parse failures (help included); an
+		// otherwise valid repeat still fails before any client setup.
+		verbRepeatErr = nil
+	}
+	return g, out, verbRepeatErr
 }
 
 // Apply applies g to this process and returns the Overrides Open takes.

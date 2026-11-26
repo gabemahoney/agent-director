@@ -1,19 +1,25 @@
 package main
 
 import (
+	"io"
+
 	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/clisetup"
 )
 
-// parseCommandGlobalFlags resolves globals without parsing verb values or
-// opening a client. Handlers still own validation and execution (b.t1b).
+// parseCommandGlobalFlags resolves globals before opening a client. A repeat
+// of a verb flag triggers a silent trial parse; handlers retain their
+// existing help and parse-error handling (b.t1b, b.51h).
 func parseCommandGlobalFlags(argv []string) (clisetup.GlobalFlags, []string, error) {
 	g, args, err := clisetup.ParseGlobalFlags(argv)
-	if err != nil || len(args) == 0 {
+	if (err != nil && !clisetup.IsGlobalFlagRepeat(err)) || len(args) == 0 {
 		return g, args, err
 	}
+	// Finish validating verb-position globals before reporting a prefix repeat.
+	pendingGlobalRepeat := err
 	verb := args[0]
 	g, tail, err := parseVerbGlobalFlags(verb, g, args[1:])
+	err = clisetup.GlobalFlagScanError(pendingGlobalRepeat, err)
 	if err != nil {
 		return clisetup.GlobalFlags{}, nil, err
 	}
@@ -23,27 +29,67 @@ func parseCommandGlobalFlags(argv []string) (clisetup.GlobalFlags, []string, err
 func parseVerbGlobalFlags(verb string, g clisetup.GlobalFlags, args []string) (clisetup.GlobalFlags, []string, error) {
 	switch verb {
 	case "help", "--help", "-h":
-		return clisetup.ParseVerbGlobalFlags(nil, g, args)
+		return clisetup.ParseVerbGlobalFlags(nil, g, args, nil)
 	case "--version", "-v":
-		return clisetup.ParseVerbGlobalFlags(versionFlagSet(), g, args)
+		fs := versionFlagSet()
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "migrate-journal":
-		return clisetup.ParseVerbGlobalFlags(migrateJournalFlagSet(new(adminapi.JournalMigrationOptions), new(bool)), g, args)
+		fs := migrateJournalFlagSet(new(adminapi.JournalMigrationOptions), new(bool))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "version":
-		return clisetup.ParseVerbGlobalFlags(versionFlagSet(), g, args)
+		fs := versionFlagSet()
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "kill-finished":
-		return clisetup.ParseVerbGlobalFlags(killFinishedFlagSet(new(string)), g, args)
+		fs := killFinishedFlagSet(new(string))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "delete":
-		return clisetup.ParseVerbGlobalFlags(deleteFlagSet(new([]string)), g, args)
+		fs := deleteFlagSet(new([]string))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "snapshot-store":
-		return clisetup.ParseVerbGlobalFlags(snapshotStoreFlagSet(new(string), new(int)), g, args)
+		fs := snapshotStoreFlagSet(new(string), new(int))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "version-facts":
-		return clisetup.ParseVerbGlobalFlags(versionFactsFlagSet(), g, args)
+		fs := versionFactsFlagSet()
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "publish-version":
-		return clisetup.ParseVerbGlobalFlags(publishVersionFlagSet(new(string)), g, args)
+		fs := publishVersionFlagSet(new(string))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "rollback-version":
-		return clisetup.ParseVerbGlobalFlags(rollbackVersionFlagSet(new(string)), g, args)
+		fs := rollbackVersionFlagSet(new(string))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "list-versions":
-		return clisetup.ParseVerbGlobalFlags(listVersionsFlagSet(), g, args)
+		fs := listVersionsFlagSet()
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	default:
 		return g, args, nil
 	}

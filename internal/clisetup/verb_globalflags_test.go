@@ -2,6 +2,7 @@ package clisetup_test
 
 import (
 	"flag"
+	"io"
 	"reflect"
 	"slices"
 	"testing"
@@ -61,14 +62,12 @@ func TestParseVerbGlobalFlagsOwnership(t *testing.T) {
 		{"missing native value", []string{"--text"}, nil, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fs := flag.NewFlagSet("verb", flag.ContinueOnError)
-			fs.String("cwd", "", "cwd")
-			fs.String("instance-id", "", "id")
-			text := fs.String("text", "unchanged", "text")
-			fs.Bool("switch", false, "boolean")
-			fs.Var(scanOnlyBool{}, "optional", "custom boolean")
+			fs, text := ownershipFlagSet(true)
 			before := slices.Clone(tc.argv)
-			g, out, err := clisetup.ParseVerbGlobalFlags(fs, clisetup.GlobalFlags{}, tc.argv)
+			g, out, err := clisetup.ParseVerbGlobalFlags(fs, clisetup.GlobalFlags{}, tc.argv, func(tail []string) error {
+				trial, _ := ownershipFlagSet(false)
+				return trial.Parse(tail)
+			})
 			want := clisetup.GlobalFlags{}
 			if tc.home != "" {
 				want.Home, want.HomeSet = tc.home, true
@@ -87,6 +86,23 @@ func TestParseVerbGlobalFlagsOwnership(t *testing.T) {
 	}
 }
 
+// The scanner gets values that catch accidental Set calls; its disposable
+// trial parser uses writable values with the same token ownership (b.51h).
+func ownershipFlagSet(scanOnly bool) (*flag.FlagSet, *string) {
+	fs := flag.NewFlagSet("verb", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.String("cwd", "", "cwd")
+	fs.String("instance-id", "", "id")
+	text := fs.String("text", "unchanged", "text")
+	fs.Bool("switch", false, "boolean")
+	if scanOnly {
+		fs.Var(scanOnlyBool{}, "optional", "custom boolean")
+	} else {
+		fs.Bool("optional", false, "custom boolean")
+	}
+	return fs, text
+}
+
 // Set must never run during a read-only scan, including for a custom boolean.
 type scanOnlyBool struct{}
 
@@ -103,10 +119,13 @@ func parseGlobalFlagStages(argv []string) (clisetup.GlobalFlags, []string, error
 		return g, rest, err
 	}
 	fs := flag.NewFlagSet(rest[0], flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	for _, name := range []string{"instance-id", "cwd", "label"} {
 		fs.String(name, "", name)
 	}
-	g, tail, err := clisetup.ParseVerbGlobalFlags(fs, g, rest[1:])
+	g, tail, err := clisetup.ParseVerbGlobalFlags(fs, g, rest[1:], func(tail []string) error {
+		return fs.Parse(tail)
+	})
 	if err != nil {
 		return g, nil, err
 	}
@@ -116,7 +135,7 @@ func parseGlobalFlagStages(argv []string) (clisetup.GlobalFlags, []string, error
 // b.t1b: suffix values merge with the prefix without clearing Set sentinels;
 // invalid earlier copies must still fail even when a later copy is valid.
 func TestGlobalFlagStagesMerge(t *testing.T) {
-	g, out, err := parseGlobalFlagStages([]string{"--create-if-missing=true", "--store-path", "/s", "list", "--home=/h", "--create-if-missing", "false"})
+	g, out, err := parseGlobalFlagStages([]string{"--store-path", "/s", "list", "--home=/h", "--create-if-missing", "false"})
 	want := clisetup.GlobalFlags{CreateIfMissingSet: true, StorePath: "/s", StorePathSet: true, Home: "/h", HomeSet: true}
 	if err != nil || !reflect.DeepEqual(g, want) || !slices.Equal(out, []string{"list"}) {
 		t.Fatalf("flags=%+v argv=%q err=%v; want %+v and [list]", g, out, err, want)

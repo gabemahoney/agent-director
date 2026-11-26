@@ -27,11 +27,17 @@ type spawnResult struct {
 	InstanceID string `json:"instance_id"`
 }
 
-// spawnOK runs spawn under home with args, requires exit 0 and returns the
+// spawnOK runs a Claude spawn under home with args, requires exit 0 and returns the
 // new row's id.
 func spawnOK(t *testing.T, home, fakeDir string, args ...string) string {
 	t.Helper()
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, withAgent("claude", "spawn", args...)...)
+	return spawnOKForAgent(t, home, fakeDir, "claude", args...)
+}
+
+// spawnOKForAgent selects the agent once, without a second --agent in args.
+func spawnOKForAgent(t *testing.T, home, fakeDir, agent string, args ...string) string {
+	t.Helper()
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, withAgent(agent, "spawn", args...)...)
 	var res spawnResult
 	if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil || res.InstanceID == "" {
 		t.Fatalf("spawn %q: exit = %d, stdout = %q; want 0 and an id (stderr=%s)", args, code, stdout, stderr)
@@ -143,7 +149,7 @@ func TestSpawnCLITemplateAgentArgs(t *testing.T) {
 			home := t.TempDir()
 			apitest.SeedErrPermissionRulesRefused(t, directorDir(home))
 			seedTemplate(t, home, "tpl", apitest.TemplateFields{Agent: tc.agent, AgentArgs: []string{tc.templateArg}})
-			id := spawnOK(t, home, fakeDir, append([]string{"--agent", tc.agent, "--cwd", t.TempDir(), "--template", "tpl", "--no-pre-trust"}, tc.extra...)...)
+			id := spawnOKForAgent(t, home, fakeDir, tc.agent, append([]string{"--cwd", t.TempDir(), "--template", "tpl", "--no-pre-trust"}, tc.extra...)...)
 
 			argv := assertInvocationKinds(t, home, "new-session")[0]
 			if tc.agent == "cursor" {
@@ -158,7 +164,11 @@ func TestSpawnCLITemplateAgentArgs(t *testing.T) {
 			} else if !slices.Contains(argv, tc.want) || (tc.gone != "" && slices.Contains(argv, tc.gone)) {
 				t.Errorf("create argv = %q; want %s and not %q", argv, tc.want, tc.gone)
 			}
-			if got := jsonOf(t, getRow(t, home, fakeDir, id)["agent_args"]); got != `["`+tc.want+`"]` {
+			row := getRow(t, home, fakeDir, id)
+			if row["agent"] != tc.agent {
+				t.Errorf("get.agent = %v; want %s", row["agent"], tc.agent)
+			}
+			if got := jsonOf(t, row["agent_args"]); got != `["`+tc.want+`"]` {
 				t.Errorf("get.agent_args = %s; want [%s]", got, tc.want)
 			}
 		})

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gabemahoney/agent-director/internal/clisetup"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 
@@ -48,8 +49,11 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 		allow, deny, ask []string
 	)
 	fs := spawnFlagSet(&p, &labelKVs, &extraEnvKVs, &allow, &deny, &ask)
-	if err := fs.Parse(args); err != nil {
-		return p, flagErr(fs, err)
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return p, err
 	}
 	// Parse consumes the separator as well as flag values. Walk only its
 	// consumed prefix to distinguish a real -- from a value such as --cwd --.
@@ -98,8 +102,11 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 func statusHandlerWith(client *pkgapi.Client, args []string) error {
 	var id string
 	fs := statusFlagSet(&id)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -136,8 +143,11 @@ func sendKeysHandlerWith(client *pkgapi.Client, args []string) error {
 func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	var p pkgapi.SendKeysParams
 	fs := sendKeysFlagSet(&p)
-	if err := fs.Parse(args); err != nil {
-		return p, flagErr(fs, err)
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return p, err
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return p, err
@@ -180,8 +190,11 @@ var sendKeysRawKeyFlags = map[string]string{
 func recordPaneAnswerHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.RecordPaneAnswerParams
 	fs := recordPaneAnswerFlagSet(&p)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -218,8 +231,11 @@ func readPaneHandlerWith(client *pkgapi.Client, args []string) error {
 func parseReadPaneFlags(args []string) (pkgapi.ReadPaneParams, error) {
 	var p pkgapi.ReadPaneParams
 	fs := readPaneFlagSet(&p)
-	if err := fs.Parse(args); err != nil {
-		return p, flagErr(fs, err)
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return p, err
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return p, err
@@ -245,8 +261,11 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	)
 	var p pkgapi.MakeTemplateParams
 	fs := makeTemplateFlagSet(&p, &labelKVs, &extraEnvKVs, &allow, &deny, &ask, &agentArgs)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -277,8 +296,11 @@ func listHandlerWith(client *pkgapi.Client, args []string) error {
 	)
 	var p pkgapi.ListParams
 	fs := listFlagSet(&p, &stateRaw, &labels)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -309,8 +331,11 @@ func listHandlerWith(client *pkgapi.Client, args []string) error {
 func pauseHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.PauseParams
 	fs := pauseFlagSet(&p)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -370,9 +395,12 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 	}()
 
 	fs := decideFlagSet(&p)
-	if err := fs.Parse(args); err != nil {
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
 		cliOutcome = "ErrInvalidFlags"
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		cliOutcome = "ErrInvalidFlags"
@@ -407,8 +435,11 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 func resumeHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.ResumeParams
 	fs := resumeFlagSet(&p)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -432,8 +463,11 @@ func resumeHandlerWith(client *pkgapi.Client, args []string) error {
 func killHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.KillParams
 	fs := killFlagSet(&p)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -452,8 +486,11 @@ func killHandlerWith(client *pkgapi.Client, args []string) error {
 func getHandlerWith(client *pkgapi.Client, args []string) error {
 	var id string
 	fs := getFlagSet(&id)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -482,8 +519,11 @@ func getManyHandlerWith(client *pkgapi.Client, args []string) error {
 func listSubagentsHandlerWith(client *pkgapi.Client, args []string) error {
 	var id string
 	fs := listSubagentsFlagSet(&id)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -505,8 +545,11 @@ func listSubagentsHandlerWith(client *pkgapi.Client, args []string) error {
 func getPermissionHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.GetPermissionParams
 	fs := getPermissionFlagSet(&p)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -582,6 +625,7 @@ func spawnFlagSet(p *pkgapi.SpawnParams, labelKVs *map[string]string, extraEnvKV
 	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", sendModeUsage)
 	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", confirmedDeliveryUsage)
 	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -590,6 +634,7 @@ func statusFlagSet(id *string) *flag.FlagSet {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(id, "instance-id", "", "id to inspect")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -611,6 +656,7 @@ func sendKeysFlagSet(p *pkgapi.SendKeysParams) *flag.FlagSet {
 	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", "this Message's Confirmed Delivery (--confirmed-delivery=false is explicit); Covered Agents only, else ErrCantSend agent_not_covered")
 	fs.Var(optionalStringValue{&p.CallerUUID}, "caller-uuid", "Caller UUID, hyphenated hexadecimal; Covered Agents only, else ErrCantSend agent_not_covered")
 	fs.Var(optionalBoolValue{&p.Force}, "force", "also force Held Messages (--force=false is explicit); Covered Agents only, else ErrCantSend agent_not_covered")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -622,6 +668,7 @@ func recordPaneAnswerFlagSet(p *pkgapi.RecordPaneAnswerParams) *flag.FlagSet {
 	fs.StringVar(&p.As, "as", "", "how it was answered: allow, deny, or unknown when not seen (stored as the caller's claim)")
 	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane that showed it answered")
 	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -633,6 +680,7 @@ func readPaneFlagSet(p *pkgapi.ReadPaneParams) *flag.FlagSet {
 	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "number of trailing pane lines to return, counted up from the last line with content (a negative value is refused)")
 	fs.BoolVar(&p.ANSI, "ansi", false, "return raw bytes (escape codes preserved); default strips ANSI but preserves unicode glyphs")
 	fs.BoolVar(&p.AllowPending, "allow-pending", false, "accepted for surface symmetry with send-keys; read-pane has no state guard so this flag has no effect")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -654,6 +702,7 @@ func makeTemplateFlagSet(p *pkgapi.MakeTemplateParams, labelKVs *map[string]stri
 	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", sendModeUsage)
 	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", confirmedDeliveryUsage)
 	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -667,6 +716,7 @@ func listFlagSet(p *pkgapi.ListParams, stateRaw *string, labels *[]string) *flag
 	fs.StringVar(&p.Cwd, "cwd", "", "filter by canonicalized cwd exact match")
 	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "filter by tmux session name exact match")
 	fs.Var(newDecimalInt(&p.Limit, 0), "limit", "cap result count (0 = no cap; a negative value is refused)")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -676,6 +726,7 @@ func pauseFlagSet(p *pkgapi.PauseParams) *flag.FlagSet {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to pause")
 	fs.BoolVar(&p.OnlyIfWaiting, "only-if-waiting", false, "pause only an agent proven waiting with no turn pending; Covered Agents only, else ErrSpawnNotPausable cause agent_not_covered")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -688,6 +739,7 @@ func decideFlagSet(p *pkgapi.DecideParams) *flag.FlagSet {
 	fs.StringVar(&p.Decision, "decision", "", "allow or deny")
 	fs.StringVar(&p.Reason, "reason", "", "deprecated; currently ignored — the canonical operator reason is persisted")
 	fs.Var(optionalInt64Value{&p.MaxWaitMs}, "max-wait-ms", "bound on the whole call in milliseconds (no default); a required wait cannot fit before recording the verdict: ErrStoreBusy, nothing recorded")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -699,6 +751,7 @@ func resumeFlagSet(p *pkgapi.ResumeParams) *flag.FlagSet {
 	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", sendModeUsage)
 	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", confirmedDeliveryUsage)
 	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -707,6 +760,7 @@ func killFlagSet(p *pkgapi.KillParams) *flag.FlagSet {
 	fs := flag.NewFlagSet("kill", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to kill")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -715,6 +769,7 @@ func getFlagSet(id *string) *flag.FlagSet {
 	fs := flag.NewFlagSet("get", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(id, "instance-id", "", "id to fetch")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -723,6 +778,7 @@ func listSubagentsFlagSet(id *string) *flag.FlagSet {
 	fs := flag.NewFlagSet("list-subagents", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(id, "instance-id", "", "id of the row whose subagents to list")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -731,5 +787,6 @@ func getPermissionFlagSet(p *pkgapi.GetPermissionParams) *flag.FlagSet {
 	fs := flag.NewFlagSet("get-permission", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the permission_requests row to fetch")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }

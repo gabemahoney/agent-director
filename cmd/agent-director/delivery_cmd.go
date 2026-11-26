@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/gabemahoney/agent-director/internal/clisetup"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
@@ -12,8 +13,11 @@ import (
 func forceDeliveryHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.ForceDeliveryParams
 	fs := forceDeliveryFlagSet(&p)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -32,8 +36,11 @@ func forceDeliveryHandlerWith(client *pkgapi.Client, args []string) error {
 func getForceHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.GetForceParams
 	fs := getForceFlagSet(&p)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -52,8 +59,11 @@ func getForceHandlerWith(client *pkgapi.Client, args []string) error {
 func getDeliveryHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.GetDeliveryParams
 	fs := getDeliveryFlagSet(&p)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -76,6 +86,7 @@ func forceDeliveryFlagSet(p *pkgapi.ForceDeliveryParams) *flag.FlagSet {
 	fs := flag.NewFlagSet("force-delivery", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the agent whose Held Messages to force")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -84,6 +95,7 @@ func getForceFlagSet(p *pkgapi.GetForceParams) *flag.FlagSet {
 	fs := flag.NewFlagSet("get-force", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ForceID, "force-id", "", "a force_result's force_id")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -93,5 +105,6 @@ func getDeliveryFlagSet(p *pkgapi.GetDeliveryParams) *flag.FlagSet {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.CallerUUID, "caller-uuid", "", "the send's Caller UUID")
 	fs.StringVar(&p.DeliveryRequestID, "delivery-request-id", "", "the send's Message ID")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }

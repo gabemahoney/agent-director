@@ -1,22 +1,28 @@
 package main
 
 import (
+	"io"
+
 	"github.com/gabemahoney/agent-director/internal/clisetup"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
-// parseCommandGlobalFlags resolves globals without parsing verb values or
-// opening a client. Handlers still own validation and execution (b.t1b).
+// parseCommandGlobalFlags resolves globals before opening a client. A repeat
+// of a verb flag triggers a silent trial parse; handlers retain their
+// existing help and parse-error handling (b.t1b, b.51h).
 func parseCommandGlobalFlags(argv []string) (clisetup.GlobalFlags, []string, error) {
 	g, args, err := clisetup.ParseGlobalFlags(argv)
-	if err != nil || len(args) == 0 {
+	if (err != nil && !clisetup.IsGlobalFlagRepeat(err)) || len(args) == 0 {
 		return g, args, err
 	}
+	// Finish validating verb-position globals before reporting a prefix repeat.
+	pendingGlobalRepeat := err
 	verb := args[0]
 	if alias, ok := verbAliases[verb]; ok {
 		verb = alias
 	}
 	g, tail, err := parseVerbGlobalFlags(verb, g, args[1:])
+	err = clisetup.GlobalFlagScanError(pendingGlobalRepeat, err)
 	if err != nil {
 		return clisetup.GlobalFlags{}, nil, err
 	}
@@ -26,64 +32,158 @@ func parseCommandGlobalFlags(argv []string) (clisetup.GlobalFlags, []string, err
 func parseVerbGlobalFlags(verb string, g clisetup.GlobalFlags, args []string) (clisetup.GlobalFlags, []string, error) {
 	switch verb {
 	case "help", "version":
-		return clisetup.ParseVerbGlobalFlags(nil, g, args)
+		return clisetup.ParseVerbGlobalFlags(nil, g, args, nil)
 	case "get-many":
 		// Every post-verb word is an ID, including -- and global names.
 		return g, args, nil
 	case "trail-emit":
-		g, rest, err := clisetup.ParseVerbGlobalFlags(nil, g, args)
-		if err != nil || len(rest) == 0 || rest[0] != "relay-attempt" {
+		g, rest, err := clisetup.ParseVerbGlobalFlags(nil, g, args, nil)
+		if (err != nil && !clisetup.IsGlobalFlagRepeat(err)) || len(rest) == 0 || rest[0] != "relay-attempt" {
 			return g, rest, err
 		}
-		g, tail, err := clisetup.ParseVerbGlobalFlags(trailEmitRelayAttemptFlagSet(new(string), new(string), new(string), new(int), new(int), new(string)), g, rest[1:])
+		pendingGlobalRepeat := err
+		fs := trailEmitRelayAttemptFlagSet(new(string), new(string), new(string), new(int), new(int), new(string))
+		g, tail, err := clisetup.ParseVerbGlobalFlags(fs, g, rest[1:], func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
+		err = clisetup.GlobalFlagScanError(pendingGlobalRepeat, err)
 		if err != nil {
 			return clisetup.GlobalFlags{}, nil, err
 		}
 		return g, append([]string{rest[0]}, tail...), nil
 	case "spawn":
-		return clisetup.ParseVerbGlobalFlags(spawnFlagSet(new(pkgapi.SpawnParams), new(map[string]string), new(map[string]string), new([]string), new([]string), new([]string)), g, args)
+		fs := spawnFlagSet(new(pkgapi.SpawnParams), new(map[string]string), new(map[string]string), new([]string), new([]string), new([]string))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "status":
-		return clisetup.ParseVerbGlobalFlags(statusFlagSet(new(string)), g, args)
+		fs := statusFlagSet(new(string))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "send-keys":
-		return clisetup.ParseVerbGlobalFlags(sendKeysFlagSet(new(pkgapi.SendKeysParams)), g, args)
+		fs := sendKeysFlagSet(new(pkgapi.SendKeysParams))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "record-pane-answer":
-		return clisetup.ParseVerbGlobalFlags(recordPaneAnswerFlagSet(new(pkgapi.RecordPaneAnswerParams)), g, args)
+		fs := recordPaneAnswerFlagSet(new(pkgapi.RecordPaneAnswerParams))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "read-pane":
-		return clisetup.ParseVerbGlobalFlags(readPaneFlagSet(new(pkgapi.ReadPaneParams)), g, args)
+		fs := readPaneFlagSet(new(pkgapi.ReadPaneParams))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "make-template":
-		return clisetup.ParseVerbGlobalFlags(makeTemplateFlagSet(new(pkgapi.MakeTemplateParams), new(map[string]string), new(map[string]string), new([]string), new([]string), new([]string), new([]string)), g, args)
+		fs := makeTemplateFlagSet(new(pkgapi.MakeTemplateParams), new(map[string]string), new(map[string]string), new([]string), new([]string), new([]string), new([]string))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "list":
-		return clisetup.ParseVerbGlobalFlags(listFlagSet(new(pkgapi.ListParams), new(string), new([]string)), g, args)
+		fs := listFlagSet(new(pkgapi.ListParams), new(string), new([]string))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "pause":
-		return clisetup.ParseVerbGlobalFlags(pauseFlagSet(new(pkgapi.PauseParams)), g, args)
+		fs := pauseFlagSet(new(pkgapi.PauseParams))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "decide":
-		return clisetup.ParseVerbGlobalFlags(decideFlagSet(new(pkgapi.DecideParams)), g, args)
+		fs := decideFlagSet(new(pkgapi.DecideParams))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "resume":
-		return clisetup.ParseVerbGlobalFlags(resumeFlagSet(new(pkgapi.ResumeParams)), g, args)
+		fs := resumeFlagSet(new(pkgapi.ResumeParams))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "kill":
-		return clisetup.ParseVerbGlobalFlags(killFlagSet(new(pkgapi.KillParams)), g, args)
+		fs := killFlagSet(new(pkgapi.KillParams))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "get":
-		return clisetup.ParseVerbGlobalFlags(getFlagSet(new(string)), g, args)
+		fs := getFlagSet(new(string))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "list-subagents":
-		return clisetup.ParseVerbGlobalFlags(listSubagentsFlagSet(new(string)), g, args)
+		fs := listSubagentsFlagSet(new(string))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "get-permission":
-		return clisetup.ParseVerbGlobalFlags(getPermissionFlagSet(new(pkgapi.GetPermissionParams)), g, args)
+		fs := getPermissionFlagSet(new(pkgapi.GetPermissionParams))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "force-delivery":
-		return clisetup.ParseVerbGlobalFlags(forceDeliveryFlagSet(new(pkgapi.ForceDeliveryParams)), g, args)
+		fs := forceDeliveryFlagSet(new(pkgapi.ForceDeliveryParams))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "get-force":
-		return clisetup.ParseVerbGlobalFlags(getForceFlagSet(new(pkgapi.GetForceParams)), g, args)
+		fs := getForceFlagSet(new(pkgapi.GetForceParams))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "get-delivery":
-		return clisetup.ParseVerbGlobalFlags(getDeliveryFlagSet(new(pkgapi.GetDeliveryParams)), g, args)
+		fs := getDeliveryFlagSet(new(pkgapi.GetDeliveryParams))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "sweep":
-		return clisetup.ParseVerbGlobalFlags(sweepFlagSet(), g, args)
+		fs := sweepFlagSet()
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "find-missing":
-		return clisetup.ParseVerbGlobalFlags(findMissingFlagSet(), g, args)
+		fs := findMissingFlagSet()
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "expire":
-		return clisetup.ParseVerbGlobalFlags(expireFlagSet(new(string)), g, args)
+		fs := expireFlagSet(new(string))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "serve":
-		return clisetup.ParseVerbGlobalFlags(serveFlagSet(new(bool)), g, args)
+		fs := serveFlagSet(new(bool))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	case "cursor-host":
-		return clisetup.ParseVerbGlobalFlags(cursorHostFlagSet(new(string), new(string), new(string), new(string), new(string)), g, args)
+		fs := cursorHostFlagSet(new(string), new(string), new(string), new(string), new(string))
+		return clisetup.ParseVerbGlobalFlags(fs, g, args, func(tail []string) error {
+			fs.SetOutput(io.Discard)
+			return fs.Parse(tail)
+		})
 	default:
 		return g, args, nil
 	}

@@ -373,7 +373,10 @@ func parseFlags(fs *flag.FlagSet, args []string) (done bool, err error) {
 // invalid, for the caller to write.
 func parseVerbFlags(fs *flag.FlagSet, args []string) (done bool, invalid string, err error) {
 	fs.SetOutput(io.Discard)
-	switch perr := fs.Parse(args); {
+	perr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	switch {
 	case errors.Is(perr, flag.ErrHelp):
 		return true, "", printVerbHelp(fs.Name())
 	case perr != nil:
@@ -381,6 +384,8 @@ func parseVerbFlags(fs *flag.FlagSet, args []string) (done bool, invalid string,
 			return true, text, nil
 		}
 		return true, perr.Error(), nil
+	case repeats.Err != nil:
+		return true, repeats.Err.Error(), nil
 	case fs.NArg() > 0:
 		return true, fmt.Sprintf("unexpected argument %q", fs.Arg(0)), nil
 	}
@@ -490,6 +495,8 @@ func writeError(name, desc string) error {
 // stringSlice is a repeatable string flag.
 type stringSlice []string
 
+func (*stringSlice) IsRepeatableFlag() bool { return true }
+
 // String returns the values joined by commas.
 func (s *stringSlice) String() string {
 	if s == nil {
@@ -512,12 +519,14 @@ func migrateJournalFlagSet(options *adminapi.JournalMigrationOptions, checkOnly 
 	fs.Var((*stringSlice)(&options.LegacyRoots), "legacy-root", "additional absolute legacy input root (repeatable)")
 	fs.StringVar(&options.BackupDir, "backup-dir", "", "new absolute stopped-writer backup directory")
 	fs.BoolVar(checkOnly, "check-only", false, "check arguments and, with --store-path, holders; write nothing")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
 // versionFlagSet defines version's flags for both global scanning and the handler.
 func versionFlagSet() *flag.FlagSet {
 	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -525,6 +534,7 @@ func versionFlagSet() *flag.FlagSet {
 func killFinishedFlagSet(id *string) *flag.FlagSet {
 	fs := flag.NewFlagSet("kill-finished", flag.ContinueOnError)
 	fs.StringVar(id, idFlag, "", "id of the finished row")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -532,5 +542,6 @@ func killFinishedFlagSet(id *string) *flag.FlagSet {
 func deleteFlagSet(ids *[]string) *flag.FlagSet {
 	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
 	fs.Var((*stringSlice)(ids), idFlag, "id of a row to remove (repeatable; ≥1 required)")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }

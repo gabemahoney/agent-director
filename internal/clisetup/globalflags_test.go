@@ -50,8 +50,6 @@ func TestGlobalFlagStages(t *testing.T) {
 			clisetup.GlobalFlags{CreateIfMissingSet: true}, []string{"list"}},
 		{"create-if-missing true equals form", []string{"--create-if-missing=true", "list"},
 			clisetup.GlobalFlags{CreateIfMissing: true, CreateIfMissingSet: true}, []string{"list"}},
-		{"create-if-missing repeated, last copy wins", []string{"--create-if-missing", "false", "--create-if-missing", "true", "list"},
-			clisetup.GlobalFlags{CreateIfMissing: true, CreateIfMissingSet: true}, []string{"list"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,6 +64,44 @@ func TestGlobalFlagStages(t *testing.T) {
 				t.Errorf("argv = %q; want %q", argv, tc.wantArgv)
 			}
 		})
+	}
+}
+
+// b.51h: refuse a repeated global within either stage and across stages,
+// including identical values. Globals require explicit values, even bools.
+func TestB51hRepeatedGlobalFlags(t *testing.T) {
+	for _, name := range clisetup.GlobalFlagNames() {
+		first, second := "/first", "/second"
+		if name == "--create-if-missing" {
+			first, second = "false", "true"
+		}
+		for _, form := range []struct {
+			name string
+			a, b []string
+		}{
+			{"separate", []string{name, first}, []string{name, second}},
+			{"equals", []string{name + "=" + first}, []string{name + "=" + second}},
+			{"mixed", []string{name, first}, []string{name + "=" + second}},
+			{"identical", []string{name + "=" + first}, []string{name, first}},
+		} {
+			for _, stage := range []string{"prefix", "verb", "across"} {
+				t.Run(strings.TrimPrefix(name, "--")+"/"+form.name+"/"+stage, func(t *testing.T) {
+					var argv []string
+					switch stage {
+					case "prefix":
+						argv = append(append(slices.Clone(form.a), form.b...), "list")
+					case "verb":
+						argv = append(append([]string{"list"}, form.a...), form.b...)
+					case "across":
+						argv = append(append(slices.Clone(form.a), "list"), form.b...)
+					}
+					want := "flag " + name + " may only be specified once"
+					if _, _, err := parseGlobalFlagStages(argv); err == nil || err.Error() != want {
+						t.Fatalf("argv %q: error = %v; want %q", argv, err, want)
+					}
+				})
+			}
+		}
 	}
 }
 
