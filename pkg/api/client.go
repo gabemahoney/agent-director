@@ -77,6 +77,8 @@ var _ TmuxClient = (*tmux.Client)(nil)
 
 // Client is the opaque handle through which callers interact with
 // agent-director. Obtain one via New; release resources with Close.
+// Library callers must use a process umask with its owner bits clear (unmasked);
+// Client does not change the umask.
 //
 // Client is safe for concurrent use: the closed flag is mutex-guarded so
 // concurrent Close calls and (Task 2+) verb method calls from multiple
@@ -168,6 +170,8 @@ func (c *Client) settleRead() store.SettleRead {
 }
 
 // New constructs a Client from opts, wiring config, store, and tmux.
+// The caller's process umask must leave its owner bits clear (unmasked) so
+// newly created files and directories remain usable. New does not change it.
 //
 // Startup sequence:
 //  1. Apply defaults (ConfigPath, Logger).

@@ -13560,6 +13560,9 @@ guarantees only the owner's access; the exact modes install.sh gives
 sentinel; see [On-disk shape](#on-disk-shape)) come from explicit
 `chmod`s.
 
+Both binaries clear owner bits from the process umask as the first step in main; future binary entry points must reuse `clisetup.EnsureOwnerUmask` before creating files or starting workers. Library callers retain responsibility for their process umask.
+A tmux server agent-director starts, and the agents it runs, inherit the adjusted umask unless they reset it; an already running server keeps its own.
+
 **The config.toml merge (b.onv, b.whe, b.hhk).** With hooks on, install.sh sets
 `inject_help_hook = true` in `~/.config/agent-director/config.toml`'s
 `[defaults]` table (see

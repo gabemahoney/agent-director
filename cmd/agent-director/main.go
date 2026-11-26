@@ -956,6 +956,7 @@ func runOrdinary() int {
 var teardownDiagnostics io.Writer = os.Stderr
 
 func main() {
+	clisetup.EnsureOwnerUmask()
 	// The installation handshake must also bypass audit-worker teardown:
 	// constructing the default trail would introduce a filesystem participant.
 	if handled, code := installVersionFacts(os.Args[1:]); handled {

@@ -231,6 +231,7 @@ func writeJournalError(name, desc string, refusal *adminapi.JournalRefusal, resu
 }
 
 func main() {
+	clisetup.EnsureOwnerUmask()
 	os.Exit(run(os.Args[1:]))
 }
 
