@@ -180,7 +180,17 @@ func (r *Run) Install(ctx context.Context, backup string, recreateV21, maintenan
 		}
 	}
 	if version > 0 {
-		_, _, err = r.Commands.Run(ctx, "backup-store", 30*time.Second, "sqlite3", "-readonly", "-batch", "-init", "/dev/null", dbPath, ".backup '"+filepath.Join(backup, "state.db")+"'")
+		backupDB := filepath.Join(backup, "state.db")
+		// SQLite preserves an existing target's mode; create it privately before
+		// any store contents are written, regardless of the caller's umask.
+		file, err := os.OpenFile(backupDB, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		if err = file.Close(); err != nil {
+			return err
+		}
+		_, _, err = r.Commands.Run(ctx, "backup-store", 30*time.Second, "sqlite3", "-readonly", "-batch", "-init", "/dev/null", dbPath, ".backup '"+backupDB+"'")
 		if err != nil {
 			return err
 		}

@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -43,6 +44,10 @@ esac
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 
 	t.Run("install-launch", func(t *testing.T) {
+		// b.1jw: SQLite's default backup mode must not depend on a private umask.
+		// Umask is process-wide; keep this test serial and restore it on return.
+		previousUmask := syscall.Umask(0022)
+		defer syscall.Umask(previousUmask)
 		scope := t.TempDir()
 		r := scopedRunner(t, scope, kit, "install")
 		cfg := filepath.Join(r.Home, ".config/agent-director")
@@ -58,6 +63,13 @@ esac
 		backup := filepath.Join(scope, "backup")
 		assertBackup := func() {
 			t.Helper()
+			st, err := os.Stat(filepath.Join(backup, "state.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := st.Mode().Perm(); got != 0600 {
+				t.Fatalf("backup store mode = %04o, want 0600", got)
+			}
 			if got := string(readFixture(t, filepath.Join(backup, "install/config.toml"))); got != "# retained installation\n" {
 				t.Fatalf("original installation backup: %q", got)
 			}
