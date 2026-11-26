@@ -13525,10 +13525,14 @@ plain path prints unchanged. In a checkout, `make build` stamps both
 binaries with its commit, as the source-tree check and the stamp pairing
 require. With no checkout known, the placeholder stands for the
 operator's own, and the re-run is that checkout's install.sh, which
-takes the rebuilt binaries from its `bin/`. Where the advice appears:
+takes the rebuilt binaries from its `bin/`, without carrying the refused
+`--binary` or `--admin-binary` arguments. Where the advice appears:
 
 - the source-tree version check: `rebuild it first:    <build_advice>`
-- both stamp-pairing refusals: `rebuild both first:  <build_advice>`
+- both stamp-pairing refusals: `rebuild both first:  <build_advice>` in a
+  checkout; with none known, append ` && <build_rerun>`
+- the directory capability refusal: `build both binaries from it:
+  <build_advice>`, with the same no-checkout re-run
 - `--from-release` with no release published (exit 3):
   `build from source: <build_advice> && <build_rerun>`
 
@@ -13541,9 +13545,9 @@ in no checkout and a copy in a dotfiles `~/.claude`, the last two in
 placeholder form with the checkout put in its place; point at local
 binaries from a copy in no checkout and one whose path has a space), J5
 (above, the spaced linked worktree's path quoted) and J9 (a stale
-`agent-director-admin` in a checkout's `bin/`, and a plain-`go build`
-pair passed with `--binary` and `--admin-binary` to a copy in no
-checkout, placeholder form).
+`agent-director-admin` in a checkout's `bin/`; with no checkout, an
+installed admin paired with another build from PATH or `--binary`, an
+unstamped pair outside the checkout, and either binary lacking `config_dir`).
 
 **The operator's umask (b.7j2).** install.sh runs `umask u=rwx` right
 after `set -euo pipefail`. That clears the owner's bits from the umask

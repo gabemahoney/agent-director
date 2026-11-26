@@ -209,11 +209,15 @@ import (
 	"syscall"
 )
 
-var version, commit, around, administrator string
+var version, commit, around, administrator, noConfigDir string
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Printf("{\"version\":%q,\"commit\":%q,\"config_dir\":\"~/.config/agent-director\"}\n", version, commit)
+		if noConfigDir == "1" {
+			fmt.Printf("{\"version\":%q,\"commit\":%q}\n", version, commit)
+		} else {
+			fmt.Printf("{\"version\":%q,\"commit\":%q,\"config_dir\":\"~/.config/agent-director\"}\n", version, commit)
+		}
 		return
 	}
 	mode, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), "fake-list"))
@@ -468,7 +472,7 @@ bad() { echo "    FAIL: $*"; T_FAILED=1; }
 # known_broken <id> <why>: skip the rest of this test unless the gate is set.
 known_broken() {
     if [[ "${AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE:-}" != 1 ]]; then
-        echo "    SKIP: b.fji $1: advice does not work as written (product bug to file): $2"
+        echo "    SKIP: b.fji $1: advice does not work as written: $2"
         T_SKIPPED=1
         return 1
     fi
@@ -2027,47 +2031,54 @@ test_J9_InstalledAdminStampMismatchFromRelease() {
     done
 }
 
-# J9: "rebuild both first:  make -C <path-to-agent-director-checkout> build"
-# in j9_installed_mismatch's refusal (the installed skill is in no checkout),
-# with TREE for the placeholder, run where install.sh ran, outside any
-# checkout; the same command then installs (a pair: install.sh refuses any
-# other). Known broken: the re-run pairs the same two binaries (b.oo9).
+# J9 (b.oo9): from an installed skill, follow the whole build-and-install
+# command, replacing only the checkout placeholder; retain the old PATH or
+# explicit --binary source so reusing it would fail again.
 test_J9_InstalledAdminStampMismatchMakeBuild() {
     local how cmd
     for how in PATH --binary; do
         j9_installed_mismatch "$how" || continue
-        expect_advice "rebuild both first: make -C $CHECKOUT build"
+        expect_advice "rebuild both first: make -C $CHECKOUT build && bash $CHECKOUT/skills/install-agent-director/install.sh"
         cmd="$(advice_after "rebuild both first:")" || { bad "$how: no advised command"; continue; }
-        known_broken J9 "filed as b.oo9: the re-run of the installed skill, in no checkout, pairs the same two binaries, not the rebuilt ones" || return
         run_advised "$J3H" "$ROOT" "${cmd//"$CHECKOUT"/$TREE}"
-        expect_rc 0 "$how: advised: $cmd" || continue
-        run "$J3H" "${J9ARGV[@]}"
-        expect_rc 0 "$how: re-run after make build"
+        expect_rc 0 "$how: advised: $cmd" && expect_installed "$J3H" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
     done
 }
 
-# J9: "rebuild both first:  make -C <path-to-agent-director-checkout> build"
-# when both binaries are plain `go build`s (commit "unknown"), which nothing
-# shows come from one build: refused with nothing installed. LOOSE is in no
-# checkout, so the advice names a placeholder (b.3qt); make -C their checkout,
-# TREE, from outside it stamps both, and the same command then installs them.
+# J9 (b.oo9): unstamped binaries outside the checkout remain untouched by
+# make build. The printed command must install the rebuilt pair from TREE.
 test_J9_NoCommitStampMakeBuild() {
     local h; h="$(new_home)"
-    mkdir -p "$TREE/bin" && cp "$BIN_PLAIN" "$TREE/bin/agent-director" && cp "$ADMIN_PLAIN" "$TREE/bin/agent-director-admin" \
-        || { bad "put the plain builds in the tree's bin/"; return; }
-    local argv=(bash "$LOOSE" --binary "$TREE/bin/agent-director" --admin-binary "$TREE/bin/agent-director-admin" --no-hooks --no-symlink)
-    run "$h" "${argv[@]}"
+    run "$h" bash "$LOOSE" --binary "$BIN_PLAIN" --admin-binary "$ADMIN_PLAIN" --no-hooks --no-symlink
     expect_rc 3 "no commit stamp" || return
     local want="install.sh: agent-director and agent-director-admin carry no commit stamp, so they cannot be shown to come from the same build; refusing to install."
     [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
-    expect_advice "agent-director-admin: $TREE/bin/agent-director-admin (dev unknown)"
-    expect_advice "rebuild both first: make -C $CHECKOUT build"
+    expect_advice "agent-director-admin: $ADMIN_PLAIN (dev unknown)"
+    expect_advice "rebuild both first: make -C $CHECKOUT build && bash $CHECKOUT/skills/install-agent-director/install.sh"
     expect_nothing_installed "$h"
     local cmd; cmd="$(advice_after "rebuild both first:")" || { bad "no advised command"; return; }
     run_advised "$h" "$ROOT" "${cmd//"$CHECKOUT"/$TREE}"
-    expect_rc 0 "advised: $cmd" || return
-    run "$h" "${argv[@]}"
-    expect_rc 0 "re-run after make build" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
+    expect_rc 0 "advised: $cmd" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
+}
+
+# J9 (b.oo9): either binary can lack config_dir despite matching commit
+# stamps. Follow the printed build-and-install command from no checkout.
+test_J9_NoConfigDirMakeBuild() {
+    local old="$ROOT/bin/no-config-dir" h which main admin cmd
+    (cd "$ROOT/fake-ad" && CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.2-advice -X main.commit=$CUR_COMMIT -X main.noConfigDir=1" -o "$old" .) \
+        || { bad "go build (no config_dir fixture)"; return; }
+    for which in main admin; do
+        h="$(new_home)" main="$BIN" admin="$ADMIN"
+        if [[ "$which" == main ]]; then main="$old"; else admin="$old"; fi
+        run "$h" bash "$LOOSE" --binary "$main" --admin-binary "$admin" --no-hooks --no-symlink
+        expect_rc 3 "$which lacks config_dir" || continue
+        expect_advice "install.sh: a binary to install is from an earlier release (its version output lacks config_dir ~/.config/agent-director); refusing to install."
+        expect_advice "build both binaries from it: make -C $CHECKOUT build && bash $CHECKOUT/skills/install-agent-director/install.sh"
+        expect_nothing_installed "$h"
+        cmd="$(advice_after "build both binaries from it:")" || { bad "$which: no advised command"; continue; }
+        run_advised "$h" "$ROOT" "${cmd//"$CHECKOUT"/$TREE}"
+        expect_rc 0 "$which: advised: $cmd" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
+    done
 }
 
 # ---- J10: --from-release of a release before 0.11.0 (b.vqr) ------------------
