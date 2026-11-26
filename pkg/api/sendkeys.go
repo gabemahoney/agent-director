@@ -718,7 +718,7 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 	if paneOnly {
 		// No native journal, readiness, deduplication or proof applies to this
 		// lane. Retain the ordinary owned-pane, hash and literal input guards.
-		r.keysRun = newKeysRun(r.t, r.env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
+		r.keysRun = newKeysRun("send-keys", r.t, r.env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
 		return r.sendPrepared(plan, params)
 	}
 	if row.Identity.Token != "" {
@@ -730,7 +730,7 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 	if r.input != nil {
 		defer func() {
 			if err := r.input.Close(); err != nil {
-				resultErr = inputCleanupError(row, r.found, r.deliveryResult, resultErr, err)
+				resultErr = inputCleanupError("send-keys", row, r.found, r.deliveryResult, resultErr, err)
 			}
 		}()
 		id := deliveryIdentity(row, r.s.StoreID())
@@ -749,7 +749,7 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 			}
 		}
 	}
-	r.keysRun = newKeysRun(r.t, r.env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
+	r.keysRun = newKeysRun("send-keys", r.t, r.env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
 	if !r.automatic && row.Agent == store.AgentCodex && ordinary {
 		if reason := codexPasteRefusal(plan.text); reason != "" {
 			return deliveryNotStarted(row, reason)

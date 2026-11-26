@@ -104,7 +104,7 @@ func (r *sendKeysRun) pasteText(paneID, text string) error {
 				reason = "input admission changed after paste; Enter was not sent"
 			}
 		}
-		r.found.SendErr = deliveryError(r.row, a, unresolvedOutcome(a), reason+"; inspect get or status and escalate if submission remains unknown")
+		r.found.SendErr = deliveryError("send-keys", r.row, a, unresolvedOutcome(a), reason+"; inspect get or status and escalate if submission remains unknown")
 		return r.found.SendErr
 	}
 	r.found.TextSent, r.found.EnterAttempted = true, true

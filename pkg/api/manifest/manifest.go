@@ -1537,7 +1537,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "pause",
-		Description: "Pane-only: ErrAgentCapabilityUnsupported. Ended/missing: no-op. " + missingNotProofShort + " Covered live/busy Codex: identity-checked SIGTERM, session kept; ErrSpawnNotPausable (cause, signal_sent). Uncovered waiting: `/exit`, await `ended` (pause.timeout_seconds); ErrPauseTimeout: inspect get/read-pane, no blind retry; ErrSubmissionUnconfirmed: inspect attempted input. Codex end report + exit ends row before keys/in wait. Send-keys guards; ErrDialogMaybeOpen: answer it, send-keys `/exit`+expect_pane_sha256, or kill. ErrTmuxSendKeys (GONE: only it means no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Pane-only: ErrAgentCapabilityUnsupported. Ended/missing: no-op. " + missingNotProofShort + " Covered live/busy Codex: identity-checked SIGTERM, session kept; ErrSpawnNotPausable (cause, signal_sent). Uncovered waiting: `/exit`, await `ended` (pause.timeout_seconds). ErrPauseTimeout/ErrSubmissionUnconfirmed: check get/read-pane; `/exit` may be unsubmitted, no blind retry. Codex end report + exit ends row before keys/in wait. Send-keys guards; ErrDialogMaybeOpen: answer it, send-keys `/exit`+expect_pane_sha256, or kill. ErrTmuxSendKeys (GONE: only it means no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{

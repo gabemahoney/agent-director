@@ -568,12 +568,12 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent boo
 		if session != nil {
 			defer func() {
 				if err := session.Close(); err != nil {
-					resultErr = inputCleanupError(row, r.found, SendKeysResult{}, resultErr, err)
+					resultErr = inputCleanupError("pause", row, r.found, SendKeysResult{}, resultErr, err)
 				}
 			}()
 		}
 	}
-	r.keysRun = newKeysRun(t, env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
+	r.keysRun = newKeysRun("pause", t, env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
 	r.clear = t
 	if row.Agent == store.AgentCursor {
 		r.clearPresses = codexLineClearPresses
@@ -763,10 +763,15 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // CLI: agent-director pause
 //
 // Failure to acquire the input writer or open its delivery journal returns
-// ErrInternal before this call attempts input. After dispatch, an admission or
-// cleanup failure can return ErrSubmissionUnconfirmed with attempted-input
-// facts; cleanup preserves any existing primary error. Follow "Manual input
-// ownership" in docs/caller-contract.md before sending more input.
+// ErrInternal before this call attempts input. If admission changes after
+// typing /exit but before Enter, ErrSubmissionUnconfirmed reports outcome
+// partial_input_unconfirmed, phase text_attempted, bytes_attempted 5,
+// keys_sent true and enter_may_have_been_sent false. The pane may hold an
+// unsubmitted /exit. Inspect get/read-pane before more input; never blindly
+// replay text or Enter. An admitted retry clears the leftover line with C-u.
+// Cleanup failure also returns ErrSubmissionUnconfirmed with attempted-input
+// facts unless it preserves an existing primary error. Follow "Manual input
+// ownership" in docs/caller-contract.md.
 //
 // Errors:
 //   - [ErrInvalidFlags]: instance_id is empty; no row is read or input sent.

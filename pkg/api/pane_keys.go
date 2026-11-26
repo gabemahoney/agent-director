@@ -128,6 +128,7 @@ type keysFacts struct {
 // Leftover refusal, its next step after a keys failure, its line clear and
 // what the phase found.
 type keysRun struct {
+	verb string
 	// beforeWrite retains the same admission across clear, text and Enter.
 	beforeWrite func() error
 	paneRun
@@ -155,12 +156,14 @@ type keysRun struct {
 	found keysFacts
 }
 
-// newKeysRun is the keys phase for row on socket: t is the verb's tmux
-// surface, pc the start-time reader, storeID this store's id and adopter the
-// verb's store, which makes the adoption write (SR-3.6). Its gone sentinel is
-// ErrTmuxSendKeys and its refusals say "nothing was sent" (SR-7.2).
-func newKeysRun(t keysTmux, pc ProcChecker, row Spawn, storeID, socket string, adopter identityAdopter) keysRun {
+// newKeysRun is the keys phase for row on socket: verb names the operation
+// in delivery errors, t is its tmux surface, pc the start-time reader,
+// storeID this store's id and adopter the verb's store, which makes the
+// adoption write (SR-3.6). Its gone sentinel is ErrTmuxSendKeys and its
+// refusals say "nothing was sent" (SR-7.2).
+func newKeysRun(verb string, t keysTmux, pc ProcChecker, row Spawn, storeID, socket string, adopter identityAdopter) keysRun {
 	return keysRun{
+		verb: verb,
 		paneRun: paneRun{
 			t: t, pc: pc, row: row, storeID: storeID, socket: socket,
 			gone: tmux.ErrTmuxSendKeys, nothing: nothingSent, adopter: adopter,
@@ -247,7 +250,7 @@ func (r *keysRun) typeText(paneID string, launch tmux.Launch, text string, enter
 					return err
 				}
 				a := r.found.deliveryAttempt()
-				return deliveryError(r.row, a, unresolvedOutcome(a), "input admission changed after text; Enter was not sent")
+				return deliveryError(r.verb, r.row, a, unresolvedOutcome(a), "input admission changed after text; Enter was not sent")
 			}
 		}
 		r.found.Sent, r.found.EnterAttempted = true, true

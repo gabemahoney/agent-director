@@ -37,7 +37,8 @@ error:
   [Cursor input outcomes](#cursor-input-outcomes). Otherwise, for automatic
   `send-keys`, follow
   [Ordinary text submission](#ordinary-text-submission); for manual
-  `send-keys`, follow [Manual input ownership](#manual-input-ownership).
+  `send-keys` or waiting uncovered `pause`, follow
+  [Manual input ownership](#manual-input-ownership).
 - `ErrCantSend`: nothing was stored, sent or typed; act on its `reason`
   ([Busy-send refusals](#busy-send-refusals)).
 - `ErrCodexTurnErrored`: nothing was sent; inspection is required before more
@@ -1791,8 +1792,16 @@ A persistent journal refusal needs an operator. A `pause` journal read/save
 failure returns `ErrInternal` without input. If its ownership recheck fails after it clears
 the input line, it returns `ErrInternal` with only that clear sent: no
 `/exit` and no Enter, so the agent is not pausing. Check `get`'s `state`
-before calling `pause` again. State, relay and recorded-name guards run
-before it acquires input ownership.
+before calling `pause` again.
+
+If `pause`'s recheck fails after typing `/exit` but before Enter, it returns
+`ErrSubmissionUnconfirmed` with `outcome: "partial_input_unconfirmed"`,
+`phase: "text_attempted"`, `bytes_attempted: 5`, `keys_sent: true` and
+`enter_may_have_been_sent: false`. The pane may hold an unsubmitted `/exit`.
+Inspect `get` and `read-pane` before more input; never blindly replay text or
+Enter. If inspection supports retrying `pause`, its line clear (`C-u`)
+clears that one-line leftover before typing `/exit` again. State, relay and
+recorded-name guards run before it acquires input ownership.
 
 After Enter-only or pane-hash text sends with Enter to a `pending` Codex row,
 bounded hook observation can instead return `ErrSubmissionUnconfirmed` with
@@ -1808,8 +1817,9 @@ from `pause` does not change that contract. Manual input does not clear an
 unresolved attempt. Direct terminal writers must also be excluded during an
 automatic request; agent-director's lock cannot serialize them.
 
-Cleanup failure after manual, permission-pane or pause input does not erase
-what was attempted. Its details retain actual byte/key and Enter facts;
+Cleanup failure after manual, permission-pane or pause input returns
+`ErrSubmissionUnconfirmed` unless it preserves an existing primary error.
+Its details retain actual byte/key and Enter facts;
 a key-only send does not imply an added Enter. Follow those facts and the
 primary error rather than treating cleanup failure as proof that nothing was
 sent. Manual interference remains recorded and does not clear native uncertainty.
