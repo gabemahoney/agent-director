@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/gabemahoney/agent-director/internal/adminapi"
+	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/installversion"
 )
 
@@ -102,6 +103,7 @@ func writeVersionInstallError(err error) error {
 // versionFactsFlagSet defines version-facts's flags for both global scanning and the handler.
 func versionFactsFlagSet() *flag.FlagSet {
 	fs := flag.NewFlagSet("version-facts", flag.ContinueOnError)
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -109,6 +111,7 @@ func versionFactsFlagSet() *flag.FlagSet {
 func publishVersionFlagSet(binary *string) *flag.FlagSet {
 	fs := flag.NewFlagSet("publish-version", flag.ContinueOnError)
 	fs.StringVar(binary, "binary", "", "candidate runtime executable (required)")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -116,11 +119,13 @@ func publishVersionFlagSet(binary *string) *flag.FlagSet {
 func rollbackVersionFlagSet(stamp *string) *flag.FlagSet {
 	fs := flag.NewFlagSet("rollback-version", flag.ContinueOnError)
 	fs.StringVar(stamp, "version", "", "retained version stamp (required)")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
 // listVersionsFlagSet defines list-versions's flags for both global scanning and the handler.
 func listVersionsFlagSet() *flag.FlagSet {
 	fs := flag.NewFlagSet("list-versions", flag.ContinueOnError)
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }

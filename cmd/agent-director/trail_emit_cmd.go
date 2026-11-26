@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
@@ -44,8 +45,11 @@ func trailEmitRelayAttemptHandler(args []string) error {
 		instanceID    string
 	)
 	fs := trailEmitRelayAttemptFlagSet(&token, &endpoint, &outcomeStr, &bytesSent, &bytesReceived, &instanceID)
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -120,5 +124,6 @@ func trailEmitRelayAttemptFlagSet(token *string, endpoint *string, outcomeStr *s
 	fs.Var(newDecimalInt(bytesSent, 0), "bytes-sent", "bytes sent (a negative value is refused)")
 	fs.Var(newDecimalInt(bytesReceived, 0), "bytes-received", "bytes received (a negative value is refused)")
 	fs.StringVar(instanceID, "instance-id", "", "instance_id (required)")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }

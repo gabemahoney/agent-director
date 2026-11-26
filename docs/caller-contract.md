@@ -142,6 +142,24 @@ flag owns its next word whatever it spells; neither that word nor an inline
 before the verb ([Reading many agents](#reading-many-agents)).
 `--create-if-missing` always needs a value, exactly `true` or `false`.
 
+On flag-only verbs of `agent-director` and `agent-director-admin`, pass each
+single-value flag at most once. Mixing `--flag value`, `--flag=value`,
+`-flag value` or bare boolean forms still counts as repeating the same flag.
+Each global flag above also counts once across the prefix and verb positions
+combined. A repeat is refused with exit 1 and `ErrInvalidFlags`, before any
+store, config, template, tmux or trail work. Its description names only the
+flag: `flag --instance-id may only be specified once`.
+
+Repeatable flags keep collecting: `--label`, `--extra-env`, `--allow`,
+`--deny`, `--ask`, `--agent-args`, admin `--legacy-root` and admin
+`delete --instance-id`. `hook` uses lenient argument parsing.
+
+Global errors take precedence: a missing or malformed global value in any
+copy wins over a global repeat, which wins over verb errors. Within verb
+flags, the first parse error in argument order wins (help, an unknown or
+old flag name, or a malformed value in any copy). A verb repeat is refused
+only after parsing succeeds, before leftover words are checked.
+
 After global flags are extracted, a flag-only CLI verb rejects every word
 left after flag parsing with exit 1 and `ErrInvalidFlags`. The description
 lists all leftover words as `unexpected arguments: [...]`, including any

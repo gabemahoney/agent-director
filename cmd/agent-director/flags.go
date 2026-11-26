@@ -60,6 +60,8 @@ type stringSliceValue struct {
 
 func newStringSlice(dst *[]string) *stringSliceValue { return &stringSliceValue{dst: dst} }
 
+func (*stringSliceValue) IsRepeatableFlag() bool { return true }
+
 func (s *stringSliceValue) String() string {
 	if s == nil || s.dst == nil {
 		return ""
@@ -79,6 +81,8 @@ type kvSliceValue struct {
 	dst  *map[string]string
 	flag string // for error messages
 }
+
+func (*kvSliceValue) IsRepeatableFlag() bool { return true }
 
 func newKVSlice(dst *map[string]string, flag string) *kvSliceValue {
 	return &kvSliceValue{dst: dst, flag: flag}
@@ -117,8 +121,9 @@ func (k *kvSliceValue) Set(v string) error {
 // optionalInt64Value implements flag.Value for an integer flag whose absence
 // means something no value does (decide's --max-wait-ms: no bound). *dst
 // stays nil until the flag is given; Set parses a base-10 int64 into a new
-// value, so a later occurrence wins. Like decimalIntValue it refuses a
-// leading + and words its refusals alike (b.c4n).
+// value. The FlagSet's single-value guard refuses a later occurrence.
+// Like decimalIntValue it refuses a leading + and words its refusals alike
+// (b.c4n).
 type optionalInt64Value struct {
 	dst **int64
 }
@@ -213,7 +218,7 @@ func buildPermissions(allow, deny, ask []string) *spawn.Permissions {
 // flagErr is err, the error of fs.Parse, for a verb to report as
 // ErrInvalidFlags: an old flag (internal/oldnames' table) whose new flag fs
 // defines becomes the refusal naming the new flag (SR-4.3); any other error is
-// returned as it is.
+// returned as it is. Repeat checks run on each handler's local FlagSet.
 func flagErr(fs *flag.FlagSet, err error) error {
 	if text, ok := oldnames.RefuseFlag(fs, err); ok {
 		return errors.New(text)

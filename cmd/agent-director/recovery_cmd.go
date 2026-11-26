@@ -7,13 +7,17 @@ import (
 	"os"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/clisetup"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
 // sweepHandlerWith implements the canonical all-agent check.
 func sweepHandlerWith(client *pkgapi.Client, args []string) error {
 	fs := sweepFlagSet()
-	if err := fs.Parse(args); err != nil {
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
@@ -31,7 +35,10 @@ func sweepHandlerWith(client *pkgapi.Client, args []string) error {
 // usual monitoring stream.
 func findMissingHandlerWith(client *pkgapi.Client, args []string) error {
 	fs := findMissingFlagSet()
-	if err := fs.Parse(args); err != nil {
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
@@ -57,7 +64,10 @@ func writeSweep(client *pkgapi.Client) error {
 func expireHandlerWith(client *pkgapi.Client, args []string) error {
 	var olderThanStr string
 	fs := expireFlagSet(&olderThanStr)
-	if err := fs.Parse(args); err != nil {
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
@@ -87,6 +97,7 @@ func expireHandlerWith(client *pkgapi.Client, args []string) error {
 func sweepFlagSet() *flag.FlagSet {
 	fs := flag.NewFlagSet("sweep", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -94,6 +105,7 @@ func sweepFlagSet() *flag.FlagSet {
 func findMissingFlagSet() *flag.FlagSet {
 	fs := flag.NewFlagSet("find-missing", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
 
@@ -102,5 +114,6 @@ func expireFlagSet(olderThanStr *string) *flag.FlagSet {
 	fs := flag.NewFlagSet("expire", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(olderThanStr, "older-than", "", "duration override (e.g. 7d, 12h, 0d). Default: cfg.defaults.expire_retention_days.")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }

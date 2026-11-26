@@ -73,7 +73,10 @@ func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
 	newClient func(pkgapi.Options) (*pkgapi.Client, error), args []string) error {
 	var stdioFlag bool
 	fs := serveFlagSet(&stdioFlag)
-	if err := fs.Parse(args); err != nil {
+	parseErr := fs.Parse(args)
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if err := flagErr(fs, repeats.ParseError(parseErr)); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if err := rejectUnexpectedArgs(fs.Args()); err != nil {
@@ -277,5 +280,6 @@ func serveFlagSet(stdioFlag *bool) *flag.FlagSet {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(stdioFlag, "stdio", false, "enter the stdio MCP loop")
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }

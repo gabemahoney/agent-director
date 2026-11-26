@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 
+	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/cursorhost"
 	"github.com/gabemahoney/agent-director/internal/spawn"
@@ -52,6 +54,11 @@ func cursorHostHandler(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	var repeats clisetup.SingleFlagCheck
+	fs.VisitAll(repeats.Visit)
+	if repeats.Err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", repeats.Err.Error())
+	}
 	if len(fs.Args()) != 0 || program == "" {
 		return fmt.Errorf("invalid cursor-host launch")
 	}
@@ -78,5 +85,16 @@ func cursorHostFlagSet(program *string, encoded *string, prompt *string, load *s
 	fs.StringVar(prompt, "initial-prompt", "", "fresh initial prompt (internal)")
 	fs.StringVar(load, "load-session", "", "latest saved Cursor conversation (internal)")
 	fs.StringVar(mode, "requested-mode", "", "authoritative initial Cursor mode (internal)")
+	// Keep the flag package's built-in type hints in usage: counting Values hide
+	// the concrete string Value type from PrintDefaults. Capture its output
+	// before wrapping, while defaults still belong to the registrations.
+	var defaults bytes.Buffer
+	fs.SetOutput(&defaults)
+	fs.PrintDefaults()
+	fs.SetOutput(os.Stderr)
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage of %s:\n%s", fs.Name(), defaults.String())
+	}
+	fs.VisitAll(clisetup.TrackSingleFlag)
 	return fs
 }
